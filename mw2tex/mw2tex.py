@@ -1,6 +1,6 @@
 """MW2 Xbox 360 texture tool: list, export and replace textures in a fastfile.
 
-Needs Python 3 only. Works on map fastfiles (like mp_rust.ff) and on common_mp.ff and
+Needs Python 3 (and Pillow for the put command). Works on map fastfiles (like mp_rust.ff) and on common_mp.ff and
 ui_mp.ff, which hold camos, titles and emblems. Commands:
 
   python mw2tex.py list    common_mp.ff
@@ -12,16 +12,24 @@ ui_mp.ff, which hold camos, titles and emblems. Commands:
       Textures stored in paks need PAKDIR, a folder holding the game's imagefile1.pak ..
       imagefile4.pak (use . for the current folder); you get the largest size you have.
 
-  python mw2tex.py replace common_mp.ff DDSDIR OUTDIR
-      For every NAME.dds in DDSDIR that matches a texture in the fastfile, writes a new
-      OUTDIR\\common_mp.ff (and OUTDIR\\imagefile5.pak when a pak texture changed).
-      Copy what it writes to _codxe\\zone\\ on the console.
-      If OUTDIR already has an imagefile5.pak (from another fastfile, or a stock one you
-      copied there), new textures are added to the end of it and old contents are kept.
+  python mw2tex.py put     ui_mp.ff NAME PICTURE OUTDIR
+      Replaces texture NAME with any picture (PNG, JPG, DDS, ...). The picture is resized,
+      given mipmaps and compressed to match the game texture automatically. Needs Pillow:
+          python -m pip install pillow
+      Writes OUTDIR\\ui_mp.ff (and OUTDIR\\imagefile5.pak when a pak texture changed).
+      Run it again with the same OUTDIR to change more textures; each run keeps the
+      earlier changes. Copy what it writes to _codxe\\zone\\ on the console.
 
-Replacement DDS rules: same width, height and compression as the original (export it first
-to check), and with mipmaps if the exported file had them. DXT1, DXT3, DXT5 and uncompressed
-32-bit (A8R8G8B8) are tested; DXN and DXT5A (normal and single-channel maps) are untested.
+  python mw2tex.py replace ui_mp.ff PICDIR OUTDIR
+      Same as put for every picture in PICDIR named after a texture (NAME.png, NAME.dds...).
+      A DDS that already matches the game texture exactly is used as-is, without Pillow.
+
+imagefile5.pak: if OUTDIR already has one (from another fastfile, or a stock one you copied
+there), new textures are added to the end of it and old contents are kept.
+
+The game texture decides the size; a picture with a different shape gets stretched to fit.
+DXT1, DXT3, DXT5 and uncompressed 32-bit textures are tested; DXN and DXT5A (normal and
+single-channel maps) are untested.
 
 How it works (checked against airport.ff, imagefile3.pak, common_mp.ff and ui_mp.ff):
 - The .ff starts "IWffu100" (unsigned) or "IWff0100" (signed), then a table of 12-byte
@@ -407,73 +415,215 @@ def cmd_extract(ff_path, pak_dir, name, out_path=None):
     sys.exit("none of the paks for %s were found in %s" % (name, pak_dir))
 
 
-def cmd_replace(ff_path, dds_dir, out_dir):
-    ff = FastFile(ff_path)
-    os.makedirs(out_dir, exist_ok=True)
-    pak_path = os.path.join(out_dir, "imagefile%d.pak" % NEW_PAK)
-    pak = bytearray(open(pak_path, "rb").read()) if os.path.exists(pak_path) else bytearray(b"IWffu100\0\0\x01\x0d")
-    pak_changed = False
-    replaced = 0
-    for file_name in sorted(os.listdir(dds_dir)):
-        if not file_name.lower().endswith(".dds"):
-            continue
-        name = file_name[:-4]
-        image = ff.find(name)
-        if not image:
-            print("skip %s: no texture with that name in %s" % (file_name, os.path.basename(ff_path)))
-            continue
-        try:
-            width, height, fmt, mips = read_dds(os.path.join(dds_dir, file_name))
-        except ValueError as e:
-            print("skip %s: %s" % (file_name, e))
-            continue
+# ---------------------------------------------------------------- converting any picture (needs Pillow)
+
+
+def _rgb565(c):
+    return ((c[0] * 31 + 127) // 255) << 11 | ((c[1] * 63 + 127) // 255) << 5 | ((c[2] * 31 + 127) // 255)
+
+
+def _unpack565(v):
+    r, g, b = (v >> 11) & 31, (v >> 5) & 63, v & 31
+    return ((r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2))
+
+
+def _color_block(pixels, punch_through=False):
+    """16 RGBA pixels -> 8-byte DXT1-style color block."""
+    use = [p for p in pixels if not (punch_through and p[3] < 128)] or pixels
+    n = float(len(use))
+    mean = [sum(p[i] for p in use) / n for i in range(3)]
+    cov = [[sum((p[i] - mean[i]) * (p[j] - mean[j]) for p in use) for j in range(3)] for i in range(3)]
+    axis = [1.0, 1.0, 1.0]
+    for _ in range(4):
+        axis = [sum(cov[i][j] * axis[j] for j in range(3)) for i in range(3)]
+        norm = max(abs(a) for a in axis) or 1.0
+        axis = [a / norm for a in axis]
+    proj = [sum((p[i] - mean[i]) * axis[i] for i in range(3)) for p in use]
+    lo, hi = use[proj.index(min(proj))], use[proj.index(max(proj))]
+    c0, c1 = _rgb565(hi), _rgb565(lo)
+    transparent = punch_through and any(p[3] < 128 for p in pixels)
+    if transparent:
+        if c0 > c1:
+            c0, c1 = c1, c0
+    else:
+        if c0 < c1:
+            c0, c1 = c1, c0
+        if c0 == c1:
+            return struct.pack("<HHI", c0, c1, 0)
+    a, b = _unpack565(c0), _unpack565(c1)
+    if transparent or c0 <= c1:
+        palette = [a, b, tuple((a[i] + b[i]) // 2 for i in range(3))]
+    else:
+        palette = [a, b, tuple((2 * a[i] + b[i]) // 3 for i in range(3)), tuple((a[i] + 2 * b[i]) // 3 for i in range(3))]
+    bits = 0
+    for k, p in enumerate(pixels):
+        if transparent and p[3] < 128:
+            index = 3
+        else:
+            index = min(range(len(palette)), key=lambda i: sum((p[c] - palette[i][c]) ** 2 for c in range(3)))
+        bits |= index << (2 * k)
+    return struct.pack("<HHI", c0, c1, bits)
+
+
+def _alpha_block(values):
+    """16 values -> 8-byte DXT5/BC4-style block."""
+    a0, a1 = max(values), min(values)
+    if a0 == a1:
+        return struct.pack("<BB6s", a0, a1, b"\0" * 6)
+    palette = [a0, a1] + [((7 - i) * a0 + i * a1) // 7 for i in range(1, 7)]
+    bits = 0
+    for k, v in enumerate(values):
+        bits |= min(range(8), key=lambda i: abs(v - palette[i])) << (3 * k)
+    return struct.pack("<BB", a0, a1) + bits.to_bytes(6, "little")
+
+
+def _encode(rgba, width, height, fmt):
+    """RGBA bytes -> linear data in the game's format (same layout a DDS stores)."""
+    if fmt == 0x06:
+        out = bytearray(rgba)
+        out[0::4], out[2::4] = rgba[2::4], rgba[0::4]  # RGBA -> BGRA (A8R8G8B8 in memory)
+        return bytes(out)
+    out = bytearray()
+    for by in range(0, max(height, 1), 4):
+        for bx in range(0, max(width, 1), 4):
+            pixels = []
+            for y in range(4):
+                for x in range(4):
+                    i = (min(by + y, height - 1) * width + min(bx + x, width - 1)) * 4
+                    pixels.append(tuple(rgba[i:i + 4]))
+            if fmt == 0x12:
+                out += _color_block(pixels, punch_through=True)
+            elif fmt == 0x13:
+                alpha = 0
+                for k, p in enumerate(pixels):
+                    alpha |= ((p[3] * 15 + 127) // 255) << (4 * k)
+                out += alpha.to_bytes(8, "little") + _color_block(pixels)
+            elif fmt == 0x14:
+                out += _alpha_block([p[3] for p in pixels]) + _color_block(pixels)
+            elif fmt == 0x3B:
+                out += _alpha_block([p[0] for p in pixels])
+            elif fmt == 0x31:
+                out += _alpha_block([p[0] for p in pixels]) + _alpha_block([p[1] for p in pixels])
+    return bytes(out)
+
+
+def convert_picture(path, width, height, fmt, mip_count):
+    """Any picture Pillow can open (PNG, JPG, DDS, ...) -> list of mips in the game's format."""
+    try:
+        from PIL import Image
+    except ImportError:
+        sys.exit("converting pictures needs Pillow; install it with:  python -m pip install pillow")
+    picture = Image.open(path).convert("RGBA")
+    if picture.size != (width, height):
+        print("  resizing %s from %dx%d to %dx%d" % (os.path.basename(path), picture.size[0], picture.size[1],
+                                                     width, height))
+        picture = picture.resize((width, height), Image.LANCZOS)
+    mips = []
+    for mip in range(mip_count):
+        w, h = max(width >> mip, 1), max(height >> mip, 1)
+        level = picture if mip == 0 else picture.resize((w, h), Image.BOX)
+        mips.append(_encode(level.tobytes(), w, h, fmt))
+    return mips
+
+
+# ---------------------------------------------------------------- replacing
+
+
+class Output:
+    """The rebuilt fastfile and imagefile5.pak in OUTDIR; keeps earlier changes made there."""
+
+    def __init__(self, ff_path, out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+        self.ff_out = os.path.join(out_dir, os.path.basename(ff_path))
+        if os.path.exists(self.ff_out) and os.path.abspath(self.ff_out) != os.path.abspath(ff_path):
+            print("adding to the %s already in %s" % (os.path.basename(ff_path), out_dir))
+            ff_path = self.ff_out
+        self.ff = FastFile(ff_path)
+        self.pak_path = os.path.join(out_dir, "imagefile%d.pak" % NEW_PAK)
+        self.pak = bytearray(open(self.pak_path, "rb").read()) if os.path.exists(self.pak_path) \
+            else bytearray(b"IWffu100\0\0\x01\x0d")
+        self.pak_changed = False
+        self.replaced = 0
+
+    def put(self, image, source, convert=False):
+        """Replaces one game texture with a DDS (exact match) or, with convert, any picture."""
+        label = os.path.basename(source)
         if not _supported(image):
-            print("skip %s: the game texture uses a format this tool can't handle yet" % file_name)
-            continue
-        if fmt != image["format"]:
-            print("skip %s: DDS is %s but the game texture is %s" % (
-                file_name, FORMATS[fmt][0], FORMATS.get(image["format"], ("?",))[0]))
-            continue
+            print("skip %s: %s uses a format this tool can't handle yet" % (label, image["name"]))
+            return False
+        fmt = image["format"]
         largest = max(image["levels"], key=lambda l: l["width"] * l["height"])
-        if (width, height) != (largest["width"], largest["height"]):
-            print("skip %s: DDS is %dx%d but the game texture is %dx%d" % (
-                file_name, width, height, largest["width"], largest["height"]))
-            continue
+        width, height = largest["width"], largest["height"]
         needed = 1 if largest["mips"] == 1 else _mip_count(width, height)
-        if len(mips) < needed:
-            print("skip %s: save it with mipmaps (has %d, needs %d)" % (file_name, len(mips), needed))
-            continue
+        mips = None
+        if source.lower().endswith(".dds"):
+            try:
+                w, h, f, m = read_dds(source)
+                if (w, h, f) == (width, height, fmt) and len(m) >= needed:
+                    mips = m
+                elif not convert:
+                    print("  %s isn't %dx%d %s with %d mipmaps; converting it" % (label, width, height,
+                                                                                FORMATS[fmt][0], needed))
+            except ValueError:
+                pass
+        if mips is None:
+            mips = convert_picture(source, width, height, fmt, needed)
         if not image["pak"]:
-            data = largest["data"]
             blob = tile(mips, width, height, fmt, single=largest["mips"] == 1)
             if len(blob) != largest["size"]:
                 print("skip %s: this texture's layout isn't supported (size %d, expected %d)"
-                      % (file_name, len(blob), largest["size"]))
-                continue
-            ff.zone[data:data + len(blob)] = blob
-            ff.zone_changed = True
-            replaced += 1
-            print("replaced %s" % name)
+                      % (label, len(blob), largest["size"]))
+                return False
+            data = largest["data"]
+            self.ff.zone[data:data + len(blob)] = blob
+            self.ff.zone_changed = True
+        else:
+            for lv in image["levels"]:
+                first = _log2ceil(width // lv["width"])
+                blob = tile(mips[first:], lv["width"], lv["height"], fmt, single=lv["mips"] == 1)
+                start = len(self.pak)
+                self.pak += zlib.compress(blob, 9)
+                self.ff.table[lv["entry"]] = [NEW_PAK, start, len(self.pak)]
+            self.pak_changed = True
+        self.replaced += 1
+        print("replaced %s with %s" % (image["name"], label))
+        return True
+
+    def save(self):
+        if not self.replaced:
+            sys.exit("nothing replaced; no files written")
+        self.ff.save(self.ff_out)
+        written = [self.ff_out]
+        if self.pak_changed:
+            open(self.pak_path, "wb").write(bytes(self.pak))
+            written.append(self.pak_path)
+        print("wrote %s; copy to _codxe\\zone\\ on the console" % " and ".join(written))
+
+
+PICTURE_TYPES = (".dds", ".png", ".jpg", ".jpeg", ".bmp", ".tga", ".gif", ".webp")
+
+
+def cmd_replace(ff_path, pic_dir, out_dir):
+    out = Output(ff_path, out_dir)
+    for file_name in sorted(os.listdir(pic_dir)):
+        base, ext = os.path.splitext(file_name)
+        if ext.lower() not in PICTURE_TYPES:
             continue
-        for lv in image["levels"]:
-            first = _log2ceil(width // lv["width"])
-            blob = tile(mips[first:], lv["width"], lv["height"], fmt, single=lv["mips"] == 1)
-            chunk = zlib.compress(blob, 9)
-            start = len(pak)
-            pak += chunk
-            ff.table[lv["entry"]] = [NEW_PAK, start, len(pak)]
-        pak_changed = True
-        replaced += 1
-        print("replaced %s (%d sizes)" % (name, len(image["levels"])))
-    if not replaced:
-        sys.exit("nothing replaced; no files written")
-    ff_out = os.path.join(out_dir, os.path.basename(ff_path))
-    ff.save(ff_out)
-    written = [ff_out]
-    if pak_changed:
-        open(pak_path, "wb").write(bytes(pak))
-        written.append(pak_path)
-    print("wrote %s; copy to _codxe\\zone\\ on the console" % " and ".join(written))
+        image = out.ff.find(base)
+        if not image:
+            print("skip %s: no texture with that name in %s" % (file_name, os.path.basename(ff_path)))
+            continue
+        out.put(image, os.path.join(pic_dir, file_name))
+    out.save()
+
+
+def cmd_put(ff_path, name, picture, out_dir):
+    out = Output(ff_path, out_dir)
+    image = out.ff.find(name)
+    if not image:
+        sys.exit("no texture named %s (run the list command to see names)" % name)
+    out.put(image, picture, convert=True)
+    out.save()
 
 
 def main():
@@ -484,6 +634,8 @@ def main():
         cmd_extract(*args[1:])
     elif len(args) == 4 and args[0] == "replace":
         cmd_replace(*args[1:])
+    elif len(args) == 5 and args[0] == "put":
+        cmd_put(*args[1:])
     else:
         print(__doc__)
         sys.exit(1)
