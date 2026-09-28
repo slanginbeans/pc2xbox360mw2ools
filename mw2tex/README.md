@@ -32,7 +32,8 @@ There are two ways to use it:
    - the game files you want to change, copied from your console with FTP:
      - `ui_mp.ff` for emblems and calling card titles
      - `common_mp.ff` for camos
-     - `mp_*.ff` for maps
+     - `mp_*.ff`, every map you play on. Needed for emblems and titles too: in a match (scoreboard, killcam)
+       the game uses each map's own copy of those pictures, not the one in `ui_mp.ff`.
    - optional: `imagefile1.pak` to `imagefile4.pak`. These are only needed to *preview* camo and map
      textures. Replacing them works without the pak files.
 
@@ -56,6 +57,8 @@ There are two ways to use it:
    use only the first frame.
 8. Press **Undo** on a card to drop that change, or **Changed** to see everything you've queued.
 9. Press **Build**. The picker writes the new files into a `mw2tex_out` folder inside your work folder.
+   When map files (`mp_*.ff`) are in your work folder, Build also puts your emblem and title changes
+   into each of them, so they show in matches and killcams too. This takes a few seconds per map.
 10. Copy everything in `mw2tex_out` to your console (section 3).
 
 Each Build starts from the stock file and applies every queued change, so what's on the
@@ -85,6 +88,9 @@ To undo, delete the file from `_codxe\zone\`.
   A GIF with fewer frames repeats each one to fill 32 slots (a 4-frame GIF shows each frame 8 times).
   Stock animated emblems: `cardicon_prestige10`, `cardicon_prestige10_02` and `cardicon_iw`. That last
   one uses the texture `cardicon_nvg_star`.
+- **Emblems and titles in matches.** Menus use `ui_mp.ff`; in a match the game uses the copy inside each map
+  file. So copy every map's `mp_*.ff` into your work folder once, and Build (or the `maps` command) updates them
+  all. Maps you leave out keep the stock pictures. An animated emblem shows its first frame in matches for now.
 - **Pak textures.** Camos on guns and map textures live in `imagefile*.pak`. Changed ones go in a new
   `imagefile5.pak`, which codxe loads from `_codxe\zone\`. Build adds to an existing `imagefile5.pak` in
   `mw2tex_out` rather than replacing it, so it can grow over time. Delete it and rebuild if it gets big.
@@ -104,6 +110,7 @@ commands with the same `out` folder keeps the earlier changes.
 | Replace many (pictures named after textures, in folder `pics`) | `python mw2tex.py replace ui_mp.ff pics out` |
 | Turn an emblem into a full-size animation | `python mw2tex.py flipbook ui_mp.ff cardicon_expert_ak47 dance.gif out` |
 | Resize a texture, then put a picture on it | `python mw2tex.py grow ui_mp.ff cardicon_bear 512 256 sheet.png out` |
+| Copy changed emblems/titles into every `mp_*.ff` in the folder | `python mw2tex.py maps ui_mp.ff out` |
 | Set how many frames an emblem plays | `python mw2tex.py animate ui_mp.ff cardicon_bear 4 8 out` |
 
 `python mw2tex.py` with nothing after it prints the full help, including how the file format works.

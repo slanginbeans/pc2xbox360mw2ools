@@ -35,6 +35,12 @@ ui_mp.ff, which hold camos, titles and emblems. Commands:
       frames, read left to right, top to bottom. Put a picture laid out that way on the texture first (for a 64x64 emblem,
       2 2 gives four 32x32 frames). 1 1 turns the animation off again.
 
+  python mw2tex.py maps    ui_mp.ff OUTDIR [mp_rust.ff ...]
+      In a match, emblems and titles come from each map's own copy, not ui_mp.ff. This copies
+      every texture you changed in OUTDIR\\ui_mp.ff into the map files (all mp_*.ff next to
+      ui_mp.ff if none are named) and writes them to OUTDIR with imagefile5.pak. An animated
+      emblem shows its first frame in matches.
+
   python mw2tex.py replace ui_mp.ff PICDIR OUTDIR
       Same as put for every picture in PICDIR named after a texture (NAME.png, NAME.dds...).
       A DDS that already matches the game texture exactly is used as-is, without Pillow.
@@ -61,6 +67,7 @@ How it works (checked against airport.ff, imagefile3.pak, common_mp.ff and ui_mp
   their pixels follow the record (and its name) directly.
 """
 import csv
+import glob
 import os
 import re
 import struct
@@ -103,6 +110,7 @@ class FastFile:
                 stream += body[i:i + 0x200000]
                 i += 0x200000
             body = bytes(stream)
+        self.stream = body
         self.zone = bytearray(zlib.decompressobj().decompress(body))
         self.zone_changed = False
         self._scan()
@@ -187,7 +195,8 @@ class FastFile:
         head[:8] = b"IWffu100"
         for i, entry in enumerate(self.table):
             struct.pack_into(">III", head, 0x1D + i * 12, *entry)
-        stream = zlib.compress(bytes(self.zone), 9)
+        # Only the pak table changed: reuse the compressed data as is (fast for big map files).
+        stream = zlib.compress(bytes(self.zone), 9) if self.zone_changed else self.stream
         total = len(head) + 8 + len(stream)
         head += struct.pack(">II", total, total + self.sizes[1] - self.sizes[0])
         open(path, "wb").write(bytes(head) + stream)
@@ -875,6 +884,139 @@ def cmd_animate(ff_path, name, rows, columns, out_dir):
     out.save()
 
 
+# ---------------------------------------------------------------- copying changes to map files
+
+# Card pictures (emblems, titles) in a match come from the map's own copies, not ui_mp.ff.
+
+
+def changed_textures(stock, built):
+    """Textures stored in the .ff whose pixels differ between the stock and the rebuilt fastfile."""
+    changed = []
+    for image in built.images:
+        if image["pak"]:
+            continue
+        lv = image["levels"][0]
+        pixels = bytes(built.zone[lv["data"]:lv["data"] + lv["size"]])
+        old = stock.find(image["name"])
+        if old and not old["pak"]:
+            o = old["levels"][0]
+            if (o["width"], o["height"], old["format"]) == (lv["width"], lv["height"], image["format"]) \
+                    and bytes(stock.zone[o["data"]:o["data"] + o["size"]]) == pixels:
+                continue
+        changed.append(image)
+    return changed
+
+
+def _copy_blobs(built, image, target, work_dir):
+    """Tiled pixel data for each level of TARGET, made from BUILT's version of the texture.
+
+    Returns (list of (level, blob), note). Same size and layout: the pixels are copied exactly.
+    Otherwise the picture is decoded and converted to fit; a 512x256 flipbook keeps its first frame.
+    """
+    lv = image["levels"][0]
+    fmt = target["format"]
+    note = None
+    exact = []
+    for tl in target["levels"]:
+        if (tl["width"], tl["height"], tl["mips"], fmt) == (lv["width"], lv["height"], lv["mips"], image["format"]):
+            exact.append((tl, bytes(built.zone[lv["data"]:lv["data"] + lv["size"]])))
+    if len(exact) == len(target["levels"]):
+        return exact, note
+    picture = decode_texture(built, image, max_side=4096, unpack=False)
+    if picture is None:
+        return None, "format not supported"
+    largest = max(target["levels"], key=lambda l: l["width"] * l["height"])
+    rows, columns, frame = FLIPBOOK
+    if (lv["width"], lv["height"]) == (columns * frame, rows * frame) and largest["width"] == largest["height"]:
+        picture = picture.crop((0, 0, frame, frame))
+        note = "shows the first frame of the animation"
+    path = os.path.join(work_dir, _safe(image["name"]) + "_map.png")
+    picture.save(path)
+    width, height = largest["width"], largest["height"]
+    needed = 1 if largest["mips"] == 1 else _mip_count(width, height)
+    mips = convert_picture(path, width, height, fmt, needed)
+    os.remove(path)
+    blobs = []
+    for tl in target["levels"]:
+        first = _log2ceil(width // tl["width"])
+        blobs.append((tl, tile(mips[first:], tl["width"], tl["height"], fmt, single=tl["mips"] == 1)))
+    return blobs, note
+
+
+def sync_maps(stock_path, built_path, map_paths, out_dir, log=print):
+    """Copies every texture changed in BUILT_PATH (vs STOCK_PATH) into the map fastfiles that carry it.
+
+    Map copies live in imagefile paks, so the new pixels go into OUTDIR/imagefile5.pak once and
+    each map's table is pointed at them. Returns the files written.
+    """
+    built = FastFile(built_path)
+    changed = changed_textures(FastFile(stock_path), built)
+    if not changed or not map_paths:
+        return []
+    pak_path = os.path.join(out_dir, "imagefile%d.pak" % NEW_PAK)
+    pak = bytearray(open(pak_path, "rb").read()) if os.path.exists(pak_path) \
+        else bytearray(b"IWffu100\0\0\x01\x0d")
+    chunks = {}
+    notes = {}
+    written = []
+    for map_path in map_paths:
+        dst = os.path.join(out_dir, os.path.basename(map_path))
+        source = dst if os.path.exists(dst) and os.path.abspath(dst) != os.path.abspath(map_path) else map_path
+        ff = FastFile(source)
+        count = 0
+        for image in changed:
+            target = ff.find(image["name"])
+            if not target or not _supported(target):
+                continue
+            blobs, note = _copy_blobs(built, image, target, out_dir)
+            if blobs is None:
+                notes[image["name"]] = note
+                continue
+            if note:
+                notes[image["name"]] = note
+            if target["pak"]:
+                for tl, blob in blobs:
+                    if blob not in chunks:
+                        start = len(pak)
+                        pak += zlib.compress(blob, 9)
+                        chunks[blob] = (start, len(pak))
+                    ff.table[tl["entry"]] = [NEW_PAK, chunks[blob][0], chunks[blob][1]]
+            else:
+                tl, blob = blobs[0]
+                if len(blob) != tl["size"]:
+                    notes[image["name"]] = "layout not supported"
+                    continue
+                ff.zone[tl["data"]:tl["data"] + len(blob)] = blob
+                ff.zone_changed = True
+            count += 1
+        if count:
+            ff.save(dst)
+            written.append(dst)
+            log("%s: %d changed texture%s" % (os.path.basename(map_path), count, "" if count == 1 else "s"))
+    if chunks:
+        open(pak_path, "wb").write(bytes(pak))
+        written.append(pak_path)
+    for name, note in sorted(notes.items()):
+        log("  %s in matches: %s" % (name, note))
+    return written
+
+
+def cmd_maps(stock_path, out_dir, *map_paths):
+    built_path = os.path.join(out_dir, os.path.basename(stock_path))
+    if not os.path.exists(built_path):
+        sys.exit("no %s in %s; build or put something first" % (os.path.basename(stock_path), out_dir))
+    if not map_paths:
+        folder = os.path.dirname(os.path.abspath(stock_path))
+        map_paths = sorted(glob.glob(os.path.join(folder, "mp_*.ff")))
+    if not map_paths:
+        sys.exit("no mp_*.ff map files next to %s; copy them from the console first" % stock_path)
+    written = sync_maps(stock_path, built_path, map_paths, out_dir)
+    if not written:
+        print("nothing to copy: no changed textures are in those maps")
+    else:
+        print("wrote %d files; copy them to _codxe\\zone\\ on the console" % len(written))
+
+
 def main():
     args = sys.argv[1:]
     if len(args) == 2 and args[0] == "list":
@@ -889,6 +1031,8 @@ def main():
         cmd_grow(*args[1:])
     elif len(args) == 6 and args[0] == "animate":
         cmd_animate(*args[1:])
+    elif len(args) >= 3 and args[0] == "maps":
+        cmd_maps(*args[1:])
     elif len(args) == 5 and args[0] == "put":
         cmd_put(*args[1:])
     else:

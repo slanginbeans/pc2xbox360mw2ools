@@ -148,6 +148,22 @@ def build():
     written = [os.path.relpath(ff_out, FOLDER)]
     if out.pak_changed:
         written.append(os.path.relpath(out.pak_path, FOLDER))
+    # In a match, emblems and titles come from each map's own copy, so copy the changes into
+    # every map file in the folder too.
+    if not os.path.basename(state["ff_path"]).lower().startswith("mp_"):
+        maps = sorted(glob.glob(os.path.join(FOLDER, "mp_*.ff")))
+        for path in maps:
+            old = os.path.join(OUT_DIR, os.path.basename(path))
+            if os.path.exists(old):
+                os.remove(old)  # rebuilt from the stock map, like the file above
+        if maps:
+            for path in mw2tex.sync_maps(state["ff_path"], ff_out, maps, OUT_DIR, log.append):
+                rel = os.path.relpath(path, FOLDER)
+                if rel not in written:
+                    written.append(rel)
+        else:
+            log.append("No mp_*.ff map files in this folder, so emblems and titles only change in menus. "
+                       "Copy your maps here and build again to see them in matches and killcams.")
     return {"log": log, "written": written, "folder": OUT_DIR}
 
 
