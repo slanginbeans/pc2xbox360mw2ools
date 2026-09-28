@@ -96,9 +96,11 @@ class FastFile:
         z = self.zone
         self.images = []
         streamed = 0
-        # Every texture record has the same 16 bytes at 0x3C.
-        for m in re.finditer(re.escape(b"\0\0\0\0\0\x01\0\x01\0\x01\x01\x01\0\0\0\0"), z):
+        # Every texture record has the same 16 bytes at 0x3C, except byte 0x47 (1 or 2).
+        for m in re.finditer(rb"\x00{5}\x01\x00\x01\x00\x01\x01[\x01\x02]\x00{4}", z):
             o = m.start() - 0x3C
+            if z[o + 0x38] not in (3, 4, 5):
+                continue  # same bytes by chance, not a texture record
             self._add(o, pak=True, index=streamed)
             streamed += 1
         if streamed * LEVELS_PER_IMAGE != self.count:
