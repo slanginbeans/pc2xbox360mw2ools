@@ -115,7 +115,25 @@ commands with the same `out` folder keeps the earlier changes.
 
 `python mw2tex.py` with nothing after it prints the full help, including how the file format works.
 
-## 6. If something goes wrong
+## 6. Tables (mw2zone.py)
+
+The game keeps lists like calling card titles, emblems, unlocks and challenges in string tables
+(`.csv` files packed inside the fastfiles). `mw2zone.py` lets you change them.
+
+1. Export the tables from a game file. They're saved under a `tables` folder, keeping the game's names:
+   ```
+   python mw2zone.py tables code_post_gfx_mp.ff
+   ```
+2. Keep only the tables you want to change in the `tables` folder and edit them in Excel or Notepad.
+   Keep the folder layout, for example `tables\mp\cardTitleTable.csv`.
+3. Build them into one file:
+   ```
+   python mw2zone.py build tables
+   ```
+4. Copy `codxe_patch_mp.ff` to `_codxe\zone\` on the console. codxe loads it after the game's own patch file,
+   so your tables replace the stock ones with the same name. Delete it to undo.
+
+## 7. If something goes wrong
 
 - **"python is not recognized"**: Python isn't on PATH. Reinstall it and tick "Add python.exe to PATH".
 - **"needs Pillow"**: run `python -m pip install pillow`.
