@@ -20,6 +20,11 @@ ui_mp.ff, which hold camos, titles and emblems. Commands:
       Run it again with the same OUTDIR to change more textures; each run keeps the
       earlier changes. Copy what it writes to _codxe\\zone\\ on the console.
 
+  python mw2tex.py grow    ui_mp.ff NAME WIDTH HEIGHT PICTURE OUTDIR
+      Like put, but first makes texture NAME bigger (or smaller), e.g. 512 256 to give a
+      64x64 emblem room for 32 animation frames. Only for textures stored in the .ff
+      (titles, emblems, menu pictures). WIDTH and HEIGHT must be powers of two.
+
   python mw2tex.py animate ui_mp.ff MATERIAL ROWS COLUMNS OUTDIR
       Makes material MATERIAL (an emblem name like cardicon_expert_ak47) play its texture
       as a flipbook: the texture is cut into ROWS x COLUMNS frames, read left to right, top
@@ -634,6 +639,66 @@ def cmd_put(ff_path, name, picture, out_dir):
     out.save()
 
 
+PHYSICAL_BLOCK = 1  # XFile block that holds in-file texture pixels (4 KB aligned per texture)
+
+
+def grow_texture(ff, image, width, height):
+    """Resizes an in-file texture's record and pixel data in place, shifting everything after it.
+
+    The pixels live in the zone's physical block, which nothing else points into, so moving later
+    pixel data only needs the zone size and the physical block size in the XFile header updated.
+    The record's D3D fetch constant is stored little-endian: dword0 bits 22-30 = pitch in 32-texel
+    units (width rounded up to 128 for DXT), dword2 = width-1 | (height-1) << 13.
+    """
+    if image["pak"]:
+        sys.exit("%s is stored in a pak file; grow only works on textures stored in the .ff" % image["name"])
+    if width & (width - 1) or height & (height - 1) or not (4 <= width <= 2048 and 4 <= height <= 2048):
+        sys.exit("width and height must be powers of two from 4 to 2048")
+    z, o, fmt = ff.zone, image["offset"], image["format"]
+    lv = image["levels"][0]
+    if lv["mips"] != 1:
+        sys.exit("%s has mipmaps; grow only handles single-level textures" % image["name"])
+    new_size = len(tile([b"\0" * (_up(width, FORMATS[fmt][1]) * _up(height, FORMATS[fmt][1]) * FORMATS[fmt][2])],
+                        width, height, fmt, single=True))
+    old_size = lv["size"]
+    dword0, = struct.unpack("<I", z[o + 0x1C:o + 0x20])
+    pitch = _align(width, 128 if FORMATS[fmt][1] == 4 else 32) // 32
+    dword0 = (dword0 & ~(0x1FF << 22)) | (pitch << 22)
+    struct.pack_into("<I", z, o + 0x1C, dword0)
+    dword2, = struct.unpack("<I", z[o + 0x24:o + 0x28])
+    dword2 = (dword2 & ~0x3FFFFFF) | (width - 1) | ((height - 1) << 13)
+    struct.pack_into("<I", z, o + 0x24, dword2)
+    struct.pack_into(">I", z, o + 0x3C, new_size)
+    struct.pack_into(">HH", z, o + 0x40, width, height)
+    data = lv["data"]
+    z[data:data + old_size] = b"\0" * new_size
+    delta = new_size - old_size
+    physical = _align(new_size, 0x1000) - _align(old_size, 0x1000)
+    total, = struct.unpack(">I", z[0:4])
+    struct.pack_into(">I", z, 0, total + delta)
+    block, = struct.unpack(">I", z[8 + PHYSICAL_BLOCK * 4:12 + PHYSICAL_BLOCK * 4])
+    struct.pack_into(">I", z, 8 + PHYSICAL_BLOCK * 4, block + physical)
+    for other in ff.images:
+        for olv in other["levels"]:
+            if "data" in olv and olv["data"] > data:
+                olv["data"] += delta
+        if other["offset"] > data:
+            other["offset"] += delta
+    lv.update(width=width, height=height, size=new_size)
+    ff.zone_changed = True
+
+
+def cmd_grow(ff_path, name, width, height, picture, out_dir):
+    out = Output(ff_path, out_dir)
+    image = out.ff.find(name)
+    if not image:
+        sys.exit("no texture named %s (run the list command to see names)" % name)
+    grow_texture(out.ff, image, int(width), int(height))
+    print("%s is now %sx%s" % (name, width, height))
+    out.put(image, picture, convert=True)
+    out.save()
+
+
 def find_material(zone, name):
     """Offset of UI material NAME's header, which starts 0x58 bytes before its inline name (header plus
     its texture slot). The header starts with an inline name marker (ffffffff), then gameFlags,
@@ -671,6 +736,8 @@ def main():
         cmd_extract(*args[1:])
     elif len(args) == 4 and args[0] == "replace":
         cmd_replace(*args[1:])
+    elif len(args) == 7 and args[0] == "grow":
+        cmd_grow(*args[1:])
     elif len(args) == 6 and args[0] == "animate":
         cmd_animate(*args[1:])
     elif len(args) == 5 and args[0] == "put":
