@@ -20,6 +20,12 @@ ui_mp.ff, which hold camos, titles and emblems. Commands:
       Run it again with the same OUTDIR to change more textures; each run keeps the
       earlier changes. Copy what it writes to _codxe\\zone\\ on the console.
 
+  python mw2tex.py animate ui_mp.ff MATERIAL ROWS COLUMNS OUTDIR
+      Makes material MATERIAL (an emblem name like cardicon_expert_ak47) play its texture
+      as a flipbook: the texture is cut into ROWS x COLUMNS frames, read left to right, top
+      to bottom. Put a picture laid out that way on the texture first (for a 64x64 emblem,
+      2 2 gives four 32x32 frames). 1 1 turns the animation off again.
+
   python mw2tex.py replace ui_mp.ff PICDIR OUTDIR
       Same as put for every picture in PICDIR named after a texture (NAME.png, NAME.dds...).
       A DDS that already matches the game texture exactly is used as-is, without Pillow.
@@ -628,6 +634,35 @@ def cmd_put(ff_path, name, picture, out_dir):
     out.save()
 
 
+def find_material(zone, name):
+    """Offset of UI material NAME's header, which starts 0x58 bytes before its inline name (header plus
+    its texture slot). The header starts with an inline name marker (ffffffff), then gameFlags,
+    sortKey, texture atlas rows and columns."""
+    hits = []
+    for m in re.finditer(re.escape(b"\0" + name.encode("latin1") + b"\0"), zone):
+        o = m.start() + 1 - 0x58
+        if o >= 0 and zone[o:o + 4] == b"\xff" * 4 and 1 <= zone[o + 6] <= 16 and 1 <= zone[o + 7] <= 16:
+            hits.append(o)
+    return hits
+
+
+def cmd_animate(ff_path, name, rows, columns, out_dir):
+    rows, columns = int(rows), int(columns)
+    if not (1 <= rows <= 16 and 1 <= columns <= 16):
+        sys.exit("rows and columns must be 1 to 16")
+    out = Output(ff_path, out_dir)
+    hits = find_material(out.ff.zone, name)
+    if not hits:
+        sys.exit("no material named %s found" % name)
+    for o in hits:
+        out.ff.zone[o + 6] = rows
+        out.ff.zone[o + 7] = columns
+    out.ff.zone_changed = True
+    out.replaced += 1
+    print("%s now plays as %d x %d frames" % (name, rows, columns))
+    out.save()
+
+
 def main():
     args = sys.argv[1:]
     if len(args) == 2 and args[0] == "list":
@@ -636,6 +671,8 @@ def main():
         cmd_extract(*args[1:])
     elif len(args) == 4 and args[0] == "replace":
         cmd_replace(*args[1:])
+    elif len(args) == 6 and args[0] == "animate":
+        cmd_animate(*args[1:])
     elif len(args) == 5 and args[0] == "put":
         cmd_put(*args[1:])
     else:
