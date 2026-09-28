@@ -1,31 +1,41 @@
 """MW2 Xbox 360 texture tool: list, export and replace textures in a fastfile.
 
-Needs Python 3 only. Commands:
+Needs Python 3 only. Works on map fastfiles (like mp_rust.ff) and on common_mp.ff and
+ui_mp.ff, which hold camos, titles and emblems. Commands:
 
-  python mw2tex.py list    airport.ff
-      Writes airport.ff.images.csv listing every texture, its format and sizes.
+  python mw2tex.py list    common_mp.ff
+      Writes common_mp.ff.images.csv listing every texture: name, format, size, and
+      where its pixels are stored ("pak" or "ff").
 
-  python mw2tex.py extract airport.ff PAKDIR NAME [OUT.dds]
-      Exports one texture as a DDS (largest size you have the pak for), with its mipmaps.
-      PAKDIR is a folder holding the game's imagefile1.pak .. imagefile4.pak.
+  python mw2tex.py extract common_mp.ff PAKDIR NAME [OUT.dds]
+      Exports one texture as a DDS. Textures stored in the .ff need nothing else.
+      Textures stored in paks need PAKDIR, a folder holding the game's imagefile1.pak ..
+      imagefile4.pak (use . for the current folder); you get the largest size you have.
 
-  python mw2tex.py replace airport.ff DDSDIR OUTDIR
-      For every NAME.dds in DDSDIR that matches a texture in the fastfile, writes the new
-      texture into OUTDIR\\imagefile5.pak and writes OUTDIR\\airport.ff pointing at it.
-      Copy both files to _codxe\\zone\\ on the console.
-      If OUTDIR already has an imagefile5.pak (from another map, or a stock one you copied
-      there), new textures are added to the end of it and old contents are kept.
+  python mw2tex.py replace common_mp.ff DDSDIR OUTDIR
+      For every NAME.dds in DDSDIR that matches a texture in the fastfile, writes a new
+      OUTDIR\\common_mp.ff (and OUTDIR\\imagefile5.pak when a pak texture changed).
+      Copy what it writes to _codxe\\zone\\ on the console.
+      If OUTDIR already has an imagefile5.pak (from another fastfile, or a stock one you
+      copied there), new textures are added to the end of it and old contents are kept.
 
 Replacement DDS rules: same width, height and compression as the original (export it first
-to check), saved with a full mipmap chain. DXT1, DXT3 and DXT5 are tested; DXN and DXT5A
-(normal and single-channel maps) are untested.
+to check), and with mipmaps if the exported file had them. DXT1, DXT3, DXT5 and uncompressed
+32-bit (A8R8G8B8) are tested; DXN and DXT5A (normal and single-channel maps) are untested.
 
-How it works (checked against airport.ff and imagefile3.pak):
-- The .ff starts "IWffu100", then a table of 12-byte entries (pak number, start, end).
-  Texture i, quality level k uses entry i*4+k. The rest of the .ff is one zlib stream.
-- Each entry is one zlib chunk in imagefile<pak>.pak holding the texture at that size
-  in Xbox tiled layout: the full-size level, each mip in its own 4 KB aligned slice,
-  and mips 16 pixels and smaller packed together into one last slice.
+How it works (checked against airport.ff, imagefile3.pak, common_mp.ff and ui_mp.ff):
+- The .ff starts "IWffu100" (unsigned) or "IWff0100" (signed), then a table of 12-byte
+  entries (pak number, start, end), then two size words. Unsigned files follow with one
+  zlib stream. Signed files have an 8 KB "IWffs100" header and an 8 KB hash block before
+  every 2 MB of the zlib stream. Rebuilt files are always written unsigned; codxe turns
+  off the signature check.
+- Texture records are 0x70 bytes: D3D header, format word at 0x34, map type at 0x38,
+  size at 0x40, pixel pointer at 0x48, four pak levels at 0x4C, name pointer at 0x6C.
+- Pak textures: the n-th one uses table entries n*4 .. n*4+3, one per quality level. Each
+  entry is one zlib chunk in imagefile<pak>.pak: the full-size level, each mip in its own
+  4 KB aligned slice, and mips 16 pixels and smaller packed into one last slice.
+- Textures stored in the .ff (menus, titles, emblems, camo previews) have one level, and
+  their pixels follow the record (and its name) directly.
 """
 import csv
 import os
@@ -41,6 +51,7 @@ FORMATS = {
     0x14: ("DXT5", 4, 16, (b"DXT5", b"DXT4")),
     0x31: ("DXN", 4, 16, (b"ATI2", b"BC5U")),
     0x3B: ("DXT5A", 4, 8, (b"ATI1", b"BC4U")),
+    0x06: ("ARGB8", 1, 4, ()),  # uncompressed 32-bit; DDS A8R8G8B8
 }
 LEVELS_PER_IMAGE = 4
 NEW_PAK = 5
@@ -53,30 +64,86 @@ class FastFile:
     def __init__(self, path):
         self.path = path
         self.raw = open(path, "rb").read()
-        if self.raw[:8] != b"IWffu100":
-            sys.exit("%s is not an unsigned MW2 360 fastfile" % path)
+        magic = self.raw[:8]
+        if magic not in (b"IWffu100", b"IWff0100"):
+            sys.exit("%s is not an MW2 360 fastfile" % path)
         self.count = struct.unpack(">I", self.raw[0x19:0x1D])[0]
         self.table = [list(struct.unpack(">III", self.raw[0x1D + i * 12:0x29 + i * 12])) for i in range(self.count)]
-        zone = zlib.decompress(self.raw[0x1D + self.count * 12 + 8:])
-        pattern = re.compile(re.escape(b"\0" * 0x34) + b"(.{56})\xff\xff\xff\xff([ -~]{2,64})\x00", re.S)
+        self.header_end = 0x1D + self.count * 12
+        self.sizes = struct.unpack(">II", self.raw[self.header_end:self.header_end + 8])
+        body = self.raw[self.header_end + 8:]
+        self.signed = body[:8] == b"IWffs100"
+        if self.signed:
+            stream, i = bytearray(), 0x2000
+            while i < len(body):
+                i += 0x2000
+                stream += body[i:i + 0x200000]
+                i += 0x200000
+            body = bytes(stream)
+        self.zone = bytearray(zlib.decompressobj().decompress(body))
+        self.zone_changed = False
+        self._scan()
+
+    def _scan(self):
+        z = self.zone
         self.images = []
-        for m in pattern.finditer(zone):
-            body = m.group(1)
-            if body[4] not in (1, 2, 3, 4, 5, 6):
+        streamed = 0
+        # Every texture record has the same 16 bytes at 0x3C.
+        for m in re.finditer(re.escape(b"\0\0\0\0\0\x01\0\x01\0\x01\x01\x01\0\0\0\0"), z):
+            o = m.start() - 0x3C
+            self._add(o, pak=True, index=streamed)
+            streamed += 1
+        if streamed * LEVELS_PER_IMAGE != self.count:
+            print("warning: %d pak textures but %d pak entries; pak textures may be mismatched"
+                  % (streamed, self.count))
+        # Textures stored in the .ff start with a live D3D texture header and point at their pixels.
+        for m in re.finditer(re.escape(b"\x03\0\0\0\x01\0\0\0"), z):
+            o = m.start()
+            if o + 0x70 > len(z) or z[o + 0x48:o + 0x4C] != b"\xff" * 4 or z[o + 0x38] not in (3, 5) or z[o + 0x3B]:
                 continue
-            index = len(self.images)
-            fmt = struct.unpack(">I", body[0:4])[0] & 0x3F
-            levels = []
+            self._add(o, pak=False)
+
+    def _add(self, o, pak, index=0):
+        z = self.zone
+        fmt = struct.unpack(">I", z[o + 0x34:o + 0x38])[0] & 0x3F
+        data = o + 0x70
+        if z[o + 0x6C:o + 0x70] == b"\xff" * 4:
+            end = z.index(b"\0", data)
+            name = z[data:end].decode("latin1")
+            data = end + 1
+        else:
+            name = self._material_name(o)
+        image = {"offset": o, "format": fmt, "map_type": z[o + 0x38], "pak": pak, "levels": []}
+        if pak:
+            image["name"] = name or "#%d" % index
             for k in range(LEVELS_PER_IMAGE):
-                w, h, info = struct.unpack(">HHI", body[0x18 + k * 8:0x20 + k * 8])
+                w, h, info = struct.unpack(">HHI", z[o + 0x4C + k * 8:o + 0x54 + k * 8])
                 if w:
-                    levels.append({"level": k, "width": w, "height": h, "size": info & 0xFFFFFF,
-                                   "entry": index * LEVELS_PER_IMAGE + k})
-            self.images.append({"index": index, "name": m.group(2).decode(), "format": fmt, "map_type": body[4],
-                                "levels": levels})
-        if len(self.images) * LEVELS_PER_IMAGE != self.count:
-            print("warning: %d textures but %d pak entries; this fastfile may not be supported"
-                  % (len(self.images), self.count))
+                    image["levels"].append({"level": k, "width": w, "height": h, "mips": info >> 26,
+                                            "entry": index * LEVELS_PER_IMAGE + k})
+        else:
+            if name is None:
+                return  # no name found; can't be picked by name
+            w, h = struct.unpack(">HH", z[o + 0x40:o + 0x44])
+            image["name"] = name
+            image["levels"].append({"level": 0, "width": w, "height": h, "mips": z[o + 0x46], "data": data,
+                                    "size": struct.unpack(">I", z[o + 0x3C:o + 0x40])[0]})
+        self.images.append(image)
+
+    def _material_name(self, o):
+        """Name of the material that owns the texture, for textures whose own name isn't stored inline.
+
+        Such a texture sits right after its material's texture slot (12 bytes ending in ffffffff),
+        which sits right after the material's name. UI materials and their textures share names.
+        """
+        z = self.zone
+        if o < 16 or z[o - 4:o] != b"\xff" * 4 or z[o - 13] != 0:
+            return None
+        end = o - 13
+        start = end
+        while start > 0 and 32 <= z[start - 1] < 127:
+            start -= 1
+        return z[start:end].decode("latin1") or None
 
     def find(self, name):
         for image in self.images:
@@ -85,10 +152,20 @@ class FastFile:
         return None
 
     def save(self, path):
-        out = bytearray(self.raw)
+        if not self.zone_changed and not self.signed:
+            out = bytearray(self.raw)
+            for i, entry in enumerate(self.table):
+                struct.pack_into(">III", out, 0x1D + i * 12, *entry)
+            open(path, "wb").write(bytes(out))
+            return
+        head = bytearray(self.raw[:self.header_end])
+        head[:8] = b"IWffu100"
         for i, entry in enumerate(self.table):
-            struct.pack_into(">III", out, 0x1D + i * 12, *entry)
-        open(path, "wb").write(bytes(out))
+            struct.pack_into(">III", head, 0x1D + i * 12, *entry)
+        stream = zlib.compress(bytes(self.zone), 9)
+        total = len(head) + 8 + len(stream)
+        head += struct.pack(">II", total, total + self.sizes[1] - self.sizes[0])
+        open(path, "wb").write(bytes(head) + stream)
 
 
 # ---------------------------------------------------------------- xbox tiling (port of src/image/xenos_texture.cpp)
@@ -123,7 +200,7 @@ def _layout(width, height, mip, fmt):
     wb = max(1, _up(max(width >> mip, 1), bw))
     hb = max(1, _up(max(height >> mip, 1), bw))
     if mip == 0:
-        pitch = _align(wb, 32) // 8
+        pitch = _align(wb, 32) // 8 if bw > 1 else _align(width, 32) // 32
         row = max(1, _up(pitch << 5, bw)) * bpb
         sw, sh = row // bpb, _align(hb, 32)
     else:
@@ -180,17 +257,26 @@ def _plan(width, height, fmt):
     return plan, total
 
 
-def _swap16(data):
+def _swap(data, fmt):
+    """Undo (or apply) the console's byte order: 16-bit swaps for DXT, 32-bit for ARGB8."""
     b = bytearray(data)
-    b[0::2], b[1::2] = data[1::2], data[0::2]
+    if FORMATS[fmt][2] == 4 and FORMATS[fmt][1] == 1:
+        b[0::4], b[1::4], b[2::4], b[3::4] = data[3::4], data[2::4], data[1::4], data[0::4]
+    else:
+        b[0::2], b[1::2] = data[1::2], data[0::2]
     return bytes(b)
 
 
-def untile(blob, width, height, fmt):
+def _single(width, height, fmt):
+    sw, size = _layout(width, height, 0, fmt)[2:]
+    return [(0, 0, sw, 0, 0)], size
+
+
+def untile(blob, width, height, fmt, single=False):
     """Tiled level chunk -> list of linear mips (little-endian, like a DDS)."""
     _, _, bpb, _ = FORMATS[fmt]
-    blob = _swap16(blob)
-    plan, _ = _plan(width, height, fmt)
+    blob = _swap(blob, fmt)
+    plan, _ = _single(width, height, fmt) if single else _plan(width, height, fmt)
     mips = []
     for mip, base, sw, ox, oy in plan:
         wb, hb, _, _ = _layout(width, height, mip, fmt)
@@ -204,10 +290,10 @@ def untile(blob, width, height, fmt):
     return mips
 
 
-def tile(mips, width, height, fmt):
+def tile(mips, width, height, fmt, single=False):
     """List of linear mips -> tiled level chunk (inverse of untile)."""
     _, _, bpb, _ = FORMATS[fmt]
-    plan, total = _plan(width, height, fmt)
+    plan, total = _single(width, height, fmt) if single else _plan(width, height, fmt)
     blob = bytearray(total)
     for (mip, base, sw, ox, oy), data in zip(plan, mips):
         wb, hb, _, _ = _layout(width, height, mip, fmt)
@@ -216,7 +302,7 @@ def tile(mips, width, height, fmt):
                 dst = base + _block_offset(x + ox, y + oy, sw, bpb)
                 src = (y * wb + x) * bpb
                 blob[dst:dst + bpb] = data[src:src + bpb]
-    return _swap16(bytes(blob))
+    return _swap(bytes(blob), fmt)
 
 
 # ---------------------------------------------------------------- DDS
@@ -232,7 +318,11 @@ def read_dds(path):
     offset = 128
     if fourcc == b"DX10":
         raise ValueError("DX10 DDS files are not supported; save as legacy DXT1/DXT3/DXT5")
-    fmt = next((f for f, v in FORMATS.items() if fourcc in v[3]), None)
+    pf_flags, bits = struct.unpack("<I", data[80:84])[0], struct.unpack("<I", data[88:92])[0]
+    if not pf_flags & 4 and bits == 32 and data[92:108] == struct.pack("<4I", 0xFF0000, 0xFF00, 0xFF, 0xFF000000):
+        fmt = 0x06
+    else:
+        fmt = next((f for f, v in FORMATS.items() if fourcc in v[3]), None)
     if fmt is None:
         raise ValueError("unsupported DDS compression %r" % fourcc)
     _, bw, bpb, _ = FORMATS[fmt]
@@ -247,9 +337,11 @@ def read_dds(path):
 
 
 def write_dds(path, width, height, fmt, mips):
-    fourcc = FORMATS[fmt][3][0]
     header = b"DDS " + struct.pack("<7I", 124, 0x000A1007, height, width, len(mips[0]), 0, len(mips))
-    header += b"\0" * 44 + struct.pack("<2I4s5I", 32, 4, fourcc, 0, 0, 0, 0, 0)
+    if fmt == 0x06:
+        header += b"\0" * 44 + struct.pack("<2I4s5I", 32, 0x41, b"\0" * 4, 32, 0xFF0000, 0xFF00, 0xFF, 0xFF000000)
+    else:
+        header += b"\0" * 44 + struct.pack("<2I4s5I", 32, 4, FORMATS[fmt][3][0], 0, 0, 0, 0, 0)
     header += struct.pack("<5I", 0x401008, 0, 0, 0, 0)
     open(path, "wb").write(header + b"".join(mips))
 
@@ -257,17 +349,29 @@ def write_dds(path, width, height, fmt, mips):
 # ---------------------------------------------------------------- commands
 
 
+def _safe(name):
+    return re.sub(r'[<>:"/\\|?*]', "_", name)
+
+
+def _supported(image):
+    """Cube maps, and uncompressed textures with mipmaps, aren't handled (their smallest mips don't round-trip)."""
+    if image["format"] not in FORMATS or image["map_type"] != 3:
+        return False
+    return not (FORMATS[image["format"]][1] == 1 and max(lv["mips"] for lv in image["levels"]) > 1)
+
+
 def cmd_list(ff_path):
     ff = FastFile(ff_path)
     out = ff_path + ".images.csv"
     with open(out, "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["index", "name", "format", "level", "width", "height", "pak", "start", "end"])
+        w.writerow(["name", "format", "stored", "supported", "level", "width", "height", "mips", "pak", "start", "end"])
         for image in ff.images:
             for lv in image["levels"]:
-                pak, start, end = ff.table[lv["entry"]]
-                w.writerow([image["index"], image["name"], FORMATS.get(image["format"], ("?",))[0], lv["level"],
-                            lv["width"], lv["height"], pak, start, end])
+                pak, start, end = ff.table[lv["entry"]] if image["pak"] else ("", "", "")
+                w.writerow([image["name"], FORMATS.get(image["format"], ("?",))[0], "pak" if image["pak"] else "ff",
+                            "yes" if _supported(image) else "no", lv["level"], lv["width"], lv["height"], lv["mips"],
+                            pak, start, end])
     print("%d textures written to %s" % (len(ff.images), out))
 
 
@@ -276,8 +380,17 @@ def cmd_extract(ff_path, pak_dir, name, out_path=None):
     image = ff.find(name)
     if not image:
         sys.exit("no texture named %s (run the list command to see names)" % name)
-    if image["format"] not in FORMATS:
+    fmt = image["format"]
+    if not _supported(image):
         sys.exit("%s uses a format this tool can't handle yet" % name)
+    out_path = out_path or _safe(image["name"]) + ".dds"
+    if not image["pak"]:
+        lv = image["levels"][0]
+        blob = bytes(ff.zone[lv["data"]:lv["data"] + lv["size"]])
+        mips = untile(blob, lv["width"], lv["height"], fmt, single=lv["mips"] == 1)
+        write_dds(out_path, lv["width"], lv["height"], fmt, mips)
+        print("wrote %s (%dx%d %s, %d mipmaps)" % (out_path, lv["width"], lv["height"], FORMATS[fmt][0], len(mips)))
+        return
     for lv in sorted(image["levels"], key=lambda l: -l["width"] * l["height"]):
         pak, start, end = ff.table[lv["entry"]]
         pak_path = os.path.join(pak_dir, "imagefile%d.pak" % pak)
@@ -287,11 +400,9 @@ def cmd_extract(ff_path, pak_dir, name, out_path=None):
         with open(pak_path, "rb") as fh:
             fh.seek(start)
             blob = zlib.decompress(fh.read(end - start))
-        mips = untile(blob, lv["width"], lv["height"], image["format"])
-        out_path = out_path or re.sub(r'[<>:"/\\|?*]', "_", image["name"]) + ".dds"
-        write_dds(out_path, lv["width"], lv["height"], image["format"], mips)
-        print("wrote %s (%dx%d %s, %d mipmaps)" % (out_path, lv["width"], lv["height"],
-                                                 FORMATS[image["format"]][0], len(mips)))
+        mips = untile(blob, lv["width"], lv["height"], fmt, single=lv["mips"] == 1)
+        write_dds(out_path, lv["width"], lv["height"], fmt, mips)
+        print("wrote %s (%dx%d %s, %d mipmaps)" % (out_path, lv["width"], lv["height"], FORMATS[fmt][0], len(mips)))
         return
     sys.exit("none of the paks for %s were found in %s" % (name, pak_dir))
 
@@ -300,7 +411,8 @@ def cmd_replace(ff_path, dds_dir, out_dir):
     ff = FastFile(ff_path)
     os.makedirs(out_dir, exist_ok=True)
     pak_path = os.path.join(out_dir, "imagefile%d.pak" % NEW_PAK)
-    pak = bytearray(open(pak_path, "rb").read()) if os.path.exists(pak_path) else bytearray(ff.raw[:12])
+    pak = bytearray(open(pak_path, "rb").read()) if os.path.exists(pak_path) else bytearray(b"IWffu100\0\0\x01\x0d")
+    pak_changed = False
     replaced = 0
     for file_name in sorted(os.listdir(dds_dir)):
         if not file_name.lower().endswith(".dds"):
@@ -315,6 +427,9 @@ def cmd_replace(ff_path, dds_dir, out_dir):
         except ValueError as e:
             print("skip %s: %s" % (file_name, e))
             continue
+        if not _supported(image):
+            print("skip %s: the game texture uses a format this tool can't handle yet" % file_name)
+            continue
         if fmt != image["format"]:
             print("skip %s: DDS is %s but the game texture is %s" % (
                 file_name, FORMATS[fmt][0], FORMATS.get(image["format"], ("?",))[0]))
@@ -324,24 +439,41 @@ def cmd_replace(ff_path, dds_dir, out_dir):
             print("skip %s: DDS is %dx%d but the game texture is %dx%d" % (
                 file_name, width, height, largest["width"], largest["height"]))
             continue
-        if len(mips) < _mip_count(width, height):
-            print("skip %s: save it with mipmaps (has %d, needs %d)" % (file_name, len(mips), _mip_count(width, height)))
+        needed = 1 if largest["mips"] == 1 else _mip_count(width, height)
+        if len(mips) < needed:
+            print("skip %s: save it with mipmaps (has %d, needs %d)" % (file_name, len(mips), needed))
+            continue
+        if not image["pak"]:
+            data = largest["data"]
+            blob = tile(mips, width, height, fmt, single=largest["mips"] == 1)
+            if len(blob) != largest["size"]:
+                print("skip %s: this texture's layout isn't supported (size %d, expected %d)"
+                      % (file_name, len(blob), largest["size"]))
+                continue
+            ff.zone[data:data + len(blob)] = blob
+            ff.zone_changed = True
+            replaced += 1
+            print("replaced %s" % name)
             continue
         for lv in image["levels"]:
             first = _log2ceil(width // lv["width"])
-            blob = tile(mips[first:], lv["width"], lv["height"], fmt)
+            blob = tile(mips[first:], lv["width"], lv["height"], fmt, single=lv["mips"] == 1)
             chunk = zlib.compress(blob, 9)
             start = len(pak)
             pak += chunk
             ff.table[lv["entry"]] = [NEW_PAK, start, len(pak)]
+        pak_changed = True
         replaced += 1
         print("replaced %s (%d sizes)" % (name, len(image["levels"])))
     if not replaced:
         sys.exit("nothing replaced; no files written")
-    open(pak_path, "wb").write(bytes(pak))
     ff_out = os.path.join(out_dir, os.path.basename(ff_path))
     ff.save(ff_out)
-    print("wrote %s and %s; copy both to _codxe\\zone\\ on the console" % (ff_out, pak_path))
+    written = [ff_out]
+    if pak_changed:
+        open(pak_path, "wb").write(bytes(pak))
+        written.append(pak_path)
+    print("wrote %s; copy to _codxe\\zone\\ on the console" % " and ".join(written))
 
 
 def main():
