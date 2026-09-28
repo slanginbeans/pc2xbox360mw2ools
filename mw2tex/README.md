@@ -1,0 +1,118 @@
+# mw2tex: swap MW2 textures on Xbox 360 (TU6)
+
+mw2tex changes pictures inside MW2's game files: emblems, calling card titles, camos, menu
+pictures and map textures. You run it on your PC, then copy the files it makes to your console.
+codxe loads them from `_codxe\zone\` instead of the stock files, so deleting them undoes everything.
+
+There are two ways to use it:
+
+- **The texture picker** (`mw2tex_gui.py`): a page in your web browser where you drag pictures onto
+  textures. Start here.
+- **Commands** (`mw2tex.py`): typed in PowerShell. Useful for batches and anything the picker doesn't do.
+
+---
+
+## 1. One-time setup
+
+1. **Install Python 3** from https://www.python.org/downloads/. On the first installer screen, tick
+   **"Add python.exe to PATH"**.
+2. **Install Pillow** (the picture library mw2tex uses). Open PowerShell and run:
+   ```
+   python -m pip install pillow
+   ```
+3. **Get the tool files.** Either:
+   - download the texture branch:
+     ```
+     git clone -b iw4-tu6-textures https://github.com/slanginbeans/codxe_modified.git codxe_textures
+     ```
+     The tools are in `codxe_textures\tools\mw2tex\`. Later, run `git pull` in `codxe_textures` to get updates.
+   - or just download `mw2tex.py` and `mw2tex_gui.py` into one folder.
+4. **Make a work folder** (for example `C:\mw2mods`) and copy into it:
+   - `mw2tex.py` and `mw2tex_gui.py`
+   - the game files you want to change, copied from your console with FTP:
+     - `ui_mp.ff` for emblems and calling card titles
+     - `common_mp.ff` for camos
+     - `mp_*.ff` for maps
+   - optional: `imagefile1.pak` to `imagefile4.pak`. These are only needed to *preview* camo and map
+     textures. Replacing them works without the pak files.
+
+## 2. Using the texture picker
+
+1. Open your work folder in File Explorer, click the address bar, type `powershell` and press Enter.
+2. Run:
+   ```
+   python mw2tex_gui.py
+   ```
+   Your browser opens the picker. Leave the PowerShell window open while you use it.
+3. Pick a file at the top (for example `ui_mp.ff`) and press **Open**.
+4. Find textures with the search box or the **Emblems / Titles / Camos** buttons.
+5. **Replace one texture:** drag a picture (PNG, JPG, GIF, DDS...) onto its card, or press
+   **Choose picture**. The card shows the old picture, an arrow and the new one.
+6. **Replace many at once:** name each picture after the texture it replaces (for example
+   `cardicon_bear.png`, `cardtitle_bloodsplat.jpg`) and drop them all anywhere on the page. The picker
+   tells you which names didn't match.
+7. **Animated emblems:** drop an animated GIF on an emblem. The **Animate** box is ticked for you. On
+   Build, the emblem becomes a 32-frame animation at full 64x64 size (see section 4). Untick the box to
+   use only the first frame.
+8. Press **Undo** on a card to drop that change, or **Changed** to see everything you've queued.
+9. Press **Build**. The picker writes the new files into a `mw2tex_out` folder inside your work folder.
+10. Copy everything in `mw2tex_out` to your console (section 3).
+
+Each Build starts from the stock file and applies every queued change, so what's on the
+**Changed** list is exactly what you get.
+
+## 3. Putting the files on the console
+
+1. With FTP, open the MW2 game folder (the one with `default_mp.xex`), then `_codxe`.
+2. If there's no `zone` folder, make one (in FileZilla: right-click, then "Create directory"). Name it `zone`, all lowercase.
+3. Copy the built files into `_codxe\zone\`, for example `_codxe\zone\ui_mp.ff`. If Build also made
+   `imagefile5.pak` (it does when you change camos or map textures), copy that too.
+4. Start MW2 with codxe.
+
+To undo, delete the file from `_codxe\zone\`.
+
+## 4. Good to know
+
+- **Sizes are automatic.** Your picture is stretched to the game texture's size, so use the same shape
+  for best results. Emblems are square (64x64); calling card titles are 240x48.
+- **Gray-only textures.** Some pictures are stored as gray plus transparency: locked perk icons,
+  `cardicon_skull_black`, `cardicon_electro`, `cardicon_simplegun`, `cardicon_skullnbones`,
+  `cardtitle_camo_arctic`, `cardtitle_camo_digital` and `cardtitle_swordmaster_2`. The picker marks
+  them "shows in gray only". mw2tex converts your picture to match, so it shows up in gray in game.
+- **How animated emblems work.** An animated emblem is a flipbook: one 512x256 picture holding 32 frames
+  of 64x64 in 4 rows of 8, read left to right, top to bottom. The emblem's material says how many
+  rows and columns to cut. The game shows every frame for the same short time, so the speed is fixed.
+  A GIF with fewer frames repeats each one to fill 32 slots (a 4-frame GIF shows each frame 8 times).
+  Stock animated emblems: `cardicon_prestige10`, `cardicon_prestige10_02` and `cardicon_iw`. That last
+  one uses the texture `cardicon_nvg_star`.
+- **Pak textures.** Camos on guns and map textures live in `imagefile*.pak`. Changed ones go in a new
+  `imagefile5.pak`, which codxe loads from `_codxe\zone\`. Build adds to an existing `imagefile5.pak` in
+  `mw2tex_out` rather than replacing it, so it can grow over time. Delete it and rebuild if it gets big.
+- **Formats that can't be replaced yet** are marked on their card. Most textures are DXT1, DXT3 or DXT5,
+  which all work.
+
+## 5. Commands
+
+Run these in PowerShell in your work folder. `out` is the folder the new files go in. Running more
+commands with the same `out` folder keeps the earlier changes.
+
+| What | Command |
+| --- | --- |
+| List every texture in a file (writes a .csv) | `python mw2tex.py list ui_mp.ff` |
+| Export a texture as DDS | `python mw2tex.py extract ui_mp.ff . cardicon_bear` |
+| Replace one texture | `python mw2tex.py put ui_mp.ff cardicon_bear bear.png out` |
+| Replace many (pictures named after textures, in folder `pics`) | `python mw2tex.py replace ui_mp.ff pics out` |
+| Turn an emblem into a full-size animation | `python mw2tex.py flipbook ui_mp.ff cardicon_expert_ak47 dance.gif out` |
+| Resize a texture, then put a picture on it | `python mw2tex.py grow ui_mp.ff cardicon_bear 512 256 sheet.png out` |
+| Set how many frames an emblem plays | `python mw2tex.py animate ui_mp.ff cardicon_bear 4 8 out` |
+
+`python mw2tex.py` with nothing after it prints the full help, including how the file format works.
+
+## 6. If something goes wrong
+
+- **"python is not recognized"**: Python isn't on PATH. Reinstall it and tick "Add python.exe to PATH".
+- **"needs Pillow"**: run `python -m pip install pillow`.
+- **The picker page doesn't open**: copy the address printed in PowerShell (like `http://127.0.0.1:8360/`)
+  into your browser.
+- **The game freezes or errors while loading**: delete the file you added in `_codxe\zone\` and tell
+  Claude which texture you changed and how.

@@ -20,15 +20,19 @@ ui_mp.ff, which hold camos, titles and emblems. Commands:
       Run it again with the same OUTDIR to change more textures; each run keeps the
       earlier changes. Copy what it writes to _codxe\\zone\\ on the console.
 
+  python mw2tex.py flipbook ui_mp.ff NAME ANIMATION.gif OUTDIR
+      Turns emblem NAME into a full-size animation: picks 32 frames from the GIF, makes the
+      texture 512x256 and sets its material to play 4 x 8 frames of 64x64.
+
   python mw2tex.py grow    ui_mp.ff NAME WIDTH HEIGHT PICTURE OUTDIR
       Like put, but first makes texture NAME bigger (or smaller), e.g. 512 256 to give a
       64x64 emblem room for 32 animation frames. Only for textures stored in the .ff
       (titles, emblems, menu pictures). WIDTH and HEIGHT must be powers of two.
 
   python mw2tex.py animate ui_mp.ff MATERIAL ROWS COLUMNS OUTDIR
-      Makes material MATERIAL (an emblem name like cardicon_expert_ak47) play its texture
-      as a flipbook: the texture is cut into ROWS x COLUMNS frames, read left to right, top
-      to bottom. Put a picture laid out that way on the texture first (for a 64x64 emblem,
+      Makes material MATERIAL (an emblem name like cardicon_expert_ak47; a texture name
+      works too) play its texture as a flipbook: the texture is cut into ROWS x COLUMNS
+      frames, read left to right, top to bottom. Put a picture laid out that way on the texture first (for a 64x64 emblem,
       2 2 gives four 32x32 frames). 1 1 turns the animation off again.
 
   python mw2tex.py replace ui_mp.ff PICDIR OUTDIR
@@ -358,13 +362,17 @@ def read_dds(path):
 
 
 def write_dds(path, width, height, fmt, mips):
+    open(path, "wb").write(dds_bytes(width, height, fmt, mips))
+
+
+def dds_bytes(width, height, fmt, mips):
     header = b"DDS " + struct.pack("<7I", 124, 0x000A1007, height, width, len(mips[0]), 0, len(mips))
     if fmt == 0x06:
         header += b"\0" * 44 + struct.pack("<2I4s5I", 32, 0x41, b"\0" * 4, 32, 0xFF0000, 0xFF00, 0xFF, 0xFF000000)
     else:
         header += b"\0" * 44 + struct.pack("<2I4s5I", 32, 4, FORMATS[fmt][3][0], 0, 0, 0, 0, 0)
     header += struct.pack("<5I", 0x401008, 0, 0, 0, 0)
-    open(path, "wb").write(header + b"".join(mips))
+    return header + b"".join(mips)
 
 
 # ---------------------------------------------------------------- commands
@@ -426,6 +434,50 @@ def cmd_extract(ff_path, pak_dir, name, out_path=None):
         print("wrote %s (%dx%d %s, %d mipmaps)" % (out_path, lv["width"], lv["height"], FORMATS[fmt][0], len(mips)))
         return
     sys.exit("none of the paks for %s were found in %s" % (name, pak_dir))
+
+
+def decode_texture(ff, image, pak_dir=".", max_side=256, unpack=True):
+    """Pillow RGBA picture of a texture, or None when its format or pak file isn't available.
+
+    Pak textures use the largest level no bigger than max_side that's in a pak we have (else the
+    smallest we have). DXT1 textures with an empty blue channel keep gray in red and
+    transparency in green; they're shown that way.
+    """
+    from PIL import Image
+    import io
+    fmt = image["format"]
+    if fmt not in FORMATS:
+        return None
+    if image["pak"]:
+        have = []
+        for lv in image["levels"]:
+            pak, start, end = ff.table[lv["entry"]]
+            path = os.path.join(pak_dir, "imagefile%d.pak" % pak)
+            if os.path.exists(path):
+                have.append((lv, path, start, end))
+        if not have:
+            return None
+        small = [h for h in have if max(h[0]["width"], h[0]["height"]) <= max_side]
+        lv, path, start, end = max(small, key=lambda h: h[0]["width"]) if small else \
+            min(have, key=lambda h: h[0]["width"])
+        with open(path, "rb") as fh:
+            fh.seek(start)
+            blob = zlib.decompress(fh.read(end - start))
+    else:
+        lv = image["levels"][0]
+        blob = bytes(ff.zone[lv["data"]:lv["data"] + lv["size"]])
+    mips = untile(blob, lv["width"], lv["height"], fmt, single=lv["mips"] == 1)
+    picture = Image.open(io.BytesIO(dds_bytes(lv["width"], lv["height"], fmt, mips[:1]))).convert("RGBA")
+    if unpack and gray_alpha_packed(image, picture):
+        r, g, b, a = picture.split()
+        picture = Image.merge("RGBA", (r, r, r, g))
+    return picture
+
+
+def gray_alpha_packed(image, picture):
+    """Some DXT1 menu pictures (cardicon_skull_black, cardtitle_camo_arctic, ...) keep gray in red
+    and transparency in green, with blue empty; the menu shader unpacks them."""
+    return image["format"] == 0x12 and not image["pak"] and picture.getchannel("B").getextrema()[1] == 0
 
 
 # ---------------------------------------------------------------- converting any picture (needs Pillow)
@@ -520,13 +572,21 @@ def _encode(rgba, width, height, fmt):
     return bytes(out)
 
 
-def convert_picture(path, width, height, fmt, mip_count):
-    """Any picture Pillow can open (PNG, JPG, DDS, ...) -> list of mips in the game's format."""
+def convert_picture(path, width, height, fmt, mip_count, packed=False):
+    """Any picture Pillow can open (PNG, JPG, DDS, ...) -> list of mips in the game's format.
+
+    packed: store gray in red and transparency in green (see gray_alpha_packed)."""
     try:
         from PIL import Image
     except ImportError:
         sys.exit("converting pictures needs Pillow; install it with:  python -m pip install pillow")
     picture = Image.open(path).convert("RGBA")
+    if packed:
+        zero = Image.new("L", picture.size, 0)
+        picture = Image.merge("RGBA", (picture.convert("L"), picture.getchannel("A"), zero,
+                                       Image.new("L", picture.size, 255)))
+        print("  %s keeps gray in red and transparency in green; converted the picture to match"
+              % os.path.basename(path))
     if picture.size != (width, height):
         print("  resizing %s from %dx%d to %dx%d" % (os.path.basename(path), picture.size[0], picture.size[1],
                                                      width, height))
@@ -580,7 +640,13 @@ class Output:
             except ValueError:
                 pass
         if mips is None:
-            mips = convert_picture(source, width, height, fmt, needed)
+            packed = False
+            if fmt == 0x12 and not image["pak"]:
+                try:
+                    packed = gray_alpha_packed(image, decode_texture(self.ff, image, unpack=False))
+                except Exception:
+                    packed = False
+            mips = convert_picture(source, width, height, fmt, needed, packed)
         if not image["pak"]:
             blob = tile(mips, width, height, fmt, single=largest["mips"] == 1)
             if len(blob) != largest["size"]:
@@ -711,18 +777,99 @@ def find_material(zone, name):
     return hits
 
 
+def material_of_image(ff, image):
+    """Header offset of the UI material whose texture slot holds this in-file texture, or None.
+
+    The texture record follows its material's inline name and 12-byte texture slot. Usually the
+    names match; cardicon_nvg_star belongs to material cardicon_iw.
+    """
+    name = ff._material_name(image["offset"])
+    if not name:
+        return None
+    o = image["offset"] - 12 - len(name) - 1 - 0x58
+    z = ff.zone
+    if o >= 0 and z[o:o + 4] == b"\xff" * 4 and 1 <= z[o + 6] <= 16 and 1 <= z[o + 7] <= 16:
+        return o
+    return None
+
+
+def set_atlas(ff, name, rows, columns):
+    """Sets texture atlas rows/columns on material NAME, or on the material that uses texture NAME."""
+    hits = find_material(ff.zone, name)
+    if not hits:
+        image = ff.find(name)
+        o = material_of_image(ff, image) if image and not image["pak"] else None
+        hits = [o] if o is not None else []
+    for o in hits:
+        ff.zone[o + 6] = rows
+        ff.zone[o + 7] = columns
+    if hits:
+        ff.zone_changed = True
+    return len(hits)
+
+
+FLIPBOOK = (4, 8, 64)  # rows, columns, frame size: the layout of the stock animated emblems
+
+
+def make_flipbook(picture, rows=FLIPBOOK[0], columns=FLIPBOOK[1], frame=FLIPBOOK[2]):
+    """An animated GIF/WebP/PNG -> Pillow image laid out as rows x columns frames.
+
+    The game plays every frame for the same time, so the source frames are spread evenly over all
+    the slots (a 4-frame GIF shows each frame 8 times in a 32-slot sheet).
+    """
+    from PIL import Image, ImageSequence
+    frames = [f.convert("RGBA").copy() for f in ImageSequence.Iterator(Image.open(picture))]
+    slots = rows * columns
+    sheet = Image.new("RGBA", (columns * frame, rows * frame))
+    for i in range(slots):
+        f = frames[i * len(frames) // slots].resize((frame, frame), Image.LANCZOS)
+        sheet.paste(f, ((i % columns) * frame, (i // columns) * frame))
+    return sheet
+
+
+def frame_count(picture):
+    try:
+        from PIL import Image
+        return getattr(Image.open(picture), "n_frames", 1)
+    except Exception:
+        return 1
+
+
+def put_flipbook(out, image, picture, work_dir):
+    """Turns an in-file texture (an emblem) into a full-size 32-frame animation of PICTURE."""
+    rows, columns, frame = FLIPBOOK
+    width, height = columns * frame, rows * frame
+    lv = image["levels"][0]
+    if (lv["width"], lv["height"]) != (width, height):
+        grow_texture(out.ff, image, width, height)
+    sheet_path = os.path.join(work_dir, _safe(image["name"]) + "_flipbook.png")
+    make_flipbook(picture).save(sheet_path)
+    if not out.put(image, sheet_path, convert=True):
+        return False
+    if not set_atlas(out.ff, image["name"], rows, columns):
+        print("  warning: couldn't find the material for %s, so it won't animate" % image["name"])
+    return True
+
+
+def cmd_flipbook(ff_path, name, picture, out_dir):
+    out = Output(ff_path, out_dir)
+    image = out.ff.find(name)
+    if not image:
+        sys.exit("no texture named %s (run the list command to see names)" % name)
+    if image["pak"] or image["levels"][0]["mips"] != 1:
+        sys.exit("%s isn't a menu picture stored in the .ff; flipbook works on emblems" % name)
+    put_flipbook(out, image, picture, out_dir)
+    print("%s now plays %s as a %d-frame animation" % (name, os.path.basename(picture), FLIPBOOK[0] * FLIPBOOK[1]))
+    out.save()
+
+
 def cmd_animate(ff_path, name, rows, columns, out_dir):
     rows, columns = int(rows), int(columns)
     if not (1 <= rows <= 16 and 1 <= columns <= 16):
         sys.exit("rows and columns must be 1 to 16")
     out = Output(ff_path, out_dir)
-    hits = find_material(out.ff.zone, name)
-    if not hits:
-        sys.exit("no material named %s found" % name)
-    for o in hits:
-        out.ff.zone[o + 6] = rows
-        out.ff.zone[o + 7] = columns
-    out.ff.zone_changed = True
+    if not set_atlas(out.ff, name, rows, columns):
+        sys.exit("no material or emblem texture named %s found" % name)
     out.replaced += 1
     print("%s now plays as %d x %d frames" % (name, rows, columns))
     out.save()
@@ -736,6 +883,8 @@ def main():
         cmd_extract(*args[1:])
     elif len(args) == 4 and args[0] == "replace":
         cmd_replace(*args[1:])
+    elif len(args) == 5 and args[0] == "flipbook":
+        cmd_flipbook(*args[1:])
     elif len(args) == 7 and args[0] == "grow":
         cmd_grow(*args[1:])
     elif len(args) == 6 and args[0] == "animate":
