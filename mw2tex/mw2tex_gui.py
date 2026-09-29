@@ -26,6 +26,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mw2tex  # noqa: E402
 import mw2zone_gui  # noqa: E402
 
+if not hasattr(mw2tex, "material_images"):
+    sys.exit("mw2tex.py at %s is older than mw2tex_gui.py. Copy mw2tex.py, mw2tex_gui.py, mw2zone.py and "
+             "mw2zone_gui.py from the same download into one folder." % mw2tex.__file__)
+
 try:
     from PIL import Image
 except ImportError:
