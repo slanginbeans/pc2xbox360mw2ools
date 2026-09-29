@@ -322,6 +322,13 @@ def _single(width, height, fmt):
     return [(0, 0, sw, 0, 0)], size
 
 
+def top_mip_only(image, lv):
+    """Pak textures stream in levels. The smallest level holds its whole mip chain, but each
+    bigger level holds only its own top mip: the smaller mips come from the levels before it.
+    (Writing a whole chain there overflows the game's buffer: "disc unreadable" on the console.)"""
+    return image["pak"] and lv is not image["levels"][0]
+
+
 def untile(blob, width, height, fmt, single=False):
     """Tiled level chunk -> list of linear mips (little-endian, like a DDS)."""
     _, _, bpb, _ = FORMATS[fmt]
@@ -454,7 +461,7 @@ def cmd_extract(ff_path, pak_dir, name, out_path=None):
         with open(pak_path, "rb") as fh:
             fh.seek(start)
             blob = zlib.decompress(fh.read(end - start))
-        mips = untile(blob, lv["width"], lv["height"], fmt, single=lv["mips"] == 1)
+        mips = untile(blob, lv["width"], lv["height"], fmt, single=lv["mips"] == 1 or top_mip_only(image, lv))
         write_dds(out_path, lv["width"], lv["height"], fmt, mips)
         print("wrote %s (%dx%d %s, %d mipmaps)" % (out_path, lv["width"], lv["height"], FORMATS[fmt][0], len(mips)))
         return
@@ -491,7 +498,7 @@ def decode_texture(ff, image, pak_dir=".", max_side=256, unpack=True):
     else:
         lv = image["levels"][0]
         blob = bytes(ff.zone[lv["data"]:lv["data"] + lv["size"]])
-    mips = untile(blob, lv["width"], lv["height"], fmt, single=lv["mips"] == 1)
+    mips = untile(blob, lv["width"], lv["height"], fmt, single=lv["mips"] == 1 or top_mip_only(image, lv))
     picture = Image.open(io.BytesIO(dds_bytes(lv["width"], lv["height"], fmt, mips[:1]))).convert("RGBA")
     if unpack and gray_alpha_packed(image, picture):
         r, g, b, a = picture.split()
@@ -684,7 +691,9 @@ class Output:
         else:
             for lv in image["levels"]:
                 first = _log2ceil(width // lv["width"])
-                blob = tile(mips[first:], lv["width"], lv["height"], fmt, single=lv["mips"] == 1)
+                top = top_mip_only(image, lv)
+                blob = tile(mips[first:first + 1] if top else mips[first:], lv["width"], lv["height"], fmt,
+                            single=lv["mips"] == 1 or top)
                 start = len(self.pak)
                 self.pak += zlib.compress(blob, 9)
                 self.ff.table[lv["entry"]] = [NEW_PAK, start, len(self.pak)]
@@ -1078,7 +1087,9 @@ def _copy_blobs(built, image, target, work_dir, map_ff=None):
     blobs = []
     for tl in target["levels"]:
         first = _log2ceil(width // tl["width"])
-        blobs.append((tl, tile(mips[first:], tl["width"], tl["height"], fmt, single=tl["mips"] == 1)))
+        top = top_mip_only(target, tl)
+        blobs.append((tl, tile(mips[first:first + 1] if top else mips[first:], tl["width"], tl["height"], fmt,
+                               single=tl["mips"] == 1 or top)))
     return blobs, note
 
 
