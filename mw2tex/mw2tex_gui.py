@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 import urllib.parse
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -43,7 +44,7 @@ MAX_UPLOAD = 64 * 1024 * 1024
 
 lock = threading.Lock()
 state = {"ff_path": None, "ff": None, "images": {}, "pending": {}, "thumbs": {}, "gray": set(),
-         "materials": {}, "image_material": {}}
+         "materials": {}, "image_material": {}, "assigns": []}
 # Emblems and titles: their pictures are listed in tables (mw2zone_gui.PICTURE_COLUMNS).
 CARD_PREFIXES = ("cardtitle_", "cardicon_")
 NOT_SPARE = {"cardtitle_locked", "cardicon_locked", "cardtitle_248x48"}
@@ -74,11 +75,13 @@ def is_spare(material, uses):
 def texture_list():
     rows = []
     uses = table_uses()
+    assigned = live_assigns() if state["assigns"] else []
     for name, image in state["images"].items():
         largest = max(image["levels"], key=lambda l: l["width"] * l["height"])
         material = state["image_material"].get(name.lower())
         used = (uses or {}).get(material.lower(), []) if material else []
         rows.append({
+            "assigned": [a for a in assigned if material and a["new"].lower() == material.lower()],
             "material": material,
             "uses": len(used),
             "used_by": [u["id"] for u in used[:6]],
@@ -142,7 +145,96 @@ def share_plan(name):
         spares.append({"material": spare, "image": spare_image, "same_size": spare_size == size,
                        "width": spare_size[0], "height": spare_size[1]})
     spares.sort(key=lambda s: not s["same_size"])  # same size first: nothing gets squashed
-    return {"material": material, "uses": uses.get(material.lower(), []), "spares": spares}
+    others = [{"material": m, "image": i, "uses": len(uses.get(m.lower(), []))}
+              for m, i in sorted(state["materials"].items())
+              if m.lower().startswith(kind) and m.lower() not in NOT_SPARE and m != material
+              and uses.get(m.lower())]
+    return {"material": material, "uses": uses.get(material.lower(), []), "spares": spares, "others": others}
+
+
+def picture_rows(kind):
+    """Every title (kind cardtitle_) or emblem (cardicon_) row, with the picture it uses now."""
+    rows = []
+    for material, used in (table_uses() or {}).items():
+        if material.startswith(kind):
+            rows += [dict(u, material=material) for u in used]
+    return sorted(rows, key=lambda r: r["id"])
+
+
+def assign(material, targets):
+    """Points table rows TARGETS ([{"table", "row"}]) at picture MATERIAL, an existing picture
+    (usually an unused one). Nothing about the textures changes."""
+    lower = {m.lower(): m for m in state["materials"]}
+    if material.lower() not in lower:
+        raise ValueError("there's no picture named %s in the open file" % material)
+    material = lower[material.lower()]
+    done = []
+    with mw2zone_gui.lock:
+        for target in targets:
+            name, row = target["table"], int(target["row"])
+            column = mw2zone_gui.PICTURE_COLUMNS.get(name)
+            rows = mw2zone_gui.current_rows(name)
+            if column is None or rows is None or not 0 <= row < len(rows):
+                raise ValueError("no row %s in %s" % (row, name))
+            old = rows[row][column]
+            if old == material:
+                continue
+            mw2zone_gui.set_cell(name, row, column, material)
+            entry = {"table": name, "row": row, "column": column, "id": rows[row][0], "old": old, "new": material}
+            state["assigns"].append(entry)
+            done.append(entry)
+    return done
+
+
+def live_assigns():
+    """Assignments still in effect (the table editor may have undone some)."""
+    live = []
+    with mw2zone_gui.lock:
+        for index, a in enumerate(state["assigns"]):
+            rows = mw2zone_gui.current_rows(a["table"])
+            if rows and a["row"] < len(rows) and rows[a["row"]][a["column"]] == a["new"]:
+                live.append(dict(a, index=index))
+    return live
+
+
+def unassign(index):
+    a = state["assigns"][index]
+    with mw2zone_gui.lock:
+        rows = mw2zone_gui.current_rows(a["table"])
+        if rows and rows[a["row"]][a["column"]] == a["new"]:
+            mw2zone_gui.set_cell(a["table"], a["row"], a["column"], a["old"])
+
+
+MAX_FETCH = MAX_UPLOAD
+
+
+def fetch_picture(url):
+    """Downloads a picture from a web link for the page, which can't fetch other sites itself.
+    Returns (bytes, file name)."""
+    if urllib.parse.urlparse(url).scheme not in ("http", "https"):
+        raise ValueError("paste a link that starts with http:// or https://")
+    request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (mw2tex texture picker)"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = response.read(MAX_FETCH + 1)
+    except Exception as e:
+        raise ValueError("couldn't download that link: %s" % e)
+    if len(data) > MAX_FETCH:
+        raise ValueError("that picture is too big")
+    try:
+        picture = Image.open(io.BytesIO(data))
+        kind = (picture.format or "").lower()
+    except Exception:
+        raise ValueError("that link isn't a picture. Right-click the picture and use 'Copy image address'.")
+    stem = os.path.splitext(os.path.basename(urllib.parse.urlparse(url).path))[0] or "web_picture"
+    stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem)[:60] or "web_picture"
+    ext = {"jpeg": ".jpg", "png": ".png", "gif": ".gif", "webp": ".webp", "bmp": ".bmp", "dds": ".dds",
+           "tga": ".tga"}.get(kind)
+    if ext is None:  # a format the tool can't read directly: hand it over as PNG
+        buf = io.BytesIO()
+        picture.convert("RGBA").save(buf, "PNG")
+        data, ext = buf.getvalue(), ".png"
+    return data, stem + ext
 
 
 def upload_for_one(name, index, spare, filename, data):
@@ -302,6 +394,19 @@ class Handler(BaseHTTPRequestHandler):
         query = urllib.parse.parse_qs(url.query)
         if self.tables("GET", url, query):
             return
+        if url.path == "/api/fetch":  # outside the lock: a slow download mustn't freeze the page
+            try:
+                data, filename = fetch_picture(query.get("url", [""])[0])
+            except ValueError as e:
+                return self.fail(str(e))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("X-Filename", filename)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+            return
         with lock:
             if url.path == "/":
                 self.reply(200, PAGE, "text/html; charset=utf-8")
@@ -314,6 +419,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, {"textures": texture_list(), "pending": self.pending(), "tables": self.table_state()})
             elif url.path == "/api/plan":
                 self.reply(200, share_plan(query.get("name", [""])[0]))
+            elif url.path == "/api/rows":
+                self.reply(200, {"rows": picture_rows(query.get("kind", ["cardtitle_"])[0])})
             elif url.path == "/api/materials":
                 if state["ff"] is None and os.path.exists(os.path.join(FOLDER, "ui_mp.ff")):
                     try:
@@ -405,6 +512,13 @@ class Handler(BaseHTTPRequestHandler):
                         if item:
                             undo_redirect(item)
                     self.reply(200, {"pending": self.pending(), "textures": texture_list(), "tables": self.table_state()})
+                elif url.path == "/api/assign":
+                    req = json.loads(body)
+                    done = assign(req["material"], req["targets"])
+                    self.reply(200, {"done": done, "textures": texture_list(), "tables": self.table_state()})
+                elif url.path == "/api/unassign":
+                    unassign(int(json.loads(body)["index"]))
+                    self.reply(200, {"textures": texture_list(), "tables": self.table_state()})
                 elif url.path == "/api/build":
                     self.reply(200, build())
                 else:
@@ -443,7 +557,7 @@ main{padding:0 16px 40px;display:grid;grid-template-columns:repeat(auto-fill,min
 #toast.bad{border-color:var(--bad)}#toast.ok{border-color:var(--ok)}
 .empty{grid-column:1/-1;color:var(--dim);padding:40px 0;text-align:center}
 .uses{font-size:12px;color:var(--dim)}.uses b{color:var(--text);font-weight:600}.uses.free{color:var(--ok)}.uses.shared{color:var(--accent)}
-.redir{font-size:12px;color:var(--ok)}
+.redir{font-size:12px;color:var(--ok)}.redir button{margin-left:6px;padding:1px 6px;font-size:11px}
 dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:16px;max-width:560px;width:calc(100% - 32px)}
 dialog::backdrop{background:rgba(0,0,0,.6)}dialog h2{font-size:16px;margin:0 0 8px}dialog p{margin:6px 0;color:var(--dim)}
 dialog label.opt{display:block;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0;cursor:pointer}
@@ -470,6 +584,8 @@ dialog label.opt:has(input:checked){border-color:var(--accent)}dialog select{wid
 const $=s=>document.querySelector(s);let textures=[],pending={},tables={file:null,changed:[]},filter="all",pickFor=null,shown=0;
 const FILTERS=[["all","All"],["cardicon_","Emblems"],["cardtitle_","Titles"],["camo","Camos"],["free","Unused"],["changed","Changed"]];
 const LIMIT=400;
+const el=(tag,props,...kids)=>{const e=Object.assign(document.createElement(tag),props||{});for(const k of kids)e.append(k);return e};
+const kindOf=name=>name.startsWith("cardtitle_")?"title":"emblem";
 function toast(msg,kind){const t=$("#toast");t.textContent=msg;t.className=kind||"";t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",kind==="bad"?9000:6000)}
 async function api(path,opts){const r=await fetch(path,opts);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||("request failed: "+r.status));return j}
 function chips(){$("#chips").innerHTML="";for(const[k,l]of FILTERS){const b=document.createElement("button");b.className="chip"+(filter===k?" on":"");b.textContent=l+(k==="changed"?" ("+Object.keys(pending).length+")":"");b.onclick=()=>{filter=k;render()};$("#chips").appendChild(b)}}
@@ -490,20 +606,53 @@ function card(t){const c=document.createElement("div");c.className="card"+(pendi
  if(t.uses){const u=document.createElement("div");u.className="uses"+(t.uses>1?" shared":"");u.textContent=t.uses>1?"Shared by "+t.uses+" "+kind+"s: "+t.used_by.join(", ")+(t.uses>t.used_by.length?"…":""):"Used by "+t.used_by[0];c.appendChild(u)}
  else if(t.spare){c.appendChild(Object.assign(document.createElement("div"),{className:"uses free",textContent:"Unused: no "+kind+" shows this picture"}))}
  if(p&&p.redirect){c.appendChild(Object.assign(document.createElement("div"),{className:"redir",textContent:"For "+p.redirect.id+" only (was "+p.redirect.old+")"}))}
+ for(const a of t.assigned||[]){const u=el("button",{textContent:"Undo"});u.onclick=()=>unassign(a.index);c.appendChild(el("div",{className:"redir"},"Now shown by "+a.id+" (was "+a.old+")",u))}
  const row=document.createElement("div");row.className="row";
  if(!t.supported){row.appendChild(Object.assign(document.createElement("span"),{className:"none",textContent:"This format can't be replaced yet"}))}
  else{const b=document.createElement("button");b.textContent=p?"Change":"Choose picture";b.onclick=()=>{pickFor=t.name;$("#picker").click()};row.appendChild(b);
+  const l=el("button",{textContent:"From link",title:"Use a picture from a web address"});l.onclick=()=>linkFor(t);row.appendChild(l);
   if(p){const u=document.createElement("button");u.textContent="Undo";u.onclick=()=>remove(t.name);row.appendChild(u);
    if(p.frames>1&&t.can_animate){const l=document.createElement("label");const cb=document.createElement("input");cb.type="checkbox";cb.checked=p.animate;cb.onchange=()=>option(t.name,cb.checked);l.append(cb," Animate ("+p.frames+" frames → 32)");row.appendChild(l)}
    else if(p.frames>1){row.appendChild(Object.assign(document.createElement("span"),{className:"none",textContent:"Animated file: only the first frame is used here"}))}}}
  c.appendChild(row);
+ if(t.material&&tables.file&&(t.name.startsWith("cardtitle_")||t.name.startsWith("cardicon_"))&&(t.uses||t.spare)){const r2=el("div",{className:"row"});
+  if(t.uses){const a=el("button",{textContent:"Use another picture",title:"Point this picture's "+kindOf(t.name)+"s at a picture already in the game, like an unused one"});a.onclick=()=>assignFor(t);r2.append(a)}
+  const g=el("button",{textContent:"Show on a "+kindOf(t.name),title:"Make another "+kindOf(t.name)+" use this picture"});g.onclick=()=>giveTo(t);r2.append(g);c.appendChild(r2)}
  if(t.supported){c.ondragover=e=>{e.preventDefault();e.stopPropagation();c.classList.add("drag")};c.ondragleave=()=>c.classList.remove("drag");
-  c.ondrop=e=>{e.preventDefault();e.stopPropagation();c.classList.remove("drag");$("#drop").style.display="none";const f=e.dataTransfer.files[0];if(f)choose(t,f)}}
+  c.ondrop=e=>{e.preventDefault();e.stopPropagation();c.classList.remove("drag");$("#drop").style.display="none";const f=e.dataTransfer.files[0];if(f)return choose(t,f);
+  const u=droppedLink(e);if(u)fetchUrl(u).then(f=>choose(t,f)).catch(err=>toast(err.message,"bad"))}}
  return c}
 async function upload(name,file){const j=await api("/api/upload?name="+encodeURIComponent(name)+"&filename="+encodeURIComponent(file.name),{method:"POST",body:file});pending=j.pending}
 async function remove(name){const j=await api("/api/remove",{method:"POST",body:JSON.stringify({name})});pending=j.pending;textures=j.textures;tables=j.tables;render()}
 async function option(name,animate){pending=(await api("/api/option",{method:"POST",body:JSON.stringify({name,animate})})).pending;render()}
 $("#picker").onchange=async e=>{const f=e.target.files[0];e.target.value="";if(!f||!pickFor)return;const t=textures.find(x=>x.name===pickFor);if(t)choose(t,f)};
+function droppedLink(e){const u=(e.dataTransfer.getData("text/uri-list")||e.dataTransfer.getData("text/plain")||"").split("\n").map(x=>x.trim()).find(x=>/^https?:\/\//i.test(x));return u||null}
+async function fetchUrl(url){toast("Downloading "+url+"…");const r=await fetch("/api/fetch?url="+encodeURIComponent(url));if(!r.ok){const j=await r.json().catch(()=>({}));throw new Error(j.error||"download failed")}
+ const blob=await r.blob();return new File([blob],r.headers.get("X-Filename")||"web_picture.png")}
+async function linkFor(t){const url=prompt("Paste the picture's web address.\nTip: right-click a picture on a website and choose 'Copy image address'.");if(!url||!url.trim())return;
+ try{choose(t,await fetchUrl(url.trim()))}catch(err){toast(err.message,"bad")}}
+function after(j){if(j.textures)textures=j.textures;if(j.tables)tables=j.tables;if(j.pending)pending=j.pending;render()}
+async function unassign(index){try{after(await api("/api/unassign",{method:"POST",body:JSON.stringify({index})}));toast("Put back","ok")}catch(err){toast(err.message,"bad")}}
+function dialog(build,onOk){const F=$("#shareForm");F.innerHTML="";build(F);const d=$("#share");d.onclose=()=>{if(d.returnValue==="ok")onOk()};d.returnValue="";d.showModal()}
+function acts(label){return el("div",{className:"acts"},el("button",{value:"cancel",textContent:"Cancel"}),el("button",{className:"primary",value:"ok",textContent:label}))}
+// Point a picture's titles (one or all) at another picture already in the game, e.g. an unused one.
+async function assignFor(t){let plan;try{plan=await api("/api/plan?name="+encodeURIComponent(t.name))}catch(err){return toast(err.message,"bad")}
+ const kind=kindOf(t.name),n=plan.uses.length,who=el("select"),pick=el("select"),img=el("img",{alt:""});plan.uses.forEach((u,i)=>who.append(el("option",{value:i,textContent:u.id})));
+ const g1=el("optgroup",{label:"Unused pictures"}),g2=el("optgroup",{label:"Pictures other "+kind+"s use"}),imgs={};
+ for(const s of plan.spares){imgs[s.material]=s.image;g1.append(el("option",{value:s.material,textContent:s.material}))}
+ for(const s of plan.others){imgs[s.material]=s.image;g2.append(el("option",{value:s.material,textContent:s.material+" (used by "+s.uses+")"}))}
+ if(g1.children.length)pick.append(g1);if(g2.children.length)pick.append(g2);const show=()=>{img.src="/api/thumb?name="+encodeURIComponent(imgs[pick.value]||"")};pick.onchange=show;
+ const one=el("input",{type:"radio",name:"mode",value:"one",checked:n>1}),all=el("input",{type:"radio",name:"mode",value:"all",checked:n<=1});who.onfocus=()=>one.checked=true;
+ dialog(F=>{F.append(el("h2",{textContent:"Use another picture instead of "+plan.material}),el("p",{textContent:"The "+kind+"'s table row is changed to show a picture that's already in the game. No texture is changed."}));
+  if(n>1)F.append(el("label",{className:"opt"},one," Only one "+kind,el("div",{className:"uses",textContent:"Which "+kind+":"}),who));
+  F.append(el("label",{className:"opt"},all,n>1?" All "+n+" "+kind+"s":" "+plan.uses[0].id),el("div",{className:"uses",textContent:"Picture to show:"}),pick,el("div",{className:"spare"},img),acts("Use this picture"));show()},
+  async()=>{const targets=(one.checked&&n>1)?[plan.uses[+who.value]]:plan.uses;
+   try{const j=await api("/api/assign",{method:"POST",body:JSON.stringify({material:pick.value,targets})});after(j);toast(j.done.length+" "+kind+(j.done.length===1?" now shows ":"s now show ")+pick.value+". Build to write codxe_patch_mp.ff.","ok")}catch(err){toast(err.message,"bad")}})}
+// Make one title show this picture (handy for unused pictures).
+async function giveTo(t){const kind=kindOf(t.name);let rows;try{rows=(await api("/api/rows?kind="+(kind==="title"?"cardtitle_":"cardicon_"))).rows}catch(err){return toast(err.message,"bad")}
+ const who=el("select");rows.filter(r=>r.material!==t.material.toLowerCase()).forEach((r,i)=>who.append(el("option",{value:r.table+"|"+r.row,textContent:r.id+"  (now "+r.material+")"})));
+ dialog(F=>F.append(el("h2",{textContent:"Show "+t.material+" on which "+kind+"?"}),el("p",{textContent:"That "+kind+"'s table row is changed to use this picture. Other "+kind+"s keep theirs."}),who,acts("Show it there")),
+  async()=>{const[table,row]=who.value.split("|");try{const j=await api("/api/assign",{method:"POST",body:JSON.stringify({material:t.material,targets:[{table,row:+row}]})});after(j);toast(j.done.map(d=>d.id+" now shows "+d.new).join("\n")+"\nBuild to write codxe_patch_mp.ff.","ok")}catch(err){toast(err.message,"bad")}})}
 // A picture several titles share: ask whether the new picture is for all of them or just one.
 async function choose(t,f){if(t.uses<2||pending[t.name]){try{await upload(t.name,f);render();toast("Queued "+f.name+" for "+t.name,"ok")}catch(err){toast(err.message,"bad")}return}
  let plan;try{plan=await api("/api/plan?name="+encodeURIComponent(t.name))}catch(err){return toast(err.message,"bad")}
@@ -536,7 +685,7 @@ $("#buildBtn").onclick=async()=>{const b=$("#buildBtn");b.disabled=true;b.textCo
 let depth=0;window.addEventListener("dragenter",e=>{if(e.dataTransfer.types.includes("Files")&&textures.length){depth++;$("#drop").style.display="flex"}});
 window.addEventListener("dragleave",()=>{if(--depth<=0){depth=0;$("#drop").style.display="none"}});
 window.addEventListener("dragover",e=>e.preventDefault());
-window.addEventListener("drop",async e=>{e.preventDefault();depth=0;$("#drop").style.display="none";if(!textures.length)return;const names=new Set(textures.filter(t=>t.supported).map(t=>t.name.toLowerCase()));const byLower={};for(const t of textures)byLower[t.name.toLowerCase()]=t.name;
+window.addEventListener("drop",async e=>{e.preventDefault();depth=0;$("#drop").style.display="none";if(!textures.length)return;if(!e.dataTransfer.files.length&&droppedLink(e))return toast("Drop a web picture onto the texture card it should replace.","bad");const names=new Set(textures.filter(t=>t.supported).map(t=>t.name.toLowerCase()));const byLower={};for(const t of textures)byLower[t.name.toLowerCase()]=t.name;
  const ok=[],miss=[];for(const f of e.dataTransfer.files){const stem=f.name.replace(/\.[^.]+$/,"").toLowerCase();if(names.has(stem)){try{await upload(byLower[stem],f);ok.push(byLower[stem])}catch(err){miss.push(f.name+" ("+err.message+")")}}else miss.push(f.name)}
  render();toast((ok.length?"Queued "+ok.length+": "+ok.join(", "):"Nothing matched.")+(miss.length?"\nNot matched (name the file after the texture, or drop it on a card): "+miss.join(", "):""),miss.length&&!ok.length?"bad":"ok")});
 loadFiles().catch(e=>toast(e.message,"bad"));

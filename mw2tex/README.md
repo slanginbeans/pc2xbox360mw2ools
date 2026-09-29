@@ -59,6 +59,12 @@ For tables (calling card titles, unlocks, challenges...), the picker's **Tables*
    `cardtitle_assault_expert`). When you drop a picture on a shared one, the picker asks whether it's for
    all of them or only one. For only one, it puts your picture on an unused title picture and changes
    that title's table row to use it, so the others keep the old picture. **Undo** puts the row back too.
+   **Pictures from the web:** press **From link** on a card and paste a picture's address (right-click a
+   picture on a website, then "Copy image address"), or drag a picture from another browser tab onto a card.
+   **Swap pictures without a new file:** on a title or emblem card, **Use another picture** makes one (or all)
+   of its titles show a picture already in the game, like an unused one. **Show on a title** does it the
+   other way round: pick which title should show this card's picture. Only the table changes, so this
+   needs just `codxe_patch_mp.ff` on the console. **Undo** on the card puts it back.
 6. **Replace many at once:** name each picture after the texture it replaces (for example
    `cardicon_bear.png`, `cardtitle_bloodsplat.jpg`) and drop them all anywhere on the page. The picker
    tells you which names didn't match.
