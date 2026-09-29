@@ -11,6 +11,8 @@ cd /d "%~dp0"
 title mw2tex
 set APP=%~dp0mw2tex_app
 
+rem "call" everywhere below: python can be a .bat/.cmd shim (pyenv, for example), and running one
+rem without call would end this launcher silently.
 set PY=
 where python >nul 2>nul && set PY=python
 if not defined PY where py >nul 2>nul && set PY=py
@@ -58,13 +60,13 @@ if not exist "%APP%\tools\mw2tex\mw2tex_gui.py" (
     pause
     exit /b 1
 )
-%PY% -c "import PIL" >nul 2>nul
+call %PY% -c "import PIL" >nul 2>nul
 if errorlevel 1 (
     echo Installing Pillow, the picture library mw2tex uses...
-    %PY% -m pip install --user pillow
+    call %PY% -m pip install --user pillow
 )
 echo Starting the texture picker. Leave this window open while you use it.
-%PY% "%APP%\tools\mw2tex\mw2tex_gui.py" %*
+call %PY% "%APP%\tools\mw2tex\mw2tex_gui.py" %*
 echo.
 echo The picker has stopped. If there's an error above, send it to Claude.
 pause
