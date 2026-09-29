@@ -989,7 +989,7 @@ dialog label.opt:has(input:checked){border-color:var(--accent)}dialog select{wid
 const $=s=>document.querySelector(s);let textures=[],pending={},tables={file:null,changed:[]},pickFor=null,shown=0;
 const CATS=["Titles","Emblems","Camos","Menu & load screens","Skyboxes","Graffiti","Signs & posters","Boxes & crates","Books & paper","Characters","Weapons","Vehicles","Plants & trees","Water & effects","Decals","Furniture & props","Ground","Walls & buildings","Wood & metal","Other","Detail maps"];
 let cats=new Set(),onlyUnused=false,onlyChanged=false;
-const LIMIT=400;
+const FIRST=50;let limit=FIRST,lastKey="";  // cards drawn at once; "Load more" adds 25 or 50
 const el=(tag,props,...kids)=>{const e=Object.assign(document.createElement(tag),props||{});for(const k of kids)e.append(k);return e};
 const kindOf=name=>name.startsWith("cardtitle_")?"title":"emblem";
 function toast(msg,kind){const t=$("#toast");t.textContent=msg;t.className=kind||"";t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",kind==="bad"?9000:6000)}
@@ -1003,12 +1003,18 @@ function chips(){const box=$("#chips");box.innerHTML="";const count={};for(const
  chip("Changed",onlyChanged,()=>{onlyChanged=!onlyChanged;render()},Object.keys(pending).length,"flag")}
 function visible(){const q=$("#search").value.trim().toLowerCase();return textures.filter(t=>{if(onlyChanged&&!pending[t.name])return false;if(onlyUnused&&!t.spare)return false;
  if(cats.size?!cats.has(t.category):(t.category==="Detail maps"&&!q&&!onlyChanged))return false;return !q||t.name.toLowerCase().includes(q)})}
-function render(){chips();const g=$("#grid");g.innerHTML="";const list=visible();shown=Math.min(list.length,LIMIT);
+function render(){chips();const g=$("#grid");g.innerHTML="";const list=visible();
+ const key=$("#search").value+"|"+[...cats].join(",")+"|"+onlyUnused+onlyChanged+"|"+textures.length+"|"+$("#file").value;
+ if(key!==lastKey){lastKey=key;limit=FIRST}  // a new search, filter or file starts again at the first 50
+ shown=Math.min(list.length,limit);
  const n=Object.keys(pending).length+tables.changed.length;$("#buildBtn").disabled=!n;$("#buildBtn").textContent="Build"+(n?" ("+n+")":"");
  if(!textures.length){g.innerHTML='<div class="empty">Pick a fastfile above and press Open.</div>';return}
  if(!list.length){g.innerHTML='<div class="empty">No textures match.</div>';return}
- for(const t of list.slice(0,LIMIT))g.appendChild(card(t));
- if(list.length>LIMIT){const d=document.createElement("div");d.className="empty";d.textContent="Showing "+LIMIT+" of "+list.length+". Type in the search box to narrow it down.";g.appendChild(d)}}
+ for(const t of list.slice(0,limit))g.appendChild(card(t));
+ if(list.length>limit){const more=n=>{limit+=n;const y=window.scrollY;render();window.scrollTo(0,y)};
+  const d=el("div",{className:"empty more"},"Showing "+limit+" of "+list.length+". ");
+  for(const n of[25,50])if(list.length-limit>0){const b=el("button",{textContent:"Load "+Math.min(n,list.length-limit)+" more"});b.onclick=()=>more(n);d.append(b," ")}
+  g.appendChild(d)}}
 function card(t){const c=document.createElement("div");c.className="card"+(pending[t.name]?" changed":"");const p=pending[t.name];
  const pics=document.createElement("div");pics.className="pics"+(p?" two":"");
  const orig=new Image();orig.loading="lazy";orig.alt="";orig.src="/api/thumb?name="+encodeURIComponent(t.name);orig.onerror=()=>{orig.replaceWith(Object.assign(document.createElement("span"),{className:"none",textContent:t.stored==="pak"?"no preview (pak file missing)":"no preview"}))};pics.appendChild(orig);
