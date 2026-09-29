@@ -49,6 +49,9 @@ state = {"ff_path": None, "ff": None, "images": {}, "pending": {}, "thumbs": {},
          "maps": {}}  # texture name -> {file name: that file's texture record}, for every open file
 ALL_MAPS = "*maps"  # the file picker's "All maps" entry
 EVERYTHING = "*all"  # the file picker's "Everything" entry: every fastfile in the folder at once
+# Groups: textures of one kind from every file that has them, like Everything but narrower.
+GROUPS = {EVERYTHING: "Everything", "*ui": "UI (menus, titles, emblems, HUD, load screens)",
+          "*guns": "Guns (weapons and camos)"}
 # Queued pictures, kept between runs (outside mw2tex_out, which goes to the console). The folder
 # name is from when only map pictures were kept there.
 MAP_CHANGES = os.path.join(FOLDER, "mw2tex_map_changes")
@@ -291,10 +294,19 @@ def open_all_maps():
     return texture_list()
 
 
-def open_everything():
-    """Every fastfile in the folder as one list (menus, camos, maps, load screens). A texture several
-    files carry shows once and lists them; a picture put on it goes where the game reads it."""
-    paths = content_files()
+def in_group(group, image, file_name):
+    if group == "*ui":
+        return not is_map(file_name) and not image["pak"]  # menu pictures live in the .ff itself
+    if group == "*guns":
+        return category(image["name"]) in ("Weapons", "Camos")
+    return True
+
+
+def open_everything(group=EVERYTHING):
+    """Every fastfile in the folder as one list (menus, camos, maps, load screens), or only the
+    textures of one GROUP. A texture several files carry shows once and lists them; a picture put
+    on it goes where the game reads it."""
+    paths = [p for p in content_files() if group != "*ui" or not is_map(p)]
     if not paths:
         raise ValueError("there are no .ff files in %s" % FOLDER)
     for item in state["pending"].values():
@@ -306,7 +318,7 @@ def open_everything():
         seen = set()
         for image in ff.images:
             lower = image["name"].lower()
-            if image["name"].startswith("#") or lower in seen:
+            if image["name"].startswith("#") or lower in seen or not in_group(group, image, base):
                 continue  # "#123" = a pak texture with no name
             seen.add(lower)
             if not is_map(base) and not image["pak"]:
@@ -327,7 +339,7 @@ def open_everything():
         del ff
     ff_cache.clear()
     named = {i["name"]: i for i in images.values()}
-    state.update(ff_path=EVERYTHING, ff=None, images=named, pending={}, thumbs={},
+    state.update(ff_path=group, ff=None, images=named, pending={}, thumbs={},
                  gray={n for n in named if n.lower() in gray}, materials=materials,
                  image_material={v.lower(): k for k, v in materials.items()},
                  maps={n: homes[n.lower()] for n in named})
@@ -342,7 +354,7 @@ def target_files(name):
     texture in a menu or common file changes there (Build copies it into the maps, animated or not);
     one only maps carry goes into each of those maps."""
     homes = state["maps"].get(name, {})
-    if state["ff_path"] != EVERYTHING:
+    if state["ff_path"] not in GROUPS:
         return sorted(homes)
     other = sorted(f for f in homes if not is_map(f))
     return other or sorted(homes)
@@ -387,13 +399,15 @@ def save_map_changes():
     the open view shows (one file, every map, or everything)."""
     if state["ff_path"] == ALL_MAPS:
         view = {os.path.basename(p) for p in map_files()}
-    elif state["ff_path"] == EVERYTHING:
+    elif state["ff_path"] in GROUPS:
         view = {os.path.basename(p) for p in content_files()}
     else:
         view = {os.path.basename(state["ff_path"])}
+    shown = {n.lower() for n in state["images"]}  # a group view leaves other textures' pictures alone
     entries = []
     for entry in read_map_changes():
-        entry["maps"] = [m for m in entry["maps"] if m not in view]
+        if entry["name"].lower() in shown:
+            entry["maps"] = [m for m in entry["maps"] if m not in view]
         if entry["maps"]:
             entries.append(entry)
     os.makedirs(MAP_CHANGES, exist_ok=True)
@@ -783,7 +797,7 @@ class Handler(BaseHTTPRequestHandler):
                 paks = sorted(os.path.basename(p) for p in glob.glob(os.path.join(FOLDER, "imagefile*.pak")))
                 labels = [{"file": f, "label": map_label(f), "map": is_map(f)} for f in files]
                 self.reply(200, {"folder": FOLDER, "files": files, "labels": labels, "paks": paks,
-                                 "maps": len(map_files()), "content": len(content_files()),
+                                 "maps": len(map_files()), "content": len(content_files()), "groups": GROUPS,
                                  "open": os.path.basename(state["ff_path"]) if state["ff_path"] else None})
             elif url.path == "/api/textures":
                 self.reply(200, {"textures": texture_list(), "pending": self.pending(), "tables": self.table_state()})
@@ -856,7 +870,7 @@ class Handler(BaseHTTPRequestHandler):
                 if url.path == "/api/open":
                     file_name = json.loads(body)["file"]
                     textures = open_all_maps() if file_name == ALL_MAPS else \
-                        open_everything() if file_name == EVERYTHING else open_fastfile(file_name)
+                        open_everything(file_name) if file_name in GROUPS else open_fastfile(file_name)
                     self.reply(200, {"textures": textures, "pending": self.pending()})
                 elif url.path == "/api/upload":
                     name = query.get("name", [""])[0]
@@ -1062,16 +1076,17 @@ async function choose(t,f){if(t.uses<2||pending[t.name]){try{await upload(t.name
     pending=j.pending;textures=j.textures;tables=j.tables;render();toast("Queued "+f.name+" on "+j.redirect.new+"\n"+j.redirect.id+" now uses it (table "+j.redirect.table+", row "+(j.redirect.row+1)+"). The other "+(plan.uses.length-1)+" keep "+j.redirect.old+".","ok")}}catch(err){toast(err.message,"bad")}};
  d.returnValue="";d.showModal()}
 async function loadFiles(){const j=await api("/api/files");const s=$("#file");s.innerHTML="";if(!j.files.length){s.innerHTML="<option>no .ff files here</option>";$("#info").textContent="No .ff files in "+j.folder+". Put your fastfiles (like ui_mp.ff) in that folder and reload this page.";return}
- if(j.content>1)s.appendChild(el("option",{value:"*all",textContent:"Everything ("+j.content+" files)"}));
- if(j.maps>1)s.appendChild(el("option",{value:"*maps",textContent:"All maps ("+j.maps+")"}));
+ if(j.content>1){const g=el("optgroup",{label:"Groups"});if(j.maps>1)g.appendChild(el("option",{value:"*maps",textContent:"All maps ("+j.maps+")"}));
+  for(const[k,label]of Object.entries(j.groups))if(k!=="*all")g.appendChild(el("option",{value:k,textContent:label}));
+  g.appendChild(el("option",{value:"*all",textContent:"Everything ("+j.content+" files)"}));s.appendChild(g)}
  const groups=[["Menus & other files",x=>!x.map&&!/_load\.ff$/i.test(x.file)],["Maps",x=>x.map],["Load screens",x=>/_load\.ff$/i.test(x.file)]];
  for(const[label,test]of groups){const items=j.labels.filter(test).sort((a,b)=>a.label.localeCompare(b.label));if(!items.length)continue;const g=el("optgroup",{label});
   for(const x of items)g.appendChild(el("option",{value:x.file,textContent:x.label===x.file.replace(/\.ff$/i,"")?x.file:x.label+" ("+x.file+")"}));s.appendChild(g)}
- s.value=j.open||(j.content>1?"*all":j.files.includes("ui_mp.ff")?"ui_mp.ff":j.files[0]);
- $("#info").textContent="Folder: "+j.folder+" · pak files here: "+(j.paks.join(", ")||"none (pak textures show no preview)");if(j.open){const t=await api("/api/textures");textures=t.textures;pending=t.pending;tables=t.tables;render()}else{render();$("#openBtn").click()}}
+ s.value=j.open||(j.maps>1?"*maps":j.files.includes("ui_mp.ff")?"ui_mp.ff":j.files[0]);
+ $("#info").textContent="Folder: "+j.folder+" · pak files here: "+(j.paks.join(", ")||"none (pak textures show no preview)");if(j.open){const t=await api("/api/textures");textures=t.textures;pending=t.pending;tables=t.tables;render()}else render()}
 $("#openBtn").onclick=async()=>{$("#openBtn").disabled=true;$("#openBtn").textContent="Opening…";try{const j=await api("/api/open",{method:"POST",body:JSON.stringify({file:$("#file").value})});textures=j.textures;pending=j.pending;cats.clear();onlyUnused=onlyChanged=false;const t=await api("/api/textures");tables=t.tables;render();
- const card=textures.some(x=>x.name.startsWith("cardtitle_")||x.name.startsWith("cardicon_")),v=$("#file").value,allMaps=v==="*maps"||v==="*all",shown=$("#file").selectedOptions[0].textContent;
- toast((allMaps?"Opened "+(v==="*all"?"everything":"all maps")+": "+textures.length+" textures, "+textures.filter(x=>x.maps.length+(x.files||[]).length>1).length+" of them in more than one file":"Opened "+shown+": "+textures.length+" textures")
+ const card=textures.some(x=>x.name.startsWith("cardtitle_")||x.name.startsWith("cardicon_")),v=$("#file").value,allMaps=v.startsWith("*"),shown=$("#file").selectedOptions[0].textContent;
+ toast((allMaps?"Opened "+shown+": "+textures.length+" textures, "+textures.filter(x=>x.maps.length+(x.files||[]).length>1).length+" of them in more than one file":"Opened "+shown+": "+textures.length+" textures")
   +(Object.keys(pending).length?"\nKept "+Object.keys(pending).length+" picture"+(Object.keys(pending).length>1?"s":"")+" from your last Build.":"")+(card&&!tables.file&&!allMaps?"\nPut code_post_gfx_mp.ff in this folder to see which titles and emblems use each picture.":""),"ok")}catch(e){toast(e.message,"bad")}$("#openBtn").disabled=false;$("#openBtn").textContent="Open"};
 $("#search").oninput=()=>render();
 $("#clearBtn").onclick=async()=>{if(!Object.keys(pending).length)return;if(!confirm("Clear all queued replacements?"))return;const j=await api("/api/remove",{method:"POST",body:JSON.stringify({all:true})});pending=j.pending;textures=j.textures;tables=j.tables;render()};

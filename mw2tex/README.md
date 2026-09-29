@@ -59,13 +59,15 @@ Or set it up by hand instead of using the launcher:
    python mw2tex_gui.py
    ```
    Your browser opens the picker. Leave the PowerShell window open while you use it.
-3. The picker opens **Everything**: every texture from every `.ff` in the folder (menus, camos, maps, load
-   screens) in one list, so a category like Camos or Graffiti shows all of them at once. A texture several
+3. Pick what to open at the top and press **Open**. **All maps** is picked for you. Under **Groups** you can
+   also open **UI** (menus, titles, emblems, HUD and load screens), **Guns** (weapons and camos) or
+   **Everything**: every texture from every `.ff` in the folder in one list, so a category like Camos or
+   Graffiti shows all of them at once. A texture several
    files carry shows once and says where it is. Maps and load screens are listed by their in-game names
    (Skidrow is `mp_nightshift.ff`). A picture goes where the game reads it: titles, emblems and camos into
    `ui_mp.ff` or `common_mp.ff` (Build copies titles and emblems into the maps), map textures into every map
    that has them. Queued pictures are saved in `mw2tex_map_changes` and come back next time, in any view.
-   To work on one file only, pick it at the top (for example `ui_mp.ff`) and press **Open**.
+   To work on one file only, pick it instead (for example Menus, which is `ui_mp.ff`).
    **All maps** at the top of the list opens every `mp_*.ff` in the folder at once. A texture several maps
    share shows once, says which maps have it ("In 3 maps: favela, nightshift, underpass"), and a picture
    you put on it goes into all of them.
