@@ -116,12 +116,13 @@ To undo, delete the file from `_codxe\zone\`.
   Your GIF's frames are spread over the frame count you pick (a 4-frame GIF in 32 frames shows each one
   8 times). Frames keep the picture's own size (rounded up to a power of two, so titles use 256x64) while
   the texture fits in 2048x2048; past that they're made smaller (256 title frames are 128x32).
-  Only menu pictures stored in the .ff can animate. Map and pak textures (walls, camos on guns) can't.
+  Only menu pictures stored in the .ff can animate. Map and pak textures (walls, camos on guns) can't,
+  apart from the map copies of animated titles and emblems, which Build handles for you.
   Stock animated emblems: `cardicon_prestige10`, `cardicon_prestige10_02` and `cardicon_iw`. That last
   one uses the texture `cardicon_nvg_star`.
 - **Emblems and titles in matches.** Menus use `ui_mp.ff`; in a match the game uses the copy inside each map
   file. So copy every map's `mp_*.ff` into your work folder once, and Build (or the `maps` command) updates them
-  all. Maps you leave out keep the stock pictures. An animated title or emblem shows its first frame in matches for now.
+  all. Maps you leave out keep the stock pictures. Animated titles and emblems are copied into the maps whole, with the map's own material set to play them (not yet tried on a console).
 - **Pak textures.** Camos on guns and map textures live in `imagefile*.pak`. Changed ones go in a new
   `imagefile5.pak`, which codxe loads from `_codxe\zone\`. Build adds to an existing `imagefile5.pak` in
   `mw2tex_out` rather than replacing it, so it can grow over time. Delete it and rebuild if it gets big.

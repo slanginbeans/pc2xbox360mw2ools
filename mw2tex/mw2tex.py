@@ -44,8 +44,8 @@ ui_mp.ff, which hold camos, titles and emblems. Commands:
   python mw2tex.py maps    ui_mp.ff OUTDIR [mp_rust.ff ...]
       In a match, emblems and titles come from each map's own copy, not ui_mp.ff. This copies
       every texture you changed in OUTDIR\\ui_mp.ff into the map files (all mp_*.ff next to
-      ui_mp.ff if none are named) and writes them to OUTDIR with imagefile5.pak. An animated
-      emblem shows its first frame in matches.
+      ui_mp.ff if none are named) and writes them to OUTDIR with imagefile5.pak. Animated
+      titles and emblems are copied whole and set to animate in the maps too.
 
   python mw2tex.py replace ui_mp.ff PICDIR OUTDIR
       Same as put for every picture in PICDIR named after a texture (NAME.png, NAME.dds...).
@@ -1013,15 +1013,42 @@ def changed_textures(stock, built):
     return changed
 
 
-def _copy_blobs(built, image, target, work_dir):
+def resize_pak_level(ff, image, level, width, height, size):
+    """Sets the size of one pak level of a texture. Pak texture records keep each level's width,
+    height and info (mip count in the top 6 bits, tiled data size in the rest) at 0x4C + level * 8;
+    the game builds the D3D header from these when it loads the texture."""
+    o = image["offset"] + 0x4C + level["level"] * 8
+    info, = struct.unpack(">I", ff.zone[o + 4:o + 8])
+    struct.pack_into(">HHI", ff.zone, o, width, height, (info & ~0x3FFFFFF) | size)
+    level.update(width=width, height=height)
+    ff.zone_changed = True
+
+
+def _copy_blobs(built, image, target, work_dir, map_ff=None):
     """Tiled pixel data for each level of TARGET, made from BUILT's version of the texture.
 
     Returns (list of (level, blob), note). Same size and layout: the pixels are copied exactly.
-    Otherwise the picture is decoded and converted to fit; a flipbook keeps its first frame.
+    An animated menu picture (a flipbook) is copied whole when the map's copy is a single-level pak
+    texture: that level is resized to the flipbook's size and the map's own copy of the material is
+    set to play the same rows and columns. Otherwise the picture is decoded and converted to fit,
+    and a flipbook keeps its first frame.
     """
     lv = image["levels"][0]
     fmt = target["format"]
     note = None
+    o = material_of_image(built, image)
+    atlas = (built.zone[o + 6], built.zone[o + 7]) if o is not None else (1, 1)
+    if map_ff is not None and atlas != (1, 1) and target["pak"] and len(target["levels"]) == 1 \
+            and target["levels"][0]["mips"] == 1 and lv["mips"] == 1 and fmt == image["format"]:
+        material = built._material_name(image["offset"])
+        hits = find_material(map_ff.zone, material) if material else []
+        if hits:
+            tl = target["levels"][0]
+            blob = bytes(built.zone[lv["data"]:lv["data"] + lv["size"]])
+            resize_pak_level(map_ff, target, tl, lv["width"], lv["height"], len(blob))
+            for h in hits:
+                map_ff.zone[h + 6], map_ff.zone[h + 7] = atlas
+            return [(tl, blob)], "animated (%d frames)" % (atlas[0] * atlas[1])
     exact = []
     for tl in target["levels"]:
         if (tl["width"], tl["height"], tl["mips"], fmt) == (lv["width"], lv["height"], lv["mips"], image["format"]):
@@ -1075,7 +1102,7 @@ def sync_maps(stock_path, built_path, map_paths, out_dir, log=print):
             target = ff.find(image["name"])
             if not target or not _supported(target):
                 continue
-            blobs, note = _copy_blobs(built, image, target, out_dir)
+            blobs, note = _copy_blobs(built, image, target, out_dir, ff)
             if blobs is None:
                 notes[image["name"]] = note
                 continue
