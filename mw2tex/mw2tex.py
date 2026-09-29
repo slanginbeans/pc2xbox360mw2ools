@@ -20,9 +20,15 @@ ui_mp.ff, which hold camos, titles and emblems. Commands:
       Run it again with the same OUTDIR to change more textures; each run keeps the
       earlier changes. Copy what it writes to _codxe\\zone\\ on the console.
 
-  python mw2tex.py flipbook ui_mp.ff NAME ANIMATION.gif OUTDIR
-      Turns emblem NAME into a full-size animation: picks 32 frames from the GIF, makes the
-      texture 512x256 and sets its material to play 4 x 8 frames of 64x64.
+  python mw2tex.py flipbook ui_mp.ff NAME ANIMATION.gif OUTDIR [FRAMES]
+      Turns menu picture NAME (a title, emblem or other picture stored in the .ff) into an
+      animation of the GIF (or animated WebP/PNG). FRAMES is 2, 4, 8 ... 256; without it, the
+      smallest count that fits every GIF frame. The texture is made bigger to hold the frames
+      and its material is set to play them. Frames keep the picture's size while they fit in
+      2048x2048, then get smaller. The game's frame speed is fixed: more frames, longer loop.
+
+  python mw2tex.py frames  ui_mp.ff NAME
+      Lists the frame counts NAME can play, with the frame size and texture size of each.
 
   python mw2tex.py grow    ui_mp.ff NAME WIDTH HEIGHT PICTURE OUTDIR
       Like put, but first makes texture NAME bigger (or smaller), e.g. 512 256 to give a
@@ -840,21 +846,73 @@ def set_atlas(ff, name, rows, columns):
 
 
 FLIPBOOK = (4, 8, 64)  # rows, columns, frame size: the layout of the stock animated emblems
+FRAME_COUNTS = (2, 4, 8, 16, 32, 64, 128, 256)
+MAX_SHEET = 2048  # largest texture side the game takes; rows and columns go up to 16 each
+
+
+def flipbook_base(ff, image):
+    """Frame size to start from: the texture's size (one frame of it when it already animates),
+    rounded up to powers of two so the whole sheet stays a power of two."""
+    lv = image["levels"][0]
+    width, height = lv["width"], lv["height"]
+    o = material_of_image(ff, image)
+    if o is not None:
+        width, height = max(4, width // ff.zone[o + 7]), max(4, height // ff.zone[o + 6])
+    return max(4, _pow2(width)), max(4, _pow2(height))
+
+
+def flipbook_options(ff, image):
+    """Frame counts this texture can play, each as {frames, rows, columns, frame, sheet, bytes}.
+
+    Frames keep the texture's own size while the sheet fits in 2048x2048; beyond that they're
+    halved (then quartered) to make room. Empty when the texture can't animate: it has to be a
+    menu picture stored in the .ff with its own material (titles, emblems, other menu pictures).
+    """
+    if image["pak"] or image["levels"][0]["mips"] != 1 or image["format"] not in FORMATS \
+            or material_of_image(ff, image) is None:
+        return []
+    fw, fh = flipbook_base(ff, image)
+    _, block, block_bytes, _ = FORMATS[image["format"]]
+    options = []
+    for count in FRAME_COUNTS:
+        for scale in (1, 2, 4):
+            w, h = max(4, fw // scale), max(4, fh // scale)
+            layouts = []
+            for rows in (1, 2, 4, 8, 16):
+                columns = count // rows
+                if 1 <= columns <= 16 and columns * w <= MAX_SHEET and rows * h <= MAX_SHEET:
+                    layouts.append((max(columns * w, rows * h), rows * h, rows, columns))
+            if layouts:
+                _, _, rows, columns = min(layouts)
+                sw, sh = columns * w, rows * h
+                options.append({"frames": count, "rows": rows, "columns": columns, "frame": (w, h),
+                                "sheet": (sw, sh), "bytes": _up(sw, block) * _up(sh, block) * block_bytes})
+                break
+    return options
+
+
+def flipbook_option(ff, image, frames):
+    """The option for FRAMES frames (or the nearest one below it)."""
+    options = flipbook_options(ff, image)
+    fits = [o for o in options if o["frames"] <= int(frames)]
+    return fits[-1] if fits else (options[0] if options else None)
 
 
 def make_flipbook(picture, rows=FLIPBOOK[0], columns=FLIPBOOK[1], frame=FLIPBOOK[2]):
     """An animated GIF/WebP/PNG -> Pillow image laid out as rows x columns frames.
 
+    FRAME is the frame size: one number for square frames or (width, height).
     The game plays every frame for the same time, so the source frames are spread evenly over all
     the slots (a 4-frame GIF shows each frame 8 times in a 32-slot sheet).
     """
     from PIL import Image, ImageSequence
+    fw, fh = (frame, frame) if isinstance(frame, int) else frame
     frames = [f.convert("RGBA").copy() for f in ImageSequence.Iterator(Image.open(picture))]
     slots = rows * columns
-    sheet = Image.new("RGBA", (columns * frame, rows * frame))
+    sheet = Image.new("RGBA", (columns * fw, rows * fh))
     for i in range(slots):
-        f = frames[i * len(frames) // slots].resize((frame, frame), Image.LANCZOS)
-        sheet.paste(f, ((i % columns) * frame, (i // columns) * frame))
+        f = frames[i * len(frames) // slots].resize((fw, fh), Image.LANCZOS)
+        sheet.paste(f, ((i % columns) * fw, (i // columns) * fh))
     return sheet
 
 
@@ -866,32 +924,58 @@ def frame_count(picture):
         return 1
 
 
-def put_flipbook(out, image, picture, work_dir):
-    """Turns an in-file texture (an emblem) into a full-size 32-frame animation of PICTURE."""
-    rows, columns, frame = FLIPBOOK
-    width, height = columns * frame, rows * frame
+def put_flipbook(out, image, picture, work_dir, frames=FLIPBOOK[0] * FLIPBOOK[1]):
+    """Turns an in-file menu picture into a FRAMES-frame animation of PICTURE (an animated GIF,
+    WebP or PNG). The texture is resized to hold every frame and its material set to play them.
+    Returns the option used, or None when the texture can't animate or its format isn't supported."""
+    option = flipbook_option(out.ff, image, frames)
+    if option is None:
+        return None
+    width, height = option["sheet"]
     lv = image["levels"][0]
     if (lv["width"], lv["height"]) != (width, height):
         grow_texture(out.ff, image, width, height)
     sheet_path = os.path.join(work_dir, _safe(image["name"]) + "_flipbook.png")
-    make_flipbook(picture).save(sheet_path)
+    make_flipbook(picture, option["rows"], option["columns"], option["frame"]).save(sheet_path)
     if not out.put(image, sheet_path, convert=True):
-        return False
-    if not set_atlas(out.ff, image["name"], rows, columns):
+        return None
+    if not set_atlas(out.ff, image["name"], option["rows"], option["columns"]):
         print("  warning: couldn't find the material for %s, so it won't animate" % image["name"])
-    return True
+    return option
 
 
-def cmd_flipbook(ff_path, name, picture, out_dir):
+def cmd_flipbook(ff_path, name, picture, out_dir, frames=None):
     out = Output(ff_path, out_dir)
     image = out.ff.find(name)
     if not image:
         sys.exit("no texture named %s (run the list command to see names)" % name)
-    if image["pak"] or image["levels"][0]["mips"] != 1:
-        sys.exit("%s isn't a menu picture stored in the .ff; flipbook works on emblems" % name)
-    put_flipbook(out, image, picture, out_dir)
-    print("%s now plays %s as a %d-frame animation" % (name, os.path.basename(picture), FLIPBOOK[0] * FLIPBOOK[1]))
+    options = flipbook_options(out.ff, image)
+    if not options:
+        sys.exit("%s can't animate: only menu pictures stored in the .ff (titles, emblems...) can" % name)
+    if frames is None:
+        have = frame_count(picture)
+        frames = next((o["frames"] for o in options if o["frames"] >= have), options[-1]["frames"])
+    option = put_flipbook(out, image, picture, out_dir, frames)
+    if option is None:
+        sys.exit("%s's format isn't supported" % name)
+    print("%s now plays %s as %d frames of %dx%d (texture %dx%d)" % (
+        name, os.path.basename(picture), option["frames"], option["frame"][0], option["frame"][1],
+        option["sheet"][0], option["sheet"][1]))
     out.save()
+
+
+def cmd_frames(ff_path, name):
+    ff = FastFile(ff_path)
+    image = ff.find(name)
+    if not image:
+        sys.exit("no texture named %s (run the list command to see names)" % name)
+    options = flipbook_options(ff, image)
+    if not options:
+        sys.exit("%s can't animate: only menu pictures stored in the .ff (titles, emblems...) can" % name)
+    for o in options:
+        print("%4d frames: %dx%d each, texture %dx%d (%d rows x %d columns), %.1f MB" % (
+            o["frames"], o["frame"][0], o["frame"][1], o["sheet"][0], o["sheet"][1], o["rows"], o["columns"],
+            o["bytes"] / 1048576.0))
 
 
 def cmd_animate(ff_path, name, rows, columns, out_dir):
@@ -933,7 +1017,7 @@ def _copy_blobs(built, image, target, work_dir):
     """Tiled pixel data for each level of TARGET, made from BUILT's version of the texture.
 
     Returns (list of (level, blob), note). Same size and layout: the pixels are copied exactly.
-    Otherwise the picture is decoded and converted to fit; a 512x256 flipbook keeps its first frame.
+    Otherwise the picture is decoded and converted to fit; a flipbook keeps its first frame.
     """
     lv = image["levels"][0]
     fmt = target["format"]
@@ -948,9 +1032,10 @@ def _copy_blobs(built, image, target, work_dir):
     if picture is None:
         return None, "format not supported"
     largest = max(target["levels"], key=lambda l: l["width"] * l["height"])
-    rows, columns, frame = FLIPBOOK
-    if (lv["width"], lv["height"]) == (columns * frame, rows * frame) and largest["width"] == largest["height"]:
-        picture = picture.crop((0, 0, frame, frame))
+    o = material_of_image(built, image)
+    if o is not None and (built.zone[o + 6] > 1 or built.zone[o + 7] > 1):
+        rows, columns = built.zone[o + 6], built.zone[o + 7]
+        picture = picture.crop((0, 0, picture.size[0] // columns, picture.size[1] // rows))
         note = "shows the first frame of the animation"
     path = os.path.join(work_dir, _safe(image["name"]) + "_map.png")
     picture.save(path)
@@ -1084,7 +1169,9 @@ def main():
         cmd_extract(*args[1:])
     elif len(args) == 4 and args[0] == "replace":
         cmd_replace(*args[1:])
-    elif len(args) == 5 and args[0] == "flipbook":
+    elif len(args) == 3 and args[0] == "frames":
+        cmd_frames(*args[1:])
+    elif len(args) in (5, 6) and args[0] == "flipbook":
         cmd_flipbook(*args[1:])
     elif len(args) == 7 and args[0] == "grow":
         cmd_grow(*args[1:])

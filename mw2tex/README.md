@@ -74,9 +74,10 @@ For tables (calling card titles, unlocks, challenges...), the picker's **Tables*
 6. **Replace many at once:** name each picture after the texture it replaces (for example
    `cardicon_bear.png`, `cardtitle_bloodsplat.jpg`) and drop them all anywhere on the page. The picker
    tells you which names didn't match.
-7. **Animated emblems:** drop an animated GIF on an emblem. The **Animate** box is ticked for you. On
-   Build, the emblem becomes a 32-frame animation at full 64x64 size (see section 4). Untick the box to
-   use only the first frame.
+7. **Animations:** drop an animated GIF (or animated WebP/PNG) on any title, emblem or other menu
+   picture stored in the .ff. A frame menu appears on the card, set to the smallest frame count that fits
+   every frame of your file. Pick from 2 up to 256 frames; the menu shows each choice's frame size and,
+   for big ones, how much space it takes. Pick **Still picture** to use only the first frame. See section 4.
 8. Press **Undo** on a card to drop that change, or **Changed** to see everything you've queued.
 9. Press **Build**. The picker writes the new files into a `mw2tex_out` folder inside your work folder,
    including `codxe_patch_mp.ff` when a table changed.
@@ -108,15 +109,19 @@ To undo, delete the file from `_codxe\zone\`.
   `cardicon_skull_black`, `cardicon_electro`, `cardicon_simplegun`, `cardicon_skullnbones`,
   `cardtitle_camo_arctic`, `cardtitle_camo_digital` and `cardtitle_swordmaster_2`. The picker marks
   them "shows in gray only". mw2tex converts your picture to match, so it shows up in gray in game.
-- **How animated emblems work.** An animated emblem is a flipbook: one 512x256 picture holding 32 frames
-  of 64x64 in 4 rows of 8, read left to right, top to bottom. The emblem's material says how many
-  rows and columns to cut. The game shows every frame for the same short time, so the speed is fixed.
-  A GIF with fewer frames repeats each one to fill 32 slots (a 4-frame GIF shows each frame 8 times).
+- **How animations work.** An animated title or emblem is a flipbook: one picture holding all the frames
+  in rows, read left to right, top to bottom (a 32-frame emblem is 512x256: 4 rows of 8 frames of 64x64).
+  The material says how many rows and columns to cut, up to 16 each, so 256 frames at most. The game
+  shows every frame for the same short time, so the speed is fixed: more frames make a longer loop.
+  Your GIF's frames are spread over the frame count you pick (a 4-frame GIF in 32 frames shows each one
+  8 times). Frames keep the picture's own size (rounded up to a power of two, so titles use 256x64) while
+  the texture fits in 2048x2048; past that they're made smaller (256 title frames are 128x32).
+  Only menu pictures stored in the .ff can animate. Map and pak textures (walls, camos on guns) can't.
   Stock animated emblems: `cardicon_prestige10`, `cardicon_prestige10_02` and `cardicon_iw`. That last
   one uses the texture `cardicon_nvg_star`.
 - **Emblems and titles in matches.** Menus use `ui_mp.ff`; in a match the game uses the copy inside each map
   file. So copy every map's `mp_*.ff` into your work folder once, and Build (or the `maps` command) updates them
-  all. Maps you leave out keep the stock pictures. An animated emblem shows its first frame in matches for now.
+  all. Maps you leave out keep the stock pictures. An animated title or emblem shows its first frame in matches for now.
 - **Pak textures.** Camos on guns and map textures live in `imagefile*.pak`. Changed ones go in a new
   `imagefile5.pak`, which codxe loads from `_codxe\zone\`. Build adds to an existing `imagefile5.pak` in
   `mw2tex_out` rather than replacing it, so it can grow over time. Delete it and rebuild if it gets big.
@@ -137,7 +142,9 @@ commands with the same `out` folder keeps the earlier changes.
 | Export a texture as DDS | `python mw2tex.py extract ui_mp.ff . cardicon_bear` |
 | Replace one texture | `python mw2tex.py put ui_mp.ff cardicon_bear bear.png out` |
 | Replace many (pictures named after textures, in folder `pics`) | `python mw2tex.py replace ui_mp.ff pics out` |
-| Turn an emblem into a full-size animation | `python mw2tex.py flipbook ui_mp.ff cardicon_expert_ak47 dance.gif out` |
+| Turn a title or emblem into an animation | `python mw2tex.py flipbook ui_mp.ff cardicon_expert_ak47 dance.gif out` |
+| Same, with a set number of frames | `python mw2tex.py flipbook ui_mp.ff cardtitle_flames_1 fire.gif out 64` |
+| List the frame counts a picture can play | `python mw2tex.py frames ui_mp.ff cardtitle_flames_1` |
 | Resize a texture, then put a picture on it | `python mw2tex.py grow ui_mp.ff cardicon_bear 512 256 sheet.png out` |
 | Copy changed emblems/titles into every `mp_*.ff` in the folder | `python mw2tex.py maps ui_mp.ff out` |
 | Set how many frames an emblem plays | `python mw2tex.py animate ui_mp.ff cardicon_bear 4 8 out` |

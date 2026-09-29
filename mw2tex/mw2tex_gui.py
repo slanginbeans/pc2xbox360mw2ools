@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mw2tex  # noqa: E402
 import mw2zone_gui  # noqa: E402
 
-if not hasattr(mw2tex, "material_images"):
+if not hasattr(mw2tex, "flipbook_options"):
     sys.exit("mw2tex.py at %s is older than mw2tex_gui.py. Copy mw2tex.py, mw2tex_gui.py, mw2zone.py and "
              "mw2zone_gui.py from the same download into one folder." % mw2tex.__file__)
 
@@ -136,16 +136,19 @@ def fastfile_for(image):
 NOT_SPARE = {"cardtitle_locked", "cardicon_locked", "cardtitle_248x48"}
 
 
-def can_animate(image):
-    """Emblems (square menu pictures up to 128, or ones already laid out as a 512x256 flipbook)
-    whose material we can find can become full-size animations."""
-    if image["pak"]:
-        return False
-    lv = image["levels"][0]
-    size = (lv["width"], lv["height"])
-    if lv["mips"] != 1 or not (size == (512, 256) or (size[0] == size[1] and size[0] <= 128)):
-        return False
-    return state["ff"] is not None and mw2tex.material_of_image(state["ff"], image) is not None
+def animate_options(image):
+    """Frame counts a menu picture stored in the .ff can play (see mw2tex.flipbook_options);
+    empty for pak textures, which the game can't animate."""
+    if image["pak"] or state["ff"] is None:
+        return []
+    return [{"frames": o["frames"], "frame": "%dx%d" % o["frame"], "sheet": "%dx%d" % o["sheet"],
+             "mb": round(o["bytes"] / 1048576.0, 2)} for o in mw2tex.flipbook_options(state["ff"], image)]
+
+
+def default_frames(image, frames):
+    """The smallest frame count that shows every frame of the animation, else the most there is."""
+    counts = [o["frames"] for o in animate_options(image)] if frames > 1 else []
+    return next((c for c in counts if c >= frames), counts[-1] if counts else 0)
 
 
 def table_uses():
@@ -181,7 +184,7 @@ def texture_list():
             "stored": "pak" if image["pak"] else "ff",
             "width": largest["width"],
             "height": largest["height"],
-            "can_animate": can_animate(image),
+            "animate_options": animate_options(image),
             "gray": name in state["gray"],
         })
     rows.sort(key=lambda r: r["name"])
@@ -271,7 +274,7 @@ def load_map_changes(map_name):
         path = os.path.join(MAP_CHANGES, entry["file"])
         if entry["name"] in state["images"] and os.path.exists(path):
             pending[entry["name"]] = {"path": path, "source": entry["source"],
-                                      "frames": 1, "animate": False, "saved": True}
+                                      "frames": 1, "animate": 0, "saved": True}
     return pending
 
 
@@ -519,7 +522,8 @@ def save_upload(name, filename, data):
         os.remove(path)
         raise ValueError("%s couldn't be opened as a picture" % filename)
     frames = mw2tex.frame_count(path)
-    state["pending"][name] = {"path": path, "source": filename, "frames": frames, "animate": frames > 1}
+    state["pending"][name] = {"path": path, "source": filename, "frames": frames,
+                              "animate": default_frames(state["images"][name], frames)}
     return state["pending"][name]
 
 
@@ -550,10 +554,10 @@ def build_textures():
     out = mw2tex.Output(state["ff_path"], OUT_DIR)
     for name, item in sorted(state["pending"].items()):
         image = out.ff.find(name)
-        if item["animate"] and can_animate(state["images"][name]):
-            ok = mw2tex.put_flipbook(out, image, item["path"], WORK_DIR)
-            log.append("%s: %s as a 32-frame animation" % (name, item["source"]) if ok
-                       else "%s: skipped (format not supported)" % name)
+        if item["animate"] and animate_options(state["images"][name]):
+            option = mw2tex.put_flipbook(out, image, item["path"], WORK_DIR, item["animate"])
+            log.append("%s: %s as %d frames of %dx%d" % ((name, item["source"], option["frames"]) + option["frame"])
+                       if option else "%s: skipped (format not supported)" % name)
         else:
             ok = out.put(image, item["path"], convert=True)
             log.append("%s: %s" % (name, item["source"]) if ok else "%s: skipped (format not supported)" % name)
@@ -732,7 +736,7 @@ class Handler(BaseHTTPRequestHandler):
                 elif url.path == "/api/option":
                     req = json.loads(body)
                     if req["name"] in state["pending"]:
-                        state["pending"][req["name"]]["animate"] = bool(req["animate"])
+                        state["pending"][req["name"]]["animate"] = max(0, int(req["animate"]))
                     self.reply(200, {"pending": self.pending()})
                 elif url.path == "/api/remove":
                     req = json.loads(body)
@@ -853,7 +857,7 @@ function card(t){const c=document.createElement("div");c.className="card"+(pendi
  else{const b=document.createElement("button");b.textContent=p?"Change":"Choose picture";b.onclick=()=>{pickFor=t.name;$("#picker").click()};row.appendChild(b);
   const l=el("button",{textContent:"From link",title:"Use a picture from a web address"});l.onclick=()=>linkFor(t);row.appendChild(l);
   if(p){const u=document.createElement("button");u.textContent="Undo";u.onclick=()=>remove(t.name);row.appendChild(u);
-   if(p.frames>1&&t.can_animate){const l=document.createElement("label");const cb=document.createElement("input");cb.type="checkbox";cb.checked=p.animate;cb.onchange=()=>option(t.name,cb.checked);l.append(cb," Animate ("+p.frames+" frames → 32)");row.appendChild(l)}
+   if(p.frames>1&&t.animate_options&&t.animate_options.length)row.appendChild(framePicker(t,p));
    else if(p.frames>1){row.appendChild(Object.assign(document.createElement("span"),{className:"none",textContent:"Animated file: only the first frame is used here"}))}}}
  c.appendChild(row);
  if(t.material&&tables.file&&(t.name.startsWith("cardtitle_")||t.name.startsWith("cardicon_"))&&(t.uses||t.spare)){const r2=el("div",{className:"row"});
@@ -865,6 +869,10 @@ function card(t){const c=document.createElement("div");c.className="card"+(pendi
  return c}
 async function upload(name,file){const j=await api("/api/upload?name="+encodeURIComponent(name)+"&filename="+encodeURIComponent(file.name),{method:"POST",body:file});pending=j.pending}
 async function remove(name){const j=await api("/api/remove",{method:"POST",body:JSON.stringify({name})});pending=j.pending;textures=j.textures;tables=j.tables;render()}
+function framePicker(t,p){const s=el("select",{title:"The game plays every frame for the same time, so more frames make a longer, slower loop. Your file has "+p.frames+" frames; they're spread evenly over the ones you pick."});
+ s.appendChild(el("option",{value:"0",textContent:"Still picture (no animation)"}));
+ for(const o of t.animate_options)s.appendChild(el("option",{value:String(o.frames),textContent:"▶ "+o.frames+" frames, "+o.frame+(o.mb>=0.5?", "+o.mb+" MB":"")+(o.frames>=p.frames&&!t.animate_options.some(x=>x.frames>=p.frames&&x.frames<o.frames)?" (fits your "+p.frames+")":""),title:"Texture becomes "+o.sheet+" ("+o.mb+" MB)"}));
+ s.value=String(p.animate||0);s.onchange=()=>option(t.name,+s.value);s.style.maxWidth="100%";return el("label",{style:"max-width:100%"},s)}
 async function option(name,animate){pending=(await api("/api/option",{method:"POST",body:JSON.stringify({name,animate})})).pending;render()}
 $("#picker").onchange=async e=>{const f=e.target.files[0];e.target.value="";if(!f||!pickFor)return;const t=textures.find(x=>x.name===pickFor);if(t)choose(t,f)};
 function droppedLink(e){const u=(e.dataTransfer.getData("text/uri-list")||e.dataTransfer.getData("text/plain")||"").split("\n").map(x=>x.trim()).find(x=>/^https?:\/\//i.test(x));return u||null}
