@@ -19,19 +19,28 @@ For tables (calling card titles, unlocks, challenges...), the picker's **Tables*
 
 1. **Install Python 3** from https://www.python.org/downloads/. On the first installer screen, tick
    **"Add python.exe to PATH"**.
-2. **Install Pillow** (the picture library mw2tex uses). Open PowerShell and run:
+2. **Install Git** from https://git-scm.com/ (the launcher uses it to download and update the tool).
+3. **Make a work folder** (for example `C:\mw2mods`), put `mw2tex.bat` from this folder in it, and
+   double-click `mw2tex.bat`. The first time, it downloads the tool into `mw2tex_app` next to it (sign in
+   to GitHub if asked) and installs Pillow. Every time after, it checks for updates, then opens the picker.
+   A newer `mw2tex.bat` replaces itself too. To skip the update check, edit the file and set `NOUPDATE=1`.
+   Copy your game files into the work folder as in step 5; you can skip step 4.
+
+Or set it up by hand instead of using the launcher:
+
+4. **Install Pillow** (the picture library mw2tex uses) and **get the tool files.** In PowerShell:
    ```
    python -m pip install pillow
    ```
-3. **Get the tool files.** Either:
+   Then either:
    - download the repository:
      ```
      git clone https://github.com/slanginbeans/codxe_modified.git codxe_textures
      ```
      The tools are in `codxe_textures\tools\mw2tex\`. Later, run `git pull` in `codxe_textures` to get updates.
    - or just download `mw2tex.py`, `mw2tex_gui.py`, `mw2zone.py` and `mw2zone_gui.py` into one folder.
-4. **Make a work folder** (for example `C:\mw2mods`) and copy into it:
-   - `mw2tex.py`, `mw2tex_gui.py`, `mw2zone.py` and `mw2zone_gui.py`
+5. **Copy into your work folder:**
+   - `mw2tex.py`, `mw2tex_gui.py`, `mw2zone.py` and `mw2zone_gui.py` (not needed with the launcher)
    - the game files you want to change, copied from your console with FTP:
      - `ui_mp.ff` for emblems and calling card titles
      - `common_mp.ff` for camos
@@ -43,7 +52,8 @@ For tables (calling card titles, unlocks, challenges...), the picker's **Tables*
 
 ## 2. Using the texture picker
 
-1. Open your work folder in File Explorer, click the address bar, type `powershell` and press Enter.
+1. Double-click `mw2tex.bat` in your work folder and skip to step 3. Without the launcher: open your
+   work folder in File Explorer, click the address bar, type `powershell` and press Enter.
 2. Run:
    ```
    python mw2tex_gui.py
