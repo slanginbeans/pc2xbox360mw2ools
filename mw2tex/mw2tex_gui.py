@@ -2,7 +2,8 @@
 
 Put this file and mw2tex.py in the folder with your .ff files (and imagefile .pak files), then run:
     python mw2tex_gui.py
-Your browser opens the texture picker. Pick a fastfile, drop pictures onto textures (or drop
+Your browser opens the texture picker. Tables at the top opens the table editor (mw2zone_gui.py;
+keep mw2zone.py and mw2zone_gui.py in the same folder). Pick a fastfile, drop pictures onto textures (or drop
 many pictures at once, named after the textures), then press Build. The rebuilt files go in
 the mw2tex_out folder; copy them to _codxe\\zone\\ on the console.
 
@@ -23,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import mw2tex  # noqa: E402
+import mw2zone_gui  # noqa: E402
 
 try:
     from PIL import Image
@@ -186,9 +188,21 @@ class Handler(BaseHTTPRequestHandler):
     def fail(self, message):
         self.reply(400, {"error": message})
 
+    def tables(self, method, url, query, body=b""):
+        """Hands /tables addresses to the table editor. Returns True when it answered."""
+        with mw2zone_gui.lock:
+            result = mw2zone_gui.handle(method, url.path, query, body)
+        if result is None:
+            return False
+        code, reply_body, kind = result
+        self.reply(code, reply_body, kind or "application/json")
+        return True
+
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
         query = urllib.parse.parse_qs(url.query)
+        if self.tables("GET", url, query):
+            return
         with lock:
             if url.path == "/":
                 self.reply(200, PAGE, "text/html; charset=utf-8")
@@ -232,6 +246,8 @@ class Handler(BaseHTTPRequestHandler):
         if length > MAX_UPLOAD:
             return self.fail("that file is too big")
         body = self.rfile.read(length)
+        if self.tables("POST", url, query, body):
+            return
         with lock:
             try:
                 if url.path == "/api/open":
@@ -275,6 +291,7 @@ header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px
 h1{font-size:16px;margin:0 8px 0 0}select,input,button{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
 button{cursor:pointer}button.primary{background:var(--accent);color:#1b1b1b;border-color:var(--accent);font-weight:600}button:disabled{opacity:.5;cursor:default}
 .chips{display:flex;gap:6px;flex-wrap:wrap}.chip{padding:4px 10px;border-radius:999px}.chip.on{background:var(--accent);color:#1b1b1b;border-color:var(--accent)}
+a.tab{color:var(--dim);text-decoration:none;padding:6px 4px}a.tab.on{color:var(--text);font-weight:600;border-bottom:2px solid var(--accent)}
 #search{min-width:220px;flex:1}.info{color:var(--dim);font-size:12px;padding:8px 16px}
 main{padding:0 16px 40px;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px;display:flex;flex-direction:column;gap:6px;position:relative}
@@ -292,6 +309,7 @@ main{padding:0 16px 40px;display:grid;grid-template-columns:repeat(auto-fill,min
 </style></head><body>
 <header>
   <h1>mw2tex</h1>
+  <a class="tab on" href="/">Textures</a><a class="tab" href="/tables">Tables</a>
   <select id="file"></select><button id="openBtn">Open</button>
   <input id="search" placeholder="Search textures, e.g. cardicon_ or camo">
   <div class="chips" id="chips"></div>

@@ -10,6 +10,9 @@ There are two ways to use it:
   textures. Start here.
 - **Commands** (`mw2tex.py`): typed in PowerShell. Useful for batches and anything the picker doesn't do.
 
+For tables (calling card titles, unlocks, challenges...), the picker's **Tables** tab is an editor, and
+`mw2zone.py` does the same from PowerShell. See section 6.
+
 ---
 
 ## 1. One-time setup
@@ -21,14 +24,14 @@ There are two ways to use it:
    python -m pip install pillow
    ```
 3. **Get the tool files.** Either:
-   - download the texture branch:
+   - download the repository:
      ```
-     git clone -b iw4-tu6-textures https://github.com/slanginbeans/codxe_modified.git codxe_textures
+     git clone https://github.com/slanginbeans/codxe_modified.git codxe_textures
      ```
      The tools are in `codxe_textures\tools\mw2tex\`. Later, run `git pull` in `codxe_textures` to get updates.
-   - or just download `mw2tex.py` and `mw2tex_gui.py` into one folder.
+   - or just download `mw2tex.py`, `mw2tex_gui.py`, `mw2zone.py` and `mw2zone_gui.py` into one folder.
 4. **Make a work folder** (for example `C:\mw2mods`) and copy into it:
-   - `mw2tex.py` and `mw2tex_gui.py`
+   - `mw2tex.py`, `mw2tex_gui.py`, `mw2zone.py` and `mw2zone_gui.py`
    - the game files you want to change, copied from your console with FTP:
      - `ui_mp.ff` for emblems and calling card titles
      - `common_mp.ff` for camos
@@ -118,7 +121,25 @@ commands with the same `out` folder keeps the earlier changes.
 ## 6. Tables (mw2zone.py)
 
 The game keeps lists like calling card titles, emblems, unlocks and challenges in string tables
-(`.csv` files packed inside the fastfiles). `mw2zone.py` lets you change them.
+(`.csv` files packed inside the fastfiles). The multiplayer ones are in `code_post_gfx_mp.ff`.
+
+### The table editor
+
+1. Put `code_post_gfx_mp.ff` in your work folder, next to the four tool files.
+2. Start the texture picker (`python mw2tex_gui.py`) and click **Tables** at the top. Or run
+   `python mw2zone_gui.py` for the table editor on its own; it doesn't need Pillow.
+3. Pick `code_post_gfx_mp.ff`, press **Open**, and click a table on the left, for example
+   `mp/cardtitletable.csv`.
+4. Type in the box above the table to find rows (like `famas`), then click a cell and change it.
+   Changed cells turn green; hover one to see the game's value. Each column suggests the values
+   already used in it, so for titles you can pick a picture from the list.
+5. Press **Build**. It writes `mw2tex_out\codxe_patch_mp.ff` with every table you changed. Copy it to
+   `_codxe\zone\` on the console.
+
+Your changes are kept in that file: next time you open the editor, it loads them back, so building
+again keeps your earlier edits. **Undo this table** or **Undo all** puts tables back to the game's version.
+
+### From PowerShell
 
 1. Export the tables from a game file. They're saved under a `tables` folder, keeping the game's names:
    ```
