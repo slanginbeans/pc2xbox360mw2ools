@@ -414,9 +414,24 @@ def _safe(name):
     return re.sub(r'[<>:"/\\|?*]', "_", name)
 
 
+CUBE = 5  # map type of cube maps (skyboxes): six square faces stored one after another
+
+
+def is_skybox(image):
+    """A map's sky: a cube map without mipmaps. (Reflection probes are cube maps too, but have
+    mipmaps and names starting with *.)"""
+    return image["map_type"] == CUBE and not image["name"].startswith("*") \
+        and all(lv["mips"] == 1 for lv in image["levels"])
+
+
 def _supported(image):
-    """Cube maps, and uncompressed textures with mipmaps, aren't handled (their smallest mips don't round-trip)."""
-    if image["format"] not in FORMATS or image["map_type"] != 3:
+    """Uncompressed textures with mipmaps aren't handled (their smallest mips don't round-trip), nor
+    are cube maps other than skyboxes."""
+    if image["format"] not in FORMATS:
+        return False
+    if image["map_type"] == CUBE:
+        return is_skybox(image)
+    if image["map_type"] != 3:
         return False
     return not (FORMATS[image["format"]][1] == 1 and max(lv["mips"] for lv in image["levels"]) > 1)
 
@@ -498,6 +513,8 @@ def decode_texture(ff, image, pak_dir=".", max_side=256, unpack=True):
     else:
         lv = image["levels"][0]
         blob = bytes(ff.zone[lv["data"]:lv["data"] + lv["size"]])
+    if image["map_type"] == CUBE:
+        return skybox_strip(blob, lv["width"], lv["height"], fmt, max_side)
     mips = untile(blob, lv["width"], lv["height"], fmt, single=lv["mips"] == 1 or top_mip_only(image, lv))
     picture = Image.open(io.BytesIO(dds_bytes(lv["width"], lv["height"], fmt, mips[:1]))).convert("RGBA")
     if unpack and gray_alpha_packed(image, picture):
@@ -604,6 +621,38 @@ def _encode(rgba, width, height, fmt):
     return bytes(out)
 
 
+def skybox_strip(blob, width, height, fmt, max_side=256):
+    """The six faces of a skybox side by side, as the game stores them (each face turned the way
+    the game keeps it: the 5th face is the sky straight up, the 6th the ground straight down)."""
+    from PIL import Image
+    import io
+    face = len(blob) // 6
+    side = min(width, max_side)
+    strip = Image.new("RGBA", (6 * side, side))
+    for f in range(6):
+        mips = untile(blob[f * face:(f + 1) * face], width, height, fmt, single=True)
+        picture = Image.open(io.BytesIO(dds_bytes(width, height, fmt, mips[:1]))).convert("RGBA")
+        strip.paste(picture.resize((side, side), Image.LANCZOS), (f * side, 0))
+    return strip
+
+
+def skybox_faces(path, work_dir):
+    """A dropped picture -> six face pictures. A strip six times as wide as it is tall is cut into
+    the six faces in the order the picker shows them; any other picture goes on all six sides."""
+    from PIL import Image
+    picture = Image.open(path).convert("RGBA")
+    w, h = picture.size
+    if abs(w / float(h) - 6) < 0.2:
+        faces = [picture.crop((f * w // 6, 0, (f + 1) * w // 6, h)) for f in range(6)]
+    else:
+        faces = [picture] * 6
+    paths = []
+    for f, face in enumerate(faces):
+        paths.append(os.path.join(work_dir, "skybox_face%d.png" % f))
+        face.save(paths[-1])
+    return paths
+
+
 def convert_picture(path, width, height, fmt, mip_count, packed=False):
     """Any picture Pillow can open (PNG, JPG, DDS, ...) -> list of mips in the game's format.
 
@@ -660,6 +709,24 @@ class Output:
         largest = max(image["levels"], key=lambda l: l["width"] * l["height"])
         width, height = largest["width"], largest["height"]
         needed = 1 if largest["mips"] == 1 else _mip_count(width, height)
+        if image["map_type"] == CUBE:
+            face_paths = skybox_faces(source, os.path.dirname(self.pak_path))
+            for lv in image["levels"]:
+                blob = b"".join(tile(convert_picture(f, lv["width"], lv["height"], fmt, 1), lv["width"], lv["height"],
+                                     fmt, single=True) for f in face_paths)
+                if image["pak"]:
+                    start = len(self.pak)
+                    self.pak += zlib.compress(blob, 9)
+                    self.ff.table[lv["entry"]] = [NEW_PAK, start, len(self.pak)]
+                    self.pak_changed = True
+                else:
+                    self.ff.zone[lv["data"]:lv["data"] + len(blob)] = blob
+                    self.ff.zone_changed = True
+            for f in face_paths:
+                os.remove(f)
+            self.replaced += 1
+            print("replaced %s with %s" % (image["name"], label))
+            return True
         mips = None
         if source.lower().endswith(".dds"):
             try:

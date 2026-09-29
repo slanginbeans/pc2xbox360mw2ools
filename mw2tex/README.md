@@ -62,7 +62,7 @@ Or set it up by hand instead of using the launcher:
 3. Pick what to open at the top and press **Open**. **All maps** is picked for you. Under **Groups** you can
    also open **UI** (menus, titles, emblems, HUD and load screens), **Map previews and load screens** (the
    map pictures from the map list, `preview_mp_*`, and each map's load screen), **Titles**, **Emblems**,
-   **Graffiti** (from every map), **Guns** (weapons and camos) or
+   **Graffiti** (from every map), **Guns** (weapons and camos), **Skyboxes** (each map's sky) or
    **Everything**: every texture from every `.ff` in the folder in one list, so a category like Camos or
    Graffiti shows all of them at once. A texture several
    files carry shows once and says where it is. Maps and load screens are listed by their in-game names
@@ -70,6 +70,12 @@ Or set it up by hand instead of using the launcher:
    `ui_mp.ff` or `common_mp.ff` (Build copies titles and emblems into the maps), map textures into every map
    that has them. Queued pictures are saved in `mw2tex_map_changes` and come back next time, in any view.
    To work on one file only, pick it instead (for example Menus, which is `ui_mp.ff`).
+   Pictures you drop stay queued when you open another file or group: every view that has the
+   texture shows them, and **Build** writes all of them, wherever you queued them. **Clear changes**
+   drops them all.
+   A skybox card shows the sky's six sides in a row (the 5th is straight up, the 6th straight down).
+   Drop a strip six times as wide as it is tall to set each side, or any other picture to put it on
+   all six.
    The picker only works on multiplayer files: the `mp_*` maps and load screens and the files ending in
    `_mp` (`ui_mp.ff`, `common_mp.ff`...). Single player and Special Ops `.ff` files in the folder are left
    out of every list and every Build, and the line under the menu says how many were skipped.

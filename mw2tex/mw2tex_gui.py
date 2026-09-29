@@ -46,13 +46,14 @@ MAX_UPLOAD = 64 * 1024 * 1024
 lock = threading.Lock()
 state = {"ff_path": None, "ff": None, "images": {}, "pending": {}, "thumbs": {}, "gray": set(),
          "materials": {}, "image_material": {}, "assigns": [],
+         "queue": {},  # lowercase texture name -> picture queued in any view and not built yet
          "maps": {}}  # texture name -> {file name: that file's texture record}, for every open file
 ALL_MAPS = "*maps"  # the file picker's "All maps" entry
 EVERYTHING = "*all"  # the file picker's "Everything" entry: every fastfile in the folder at once
 # Groups: textures of one kind from every file that has them, like Everything but narrower.
 GROUPS = {EVERYTHING: "Everything", "*ui": "UI (menus, titles, emblems, HUD, load screens)",
           "*screens": "Map previews and load screens", "*titles": "Titles", "*emblems": "Emblems",
-          "*graffiti": "Graffiti", "*guns": "Guns (weapons and camos)"}
+          "*graffiti": "Graffiti", "*guns": "Guns (weapons and camos)", "*skies": "Skyboxes"}
 MENU_GROUPS = ("*ui", "*screens", "*titles", "*emblems")  # only in menu files, so the maps aren't read
 # Queued pictures, kept between runs (outside mw2tex_out, which goes to the console). The folder
 # name is from when only map pictures were kept there.
@@ -241,7 +242,8 @@ def texture_list():
                 shows = map_label(name[len(prefix):] + ".ff")
         rows.append({
             "shows": shows,
-            "category": category(name),
+            "category": "Skyboxes" if mw2tex.is_skybox(image) else category(name),
+            "sky": mw2tex.is_skybox(image),
             "maps": sorted(map_label(m) for m in homes if is_map(m)),
             "files": sorted(map_label(m) for m in homes if not is_map(m)),
             "assigned": [a for a in assigned if material and a["new"].lower() == material.lower()],
@@ -278,14 +280,14 @@ def open_fastfile(filename):
                     gray.add(name)
             except Exception:
                 pass
-    for item in state["pending"].values():
-        undo_redirect(item)  # the queued pictures are dropped, so their table changes go too
+    stash_queue()
     materials = mw2tex.material_images(ff)
     ff_cache.clear()
     state.update(ff_path=path, ff=ff, images=images, pending={}, thumbs={}, gray=gray, materials=materials,
                  image_material={v.lower(): k for k, v in materials.items()},
                  maps={n: {os.path.basename(path): i} for n, i in images.items()})
     state["pending"] = load_map_changes({os.path.basename(path)})
+    restore_queue()
     with mw2zone_gui.lock:
         mw2zone_gui.ensure_open()  # code_post_gfx_mp.ff, for which titles and emblems use each picture
     return texture_list()
@@ -297,8 +299,7 @@ def open_all_maps():
     paths = map_files()
     if not paths:
         raise ValueError("there are no mp_*.ff map files in %s" % FOLDER)
-    for item in state["pending"].values():
-        undo_redirect(item)
+    stash_queue()
     images, maps = {}, {}
     for path in paths:
         ff = mw2tex.FastFile(path)  # read one at a time: each map unpacks to about 90 MB
@@ -315,6 +316,7 @@ def open_all_maps():
     state.update(ff_path=ALL_MAPS, ff=None, images={i["name"]: i for i in images.values()}, pending={},
                  thumbs={}, gray=set(), materials={}, image_material={}, maps=maps)
     state["pending"] = load_map_changes({os.path.basename(p) for p in paths})
+    restore_queue()
     return texture_list()
 
 
@@ -330,6 +332,8 @@ def in_group(group, image, file_name):
         return lower.startswith("cardicon_")
     if group == "*graffiti":
         return category(image["name"]) == "Graffiti"
+    if group == "*skies":
+        return mw2tex.is_skybox(image)
     if group == "*guns":
         return category(image["name"]) in ("Weapons", "Camos")
     return True
@@ -345,8 +349,7 @@ def open_everything(group=EVERYTHING):
         paths = wanted or paths
     if not paths:
         raise ValueError("there are no .ff files in %s" % FOLDER)
-    for item in state["pending"].values():
-        undo_redirect(item)
+    stash_queue()
     images, homes, gray, materials = {}, {}, set(), {}
     for path in paths:
         base = os.path.basename(path)
@@ -380,6 +383,7 @@ def open_everything(group=EVERYTHING):
                  image_material={v.lower(): k for k, v in materials.items()},
                  maps={n: homes[n.lower()] for n in named})
     state["pending"] = load_map_changes(None)
+    restore_queue()
     with mw2zone_gui.lock:
         mw2zone_gui.ensure_open()
     return texture_list()
@@ -431,6 +435,29 @@ def load_map_changes(files):
     return pending
 
 
+def stash_queue():
+    """Keeps the pictures queued in the open view (not built yet) before another view opens, with
+    the files they go in, so every view that has those textures shows them and Build writes them."""
+    for name, item in state["pending"].items():
+        if not item.get("saved"):
+            item.setdefault("targets", target_files(name))
+            item["name"] = name
+            state["queue"][name.lower()] = item
+
+
+def restore_queue():
+    """Shows the queued pictures whose textures the newly opened view has."""
+    names = {n.lower(): n for n in state["images"]}
+    for key, item in state["queue"].items():
+        if key in names:
+            state["pending"][names[key]] = item
+
+
+def queued_elsewhere():
+    shown = {n.lower() for n in state["images"]}
+    return sorted(item["name"] for key, item in state["queue"].items() if key not in shown)
+
+
 def save_map_changes():
     """Writes the queued pictures to mw2tex_map_changes, replacing what was saved for the files
     the open view shows (one file, every map, or everything)."""
@@ -441,22 +468,32 @@ def save_map_changes():
     else:
         view = {os.path.basename(state["ff_path"])}
     shown = {n.lower() for n in state["images"]}  # a group view leaves other textures' pictures alone
+    items = dict(state["pending"])
+    for key, item in state["queue"].items():  # queued in other views
+        if key not in shown:
+            items[item["name"]] = item
+    targets = {}
+    for name, item in items.items():
+        targets[name] = item["targets"] if not item.get("saved") and item.get("targets") else target_files(name)
+    replaced = {}
+    for name, files in targets.items():
+        replaced.setdefault(name.lower(), set()).update(files)
     entries = []
     for entry in read_map_changes():
         if entry["name"].lower() in shown:
             entry["maps"] = [m for m in entry["maps"] if m not in view]
-        entry["maps"] = [m for m in entry["maps"] if is_mp(m)]  # single player files are left out
+        entry["maps"] = [m for m in entry["maps"] if is_mp(m) and m not in replaced.get(entry["name"].lower(), ())]
         if entry["maps"]:
             entries.append(entry)
     os.makedirs(MAP_CHANGES, exist_ok=True)
-    for name, item in sorted(state["pending"].items()):
+    for name, item in sorted(items.items()):
         data = open(item["path"], "rb").read()
         file_name = hashlib.sha1(data).hexdigest()[:16] + os.path.splitext(item["path"])[1].lower()
         target = os.path.join(MAP_CHANGES, file_name)
         if not os.path.exists(target):
             with open(target, "wb") as fh:
                 fh.write(data)
-        entries.append({"name": name, "file": file_name, "source": item["source"], "maps": target_files(name),
+        entries.append({"name": name, "file": file_name, "source": item["source"], "maps": targets[name],
                         "animate": item["animate"], "frames": item["frames"]})
     with open(_changes_file(), "w") as fh:
         json.dump(entries, fh, indent=1)
@@ -691,16 +728,17 @@ def build():
     files) and every map, and packs the tables when they changed."""
     with mw2zone_gui.lock:
         table_edits = bool(mw2zone_gui.state["edits"])
-    if not state["pending"] and not table_edits and not read_map_changes() and not _built_files():
+    if not state["pending"] and not state["queue"] and not table_edits and not read_map_changes() and not _built_files():
         raise ValueError("nothing to build yet: drop a picture on a texture or change a table first")
     log = []
-    for name, item in sorted(state["pending"].items()):
+    for name, item in sorted(dict(state["pending"], **{i["name"]: i for i in state["queue"].values()}).items()):
         if item.get("redirect"):
             r = item["redirect"]
             log.append("%s now shows %s instead of %s" % (r["id"], r["new"], r["old"]))
     save_map_changes()
     for item in state["pending"].values():
         item["saved"] = True
+    state["queue"].clear()
     written = [os.path.relpath(p, FOLDER) for p in dict.fromkeys(rebuild_all(log))]
     if table_edits:
         with mw2zone_gui.lock:
@@ -915,7 +953,7 @@ class Handler(BaseHTTPRequestHandler):
                     file_name = json.loads(body)["file"]
                     textures = open_all_maps() if file_name == ALL_MAPS else \
                         open_everything(file_name) if file_name in GROUPS else open_fastfile(file_name)
-                    self.reply(200, {"textures": textures, "pending": self.pending()})
+                    self.reply(200, {"textures": textures, "pending": self.pending(), "elsewhere": queued_elsewhere()})
                 elif url.path == "/api/upload":
                     name = query.get("name", [""])[0]
                     filename = query.get("filename", ["picture.png"])[0]
@@ -939,8 +977,13 @@ class Handler(BaseHTTPRequestHandler):
                     names = list(state["pending"]) if req.get("all") else [req["name"]]
                     for name in names:
                         item = state["pending"].pop(name, None)
-                        if item:
+                        queued = state["queue"].pop(name.lower(), None)
+                        if item or queued:
+                            undo_redirect(item or queued)
+                    if req.get("all"):  # Clear drops the pictures queued in other views too
+                        for item in state["queue"].values():
                             undo_redirect(item)
+                        state["queue"].clear()
                     self.reply(200, {"pending": self.pending(), "textures": texture_list(), "tables": self.table_state()})
                 elif url.path == "/api/assign":
                     req = json.loads(body)
@@ -1047,6 +1090,7 @@ function card(t){const c=document.createElement("div");c.className="card"+(pendi
  c.appendChild(pics);c.appendChild(Object.assign(document.createElement("div"),{className:"name",textContent:t.name}));
  c.appendChild(Object.assign(document.createElement("div"),{className:"meta",textContent:t.width+"x"+t.height+" "+t.format+" · "+(t.stored==="ff"?"in the .ff":"pak texture")+(t.gray?" · shows in gray only":"")}));
  const kind=t.name.startsWith("cardtitle_")?"title":"emblem";
+ if(t.sky)c.appendChild(el("div",{className:"uses",textContent:"Skybox: the preview shows its 6 sides (5th = straight up, 6th = straight down). Drop a strip 6 times as wide as tall to set each side, or any other picture to put it on all six."}));
  if(t.shows)c.appendChild(el("div",{className:"uses",textContent:(t.name.toLowerCase().startsWith("preview_")?"Map preview: ":"Load screen: ")+t.shows}));
  if(t.files&&t.files.length)c.appendChild(el("div",{className:"uses",textContent:"In "+t.files.join(", ")+(t.maps.length?" (Build copies it into the maps)":"")}));
  if($("#file").value==="*maps"&&t.maps&&t.maps.length&&(t.name.startsWith("cardtitle_")||t.name.startsWith("cardicon_")))c.appendChild(el("div",{className:"uses",textContent:"Tip: change titles and emblems in ui_mp.ff. Its Build copies them into every map."}));
@@ -1138,9 +1182,9 @@ async function loadFiles(){const j=await api("/api/files");const s=$("#file");s.
 $("#openBtn").onclick=async()=>{$("#openBtn").disabled=true;$("#openBtn").textContent="Opening…";try{const j=await api("/api/open",{method:"POST",body:JSON.stringify({file:$("#file").value})});textures=j.textures;pending=j.pending;cats.clear();onlyUnused=onlyChanged=false;const t=await api("/api/textures");tables=t.tables;render();
  const card=textures.some(x=>x.name.startsWith("cardtitle_")||x.name.startsWith("cardicon_")),v=$("#file").value,allMaps=v.startsWith("*"),shown=$("#file").selectedOptions[0].textContent;
  toast((allMaps?"Opened "+shown+": "+textures.length+" textures, "+textures.filter(x=>x.maps.length+(x.files||[]).length>1).length+" of them in more than one file":"Opened "+shown+": "+textures.length+" textures")
-  +(Object.keys(pending).length?"\nKept "+Object.keys(pending).length+" picture"+(Object.keys(pending).length>1?"s":"")+" from your last Build.":"")+(card&&!tables.file&&!allMaps?"\nPut code_post_gfx_mp.ff in this folder to see which titles and emblems use each picture.":""),"ok")}catch(e){toast(e.message,"bad")}$("#openBtn").disabled=false;$("#openBtn").textContent="Open"};
+  +(Object.keys(pending).length?"\n"+Object.keys(pending).length+" queued picture"+(Object.keys(pending).length>1?"s":"")+" in this view (press Changed to see them).":"")+(j.elsewhere&&j.elsewhere.length?"\n"+j.elsewhere.length+" more queued in other files ("+j.elsewhere.slice(0,4).join(", ")+(j.elsewhere.length>4?"…":"")+"). Build writes them too; Clear changes drops them.":"")+(card&&!tables.file&&!allMaps?"\nPut code_post_gfx_mp.ff in this folder to see which titles and emblems use each picture.":""),"ok")}catch(e){toast(e.message,"bad")}$("#openBtn").disabled=false;$("#openBtn").textContent="Open"};
 $("#search").oninput=()=>render();
-$("#clearBtn").onclick=async()=>{if(!Object.keys(pending).length)return;if(!confirm("Clear all queued replacements?"))return;const j=await api("/api/remove",{method:"POST",body:JSON.stringify({all:true})});pending=j.pending;textures=j.textures;tables=j.tables;render()};
+$("#clearBtn").onclick=async()=>{if(!confirm("Clear all queued replacements, in every file?"))return;const j=await api("/api/remove",{method:"POST",body:JSON.stringify({all:true})});pending=j.pending;textures=j.textures;tables=j.tables;render()};
 $("#buildBtn").onclick=async()=>{const b=$("#buildBtn");b.disabled=true;b.textContent="Building…";try{const j=await api("/api/build",{method:"POST",body:"{}"});toast("Built:\n"+j.log.join("\n")+"\n\nWrote "+j.written.join(", ")+".\nCopy "+(j.written.length>1?"them":"it")+" to _codxe\\zone\\ on your console.","ok")}catch(e){toast(e.message,"bad")}try{tables=(await api("/api/textures")).tables}catch(e){}render()};
 let depth=0;window.addEventListener("dragenter",e=>{if(e.dataTransfer.types.includes("Files")&&textures.length){depth++;$("#drop").style.display="flex"}});
 window.addEventListener("dragleave",()=>{if(--depth<=0){depth=0;$("#drop").style.display="none"}});
