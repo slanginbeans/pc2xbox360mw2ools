@@ -11,6 +11,7 @@ Needs Python 3 and Pillow (python -m pip install pillow). Nothing is sent anywhe
 talks only to this program on your own PC.
 """
 import glob
+import hashlib
 import io
 import json
 import os
@@ -44,9 +45,94 @@ MAX_UPLOAD = 64 * 1024 * 1024
 
 lock = threading.Lock()
 state = {"ff_path": None, "ff": None, "images": {}, "pending": {}, "thumbs": {}, "gray": set(),
-         "materials": {}, "image_material": {}, "assigns": []}
+         "materials": {}, "image_material": {}, "assigns": [],
+         "maps": {}}  # all-maps view: texture name -> {map file name: that map's texture record}
+ALL_MAPS = "*maps"  # the file picker's "All maps" entry
+# Pictures put on map textures, kept between runs (outside mw2tex_out, which goes to the console).
+MAP_CHANGES = os.path.join(FOLDER, "mw2tex_map_changes")
+ff_cache = {}  # map file name -> FastFile, the last two opened for previews
 # Emblems and titles: their pictures are listed in tables (mw2zone_gui.PICTURE_COLUMNS).
 CARD_PREFIXES = ("cardtitle_", "cardicon_")
+
+# Categories for finding textures, by words in their names. The first match wins, so the more
+# specific ones come first. "Detail maps" are the bump, shine and lighting textures that go with
+# the visible ones; they're hidden unless picked.
+CATEGORIES = [
+    ("Titles", ("cardtitle_",)),
+    ("Emblems", ("cardicon_",)),
+    ("Camos", ()),  # names starting weapon_camo, unlock_camo or camo; see category()
+    ("Detail maps", ()),
+    ("Skyboxes", ("sky",)),
+    ("Graffiti", ("graffiti", "graff")),
+    ("Signs & posters", ("sign", "poster", "flyer", "billboard", "banner", "advert", "logo", "flag", "menu_board")),
+    ("Boxes & crates", ("box", "crate", "container", "cargo", "pallet", "barrel", "drum", "dumpster", "carton")),
+    ("Books & paper", ("book", "paper", "magazine", "newspaper", "document", "folder", "notebook", "poster")),
+    ("Characters", ("ally_", "tf141", "tf_141", "seal_", "militia", "airborne", "russian_", "us_army", "riot_",
+                    "opforce", "_head", "head_", "body", "glove", "hands", "headgear", "loadout", "ghillie", "face")),
+    ("Weapons", ("weapon", "gun", "rifle", "ammo", "knife", "grenade", "scope", "pistol", "rpg", "javelin")),
+    ("Vehicles", ("vehicle", "car_", "_car", "policecar", "taxi", "van_", "truck", "bus_", "heli", "tank",
+                  "bmp", "humvee", "hatchback", "sedan", "snowcat", "snowmobile", "boat", "plane", "jet",
+                  "bike", "tire", "wheel", "pickup", "suburban", "uaz", "stryker")),
+    ("Plants & trees", ("foliage", "tree_", "_tree", "trees", "bush", "grass", "plant", "leaf", "leaves", "ivy", "vine", "flower",
+                        "hedge", "palm", "fern", "moss", "weed")),
+    ("Water & effects", ("water", "fx_", "_fx", "smoke", "fire", "explosion", "glass", "blood", "spark",
+                         "puddle", "rain", "snowflake", "burnt")),
+    ("Decals", ("decal", "stain", "crack")),
+    ("Furniture & props", ("furniture", "table", "chair", "couch", "sofa", "bed", "cabinet", "shelf", "desk",
+                           "rug", "carpet", "curtain", "pillow", "lamp", "light", "tv_", "monitor", "computer",
+                           "laptop", "phone", "kitchen", "sink", "toilet", "food", "soda", "can_", "bottle",
+                           "trash", "bag", "tool", "machinery", "electric", "fan", "clock", "pot", "tarp",
+                           "cloth", "shower", "fridge", "atm", "vending")),
+    ("Walls & buildings", ("wall", "brick", "plaster", "concrete", "facade", "roof", "trim", "window", "door",
+                           "tile", "ceiling", "stair", "cinderblock", "building", "house", "fence", "gate",
+                           "pillar", "column", "awning", "garage", "shutter", "balcony")),
+    ("Ground", ("ground_", "_ground", "dirt", "mud", "sand", "rock", "gravel", "terrain", "snow", "asphalt",
+                "road", "sidewalk", "curb", "floor", "street")),
+    ("Wood & metal", ("wood", "metal", "mtl", "steel", "rust", "pipe", "beam", "iron", "tin", "plank",
+                      "plastic", "rubber")),
+]
+DETAIL_ENDINGS = ("_nml", "_n", "_norm", "_nrm", "_normal", "bump", "_spc", "_spec", "_s", "_cos", "_gls",
+                  "_dtl", "_detail", "_d", "_occ", "_ao", "_mask")
+
+
+def category(name):
+    lower = name.lower()
+    if lower.startswith(CARD_PREFIXES):
+        return "Titles" if lower.startswith("cardtitle_") else "Emblems"
+    if lower.startswith(("weapon_camo", "unlock_camo", "camo")):
+        return "Camos"
+    if lower[:1] in "~*#$" or lower.endswith(DETAIL_ENDINGS) or "_spc" in lower or "_spec" in lower \
+            or "_nml" in lower or "_nrml" in lower or "reflection_probe" in lower or "lightmap" in lower:
+        return "Detail maps"
+    for label, words in CATEGORIES:
+        if any(w in lower for w in words):
+            return label
+    return "Other"
+
+
+def map_label(path):
+    """mp_favela.ff -> favela"""
+    base = os.path.splitext(os.path.basename(path))[0]
+    return base[3:] if base.lower().startswith("mp_") else base
+
+
+def map_files():
+    return sorted(glob.glob(os.path.join(FOLDER, "mp_*.ff")), key=lambda p: os.path.basename(p).lower())
+
+
+def fastfile_for(image):
+    """The FastFile an image record belongs to: the open file, or (all-maps view) its first map."""
+    if state["ff"] is not None:
+        return state["ff"], image
+    maps = state["maps"].get(image["name"])
+    if not maps:
+        return None, image
+    map_name = sorted(maps)[0]
+    if map_name not in ff_cache:
+        while len(ff_cache) >= 2:
+            ff_cache.pop(next(iter(ff_cache)))
+        ff_cache[map_name] = mw2tex.FastFile(os.path.join(FOLDER, map_name))
+    return ff_cache[map_name], maps[map_name]
 NOT_SPARE = {"cardtitle_locked", "cardicon_locked", "cardtitle_248x48"}
 
 
@@ -59,7 +145,7 @@ def can_animate(image):
     size = (lv["width"], lv["height"])
     if lv["mips"] != 1 or not (size == (512, 256) or (size[0] == size[1] and size[0] <= 128)):
         return False
-    return mw2tex.material_of_image(state["ff"], image) is not None
+    return state["ff"] is not None and mw2tex.material_of_image(state["ff"], image) is not None
 
 
 def table_uses():
@@ -80,7 +166,10 @@ def texture_list():
         largest = max(image["levels"], key=lambda l: l["width"] * l["height"])
         material = state["image_material"].get(name.lower())
         used = (uses or {}).get(material.lower(), []) if material else []
+        maps = state["maps"].get(name)
         rows.append({
+            "category": category(name),
+            "maps": [map_label(m) for m in sorted(maps)] if maps else [],
             "assigned": [a for a in assigned if material and a["new"].lower() == material.lower()],
             "material": material,
             "uses": len(used),
@@ -118,11 +207,140 @@ def open_fastfile(filename):
     for item in state["pending"].values():
         undo_redirect(item)  # the queued pictures are dropped, so their table changes go too
     materials = mw2tex.material_images(ff)
+    ff_cache.clear()
     state.update(ff_path=path, ff=ff, images=images, pending={}, thumbs={}, gray=gray, materials=materials,
-                 image_material={v.lower(): k for k, v in materials.items()})
+                 image_material={v.lower(): k for k, v in materials.items()}, maps={})
+    if os.path.basename(path).lower().startswith("mp_"):
+        state["pending"] = load_map_changes(os.path.basename(path))
     with mw2zone_gui.lock:
         mw2zone_gui.ensure_open()  # code_post_gfx_mp.ff, for which titles and emblems use each picture
     return texture_list()
+
+
+def open_all_maps():
+    """Every mp_*.ff in the folder as one list. A texture several maps carry shows once and
+    lists its maps; a picture put on it goes into all of them."""
+    paths = map_files()
+    if not paths:
+        raise ValueError("there are no mp_*.ff map files in %s" % FOLDER)
+    for item in state["pending"].values():
+        undo_redirect(item)
+    images, maps = {}, {}
+    for path in paths:
+        ff = mw2tex.FastFile(path)  # read one at a time: each map unpacks to about 90 MB
+        seen = set()
+        for image in ff.images:
+            if image["name"].startswith("#") or image["name"].lower() in seen:
+                continue  # "#123" = a pak texture with no name
+            seen.add(image["name"].lower())
+            key = images.get(image["name"].lower(), image)["name"]
+            images.setdefault(key.lower(), image)
+            maps.setdefault(key, {})[os.path.basename(path)] = image
+        del ff
+    ff_cache.clear()
+    state.update(ff_path=ALL_MAPS, ff=None, images={i["name"]: i for i in images.values()}, pending={},
+                 thumbs={}, gray=set(), materials={}, image_material={}, maps=maps)
+    state["pending"] = load_map_changes(None)
+    return texture_list()
+
+
+# ---------------------------------------------------------------- map changes
+# Pictures put on map textures are saved in mw2tex_map_changes, so every Build (from the maps
+# or from ui_mp.ff) rebuilds the maps from the stock files with all of them, plus the title and
+# emblem changes from ui_mp.ff.
+
+
+def _changes_file():
+    return os.path.join(MAP_CHANGES, "changes.json")
+
+
+def read_map_changes():
+    try:
+        with open(_changes_file()) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return []
+
+
+def load_map_changes(map_name):
+    """Queued pictures from earlier builds: for one map, or (None) for the all-maps view."""
+    pending = {}
+    for entry in read_map_changes():
+        if map_name and map_name not in entry["maps"]:
+            continue
+        path = os.path.join(MAP_CHANGES, entry["file"])
+        if entry["name"] in state["images"] and os.path.exists(path):
+            pending[entry["name"]] = {"path": path, "source": entry["source"],
+                                      "frames": 1, "animate": False, "saved": True}
+    return pending
+
+
+def save_map_changes():
+    """Writes the queued map pictures to mw2tex_map_changes, replacing what was saved for
+    the open map (or for every map, in the all-maps view)."""
+    open_map = None if state["ff_path"] == ALL_MAPS else os.path.basename(state["ff_path"])
+    entries = []
+    for entry in read_map_changes():
+        if open_map is None:
+            continue
+        entry["maps"] = [m for m in entry["maps"] if m != open_map]
+        if entry["maps"]:
+            entries.append(entry)
+    os.makedirs(MAP_CHANGES, exist_ok=True)
+    for name, item in sorted(state["pending"].items()):
+        data = open(item["path"], "rb").read()
+        file_name = hashlib.sha1(data).hexdigest()[:16] + os.path.splitext(item["path"])[1].lower()
+        target = os.path.join(MAP_CHANGES, file_name)
+        if not os.path.exists(target):
+            with open(target, "wb") as fh:
+                fh.write(data)
+        maps = sorted(state["maps"].get(name, {})) if open_map is None else [open_map]
+        entries.append({"name": name, "file": file_name, "source": item["source"], "maps": maps})
+    with open(_changes_file(), "w") as fh:
+        json.dump(entries, fh, indent=1)
+    used = {e["file"] for e in entries} | {"changes.json"}
+    for file_name in os.listdir(MAP_CHANGES):
+        if file_name not in used:
+            os.remove(os.path.join(MAP_CHANGES, file_name))
+
+
+def rebuild_maps(log):
+    """Rebuilds every map in the folder from the stock file: saved map pictures first, then the
+    title/emblem changes from the rebuilt ui_mp.ff (and any other rebuilt non-map file)."""
+    maps = map_files()
+    written = []
+    for path in maps:
+        old = os.path.join(OUT_DIR, os.path.basename(path))
+        if os.path.exists(old):
+            os.remove(old)
+    by_map = {}
+    for entry in read_map_changes():
+        for map_name in entry["maps"]:
+            by_map.setdefault(map_name, []).append(entry)
+    for path in maps:
+        entries = by_map.get(os.path.basename(path))
+        if not entries:
+            continue
+        out = mw2tex.Output(path, OUT_DIR)
+        for entry in entries:
+            image = out.ff.find(entry["name"])
+            if image is not None and out.put(image, os.path.join(MAP_CHANGES, entry["file"]), convert=True):
+                pass
+            else:
+                log.append("%s: %s skipped (not in this map or format not supported)" % (map_label(path), entry["name"]))
+        if out.replaced:
+            out.save()
+            written.append(out.ff_out)
+            if out.pak_changed:
+                written.append(out.pak_path)
+            log.append("%s: %d picture%s" % (os.path.basename(path), out.replaced, "" if out.replaced == 1 else "s"))
+    for source in sorted(glob.glob(os.path.join(OUT_DIR, "*.ff"))):
+        base = os.path.basename(source)
+        stock = os.path.join(FOLDER, base)
+        if base.lower().startswith("mp_") or base.lower() == mw2zone_gui.OUT_NAME or not os.path.exists(stock):
+            continue
+        written += mw2tex.sync_maps(stock, source, maps, OUT_DIR, log.append)
+    return written
 
 
 def share_plan(name):
@@ -274,7 +492,8 @@ def thumbnail(name):
     picture = None
     if image is not None:
         try:
-            picture = mw2tex.decode_texture(state["ff"], image, FOLDER, max_side=256)
+            ff, image = fastfile_for(image)
+            picture = mw2tex.decode_texture(ff, image, FOLDER, max_side=256) if ff else None
         except Exception:
             picture = None
     if picture is None:
@@ -307,9 +526,13 @@ def save_upload(name, filename, data):
 def build():
     with mw2zone_gui.lock:
         table_edits = bool(mw2zone_gui.state["edits"])
-    if not state["pending"] and not table_edits:
+    on_map = state["ff_path"] == ALL_MAPS or os.path.basename(state["ff_path"] or "").lower().startswith("mp_")
+    if not state["pending"] and not table_edits and not (on_map and read_map_changes()):
         raise ValueError("nothing to build yet: drop a picture on a texture or change a table first")
-    result = build_textures() if state["pending"] else {"log": [], "written": [], "folder": OUT_DIR}
+    if on_map:
+        result = build_maps()
+    else:
+        result = build_textures() if state["pending"] else {"log": [], "written": [], "folder": OUT_DIR}
     if table_edits:
         with mw2zone_gui.lock:
             tables = mw2zone_gui.build()
@@ -342,21 +565,27 @@ def build_textures():
     if out.pak_changed:
         written.append(os.path.relpath(out.pak_path, FOLDER))
     # In a match, emblems and titles come from each map's own copy, so copy the changes into
-    # every map file in the folder too.
-    if not os.path.basename(state["ff_path"]).lower().startswith("mp_"):
-        maps = sorted(glob.glob(os.path.join(FOLDER, "mp_*.ff")))
-        for path in maps:
-            old = os.path.join(OUT_DIR, os.path.basename(path))
-            if os.path.exists(old):
-                os.remove(old)  # rebuilt from the stock map, like the file above
-        if maps:
-            for path in mw2tex.sync_maps(state["ff_path"], ff_out, maps, OUT_DIR, log.append):
-                rel = os.path.relpath(path, FOLDER)
-                if rel not in written:
-                    written.append(rel)
-        else:
-            log.append("No mp_*.ff map files in this folder, so emblems and titles only change in menus. "
-                       "Copy your maps here and build again to see them in matches and killcams.")
+    # every map file in the folder too (along with pictures put on the maps themselves).
+    if map_files():
+        for path in rebuild_maps(log):
+            rel = os.path.relpath(path, FOLDER)
+            if rel not in written:
+                written.append(rel)
+    else:
+        log.append("No mp_*.ff map files in this folder, so emblems and titles only change in menus. "
+                   "Copy your maps here and build again to see them in matches and killcams.")
+    return {"log": log, "written": written, "folder": OUT_DIR}
+
+
+def build_maps():
+    """All-maps view, or one map open: save the queued pictures, then rebuild the maps."""
+    save_map_changes()
+    for name, item in state["pending"].items():
+        item["saved"] = True
+    log = []
+    written = [os.path.relpath(p, FOLDER) for p in dict.fromkeys(rebuild_maps(log))]
+    if not written:
+        log.append("No map pictures queued, so the map files were left out.")
     return {"log": log, "written": written, "folder": OUT_DIR}
 
 
@@ -413,7 +642,7 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/files":
                 files = sorted(os.path.basename(p) for p in glob.glob(os.path.join(FOLDER, "*.ff")))
                 paks = sorted(os.path.basename(p) for p in glob.glob(os.path.join(FOLDER, "imagefile*.pak")))
-                self.reply(200, {"folder": FOLDER, "files": files, "paks": paks,
+                self.reply(200, {"folder": FOLDER, "files": files, "paks": paks, "maps": len(map_files()),
                                  "open": os.path.basename(state["ff_path"]) if state["ff_path"] else None})
             elif url.path == "/api/textures":
                 self.reply(200, {"textures": texture_list(), "pending": self.pending(), "tables": self.table_state()})
@@ -422,7 +651,7 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/rows":
                 self.reply(200, {"rows": picture_rows(query.get("kind", ["cardtitle_"])[0])})
             elif url.path == "/api/materials":
-                if state["ff"] is None and os.path.exists(os.path.join(FOLDER, "ui_mp.ff")):
+                if state["ff_path"] is None and os.path.exists(os.path.join(FOLDER, "ui_mp.ff")):
                     try:
                         open_fastfile("ui_mp.ff")
                     except Exception:
@@ -484,8 +713,9 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             try:
                 if url.path == "/api/open":
-                    textures = open_fastfile(json.loads(body)["file"])
-                    self.reply(200, {"textures": textures, "pending": {}})
+                    file_name = json.loads(body)["file"]
+                    textures = open_all_maps() if file_name == ALL_MAPS else open_fastfile(file_name)
+                    self.reply(200, {"textures": textures, "pending": self.pending()})
                 elif url.path == "/api/upload":
                     name = query.get("name", [""])[0]
                     filename = query.get("filename", ["picture.png"])[0]
@@ -540,7 +770,7 @@ PAGE = r"""<!doctype html>
 header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 h1{font-size:16px;margin:0 8px 0 0}select,input,button{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:6px;padding:6px 10px}
 button{cursor:pointer}button.primary{background:var(--accent);color:#1b1b1b;border-color:var(--accent);font-weight:600}button:disabled{opacity:.5;cursor:default}
-.chips{display:flex;gap:6px;flex-wrap:wrap}.chip{padding:4px 10px;border-radius:999px}.chip.on{background:var(--accent);color:#1b1b1b;border-color:var(--accent)}
+.chips{display:flex;gap:6px;flex-wrap:wrap;flex-basis:100%}.chip small{opacity:.7;margin-left:4px}.chip.flag{border-style:dashed}.chip{padding:4px 10px;border-radius:999px}.chip.on{background:var(--accent);color:#1b1b1b;border-color:var(--accent)}
 a.tab{color:var(--dim);text-decoration:none;padding:6px 4px}a.tab.on{color:var(--text);font-weight:600;border-bottom:2px solid var(--accent)}
 #search{min-width:220px;flex:1}.info{color:var(--dim);font-size:12px;padding:8px 16px}
 main{padding:0 16px 40px;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:12px}
@@ -581,15 +811,23 @@ dialog label.opt:has(input:checked){border-color:var(--accent)}dialog select{wid
 <input type="file" id="picker" accept="image/*,.dds,.tga" hidden>
 <dialog id="share"><form method="dialog" id="shareForm"></form></dialog>
 <script>
-const $=s=>document.querySelector(s);let textures=[],pending={},tables={file:null,changed:[]},filter="all",pickFor=null,shown=0;
-const FILTERS=[["all","All"],["cardicon_","Emblems"],["cardtitle_","Titles"],["camo","Camos"],["free","Unused"],["changed","Changed"]];
+const $=s=>document.querySelector(s);let textures=[],pending={},tables={file:null,changed:[]},pickFor=null,shown=0;
+const CATS=["Titles","Emblems","Camos","Skyboxes","Graffiti","Signs & posters","Boxes & crates","Books & paper","Characters","Weapons","Vehicles","Plants & trees","Water & effects","Decals","Furniture & props","Ground","Walls & buildings","Wood & metal","Other","Detail maps"];
+let cats=new Set(),onlyUnused=false,onlyChanged=false;
 const LIMIT=400;
 const el=(tag,props,...kids)=>{const e=Object.assign(document.createElement(tag),props||{});for(const k of kids)e.append(k);return e};
 const kindOf=name=>name.startsWith("cardtitle_")?"title":"emblem";
 function toast(msg,kind){const t=$("#toast");t.textContent=msg;t.className=kind||"";t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",kind==="bad"?9000:6000)}
 async function api(path,opts){const r=await fetch(path,opts);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||("request failed: "+r.status));return j}
-function chips(){$("#chips").innerHTML="";for(const[k,l]of FILTERS){const b=document.createElement("button");b.className="chip"+(filter===k?" on":"");b.textContent=l+(k==="changed"?" ("+Object.keys(pending).length+")":"");b.onclick=()=>{filter=k;render()};$("#chips").appendChild(b)}}
-function visible(){const q=$("#search").value.trim().toLowerCase();return textures.filter(t=>{if(filter==="changed"&&!pending[t.name])return false;if(filter==="free"&&!t.spare)return false;if(filter!=="all"&&filter!=="changed"&&filter!=="free"&&!t.name.includes(filter))return false;return !q||t.name.toLowerCase().includes(q)})}
+// Category chips toggle on and off; with none on, everything but detail maps shows.
+function chips(){const box=$("#chips");box.innerHTML="";const count={};for(const t of textures)count[t.category]=(count[t.category]||0)+1;
+ const chip=(label,on,click,n,cls)=>{const b=el("button",{className:"chip"+(on?" on":"")+(cls?" "+cls:""),title:label==="Detail maps"?"Bump, shine and lighting textures that go with the visible ones":""},label);if(n!==undefined)b.append(el("small",{textContent:n}));b.onclick=click;box.append(b)};
+ chip("All",!cats.size&&!onlyUnused&&!onlyChanged,()=>{cats.clear();onlyUnused=onlyChanged=false;render()});
+ for(const c of CATS)if(count[c])chip(c,cats.has(c),()=>{cats.has(c)?cats.delete(c):cats.add(c);render()},count[c]);
+ if(textures.some(t=>t.spare))chip("Unused",onlyUnused,()=>{onlyUnused=!onlyUnused;render()},undefined,"flag");
+ chip("Changed",onlyChanged,()=>{onlyChanged=!onlyChanged;render()},Object.keys(pending).length,"flag")}
+function visible(){const q=$("#search").value.trim().toLowerCase();return textures.filter(t=>{if(onlyChanged&&!pending[t.name])return false;if(onlyUnused&&!t.spare)return false;
+ if(cats.size?!cats.has(t.category):(t.category==="Detail maps"&&!q&&!onlyChanged))return false;return !q||t.name.toLowerCase().includes(q)})}
 function render(){chips();const g=$("#grid");g.innerHTML="";const list=visible();shown=Math.min(list.length,LIMIT);
  const n=Object.keys(pending).length+tables.changed.length;$("#buildBtn").disabled=!n;$("#buildBtn").textContent="Build"+(n?" ("+n+")":"");
  if(!textures.length){g.innerHTML='<div class="empty">Pick a fastfile above and press Open.</div>';return}
@@ -603,6 +841,9 @@ function card(t){const c=document.createElement("div");c.className="card"+(pendi
  c.appendChild(pics);c.appendChild(Object.assign(document.createElement("div"),{className:"name",textContent:t.name}));
  c.appendChild(Object.assign(document.createElement("div"),{className:"meta",textContent:t.width+"x"+t.height+" "+t.format+" · "+(t.stored==="ff"?"in the .ff":"pak texture")+(t.gray?" · shows in gray only":"")}));
  const kind=t.name.startsWith("cardtitle_")?"title":"emblem";
+ if(t.maps&&t.maps.length&&(t.name.startsWith("cardtitle_")||t.name.startsWith("cardicon_")))c.appendChild(el("div",{className:"uses",textContent:"Tip: change titles and emblems in ui_mp.ff. Its Build copies them into every map."}));
+ if(t.maps&&t.maps.length>1)c.appendChild(el("div",{className:"uses shared",textContent:"In "+t.maps.length+" maps: "+t.maps.join(", ")}));
+ else if(t.maps&&t.maps.length===1)c.appendChild(el("div",{className:"uses",textContent:"Only in "+t.maps[0]}));
  if(t.uses){const u=document.createElement("div");u.className="uses"+(t.uses>1?" shared":"");u.textContent=t.uses>1?"Shared by "+t.uses+" "+kind+"s: "+t.used_by.join(", ")+(t.uses>t.used_by.length?"…":""):"Used by "+t.used_by[0];c.appendChild(u)}
  else if(t.spare){c.appendChild(Object.assign(document.createElement("div"),{className:"uses free",textContent:"Unused: no "+kind+" shows this picture"}))}
  if(p&&p.redirect){c.appendChild(Object.assign(document.createElement("div"),{className:"redir",textContent:"For "+p.redirect.id+" only (was "+p.redirect.old+")"}))}
@@ -674,11 +915,12 @@ async function choose(t,f){if(t.uses<2||pending[t.name]){try{await upload(t.name
     pending=j.pending;textures=j.textures;tables=j.tables;render();toast("Queued "+f.name+" on "+j.redirect.new+"\n"+j.redirect.id+" now uses it (table "+j.redirect.table+", row "+(j.redirect.row+1)+"). The other "+(plan.uses.length-1)+" keep "+j.redirect.old+".","ok")}}catch(err){toast(err.message,"bad")}};
  d.returnValue="";d.showModal()}
 async function loadFiles(){const j=await api("/api/files");const s=$("#file");s.innerHTML="";if(!j.files.length){s.innerHTML="<option>no .ff files here</option>";$("#info").textContent="No .ff files in "+j.folder+". Put your fastfiles (like ui_mp.ff) in that folder and reload this page.";return}
- for(const f of j.files){const o=document.createElement("option");o.textContent=f;s.appendChild(o)}s.value=j.open||(j.files.includes("ui_mp.ff")?"ui_mp.ff":j.files[0]);
+ if(j.maps>1)s.appendChild(el("option",{value:"*maps",textContent:"All maps ("+j.maps+" mp_*.ff)"}));for(const f of j.files){const o=document.createElement("option");o.textContent=f;s.appendChild(o)}s.value=j.open||(j.files.includes("ui_mp.ff")?"ui_mp.ff":j.files[0]);
  $("#info").textContent="Folder: "+j.folder+" · pak files here: "+(j.paks.join(", ")||"none (pak textures show no preview)");if(j.open){const t=await api("/api/textures");textures=t.textures;pending=t.pending;tables=t.tables;render()}else render()}
-$("#openBtn").onclick=async()=>{$("#openBtn").disabled=true;$("#openBtn").textContent="Opening…";try{const j=await api("/api/open",{method:"POST",body:JSON.stringify({file:$("#file").value})});textures=j.textures;pending=j.pending;filter="all";const t=await api("/api/textures");tables=t.tables;render();
- const card=textures.some(x=>x.name.startsWith("cardtitle_")||x.name.startsWith("cardicon_"));
- toast("Opened "+$("#file").value+": "+textures.length+" textures"+(card&&!tables.file?"\nPut code_post_gfx_mp.ff in this folder to see which titles and emblems use each picture.":""),"ok")}catch(e){toast(e.message,"bad")}$("#openBtn").disabled=false;$("#openBtn").textContent="Open"};
+$("#openBtn").onclick=async()=>{$("#openBtn").disabled=true;$("#openBtn").textContent="Opening…";try{const j=await api("/api/open",{method:"POST",body:JSON.stringify({file:$("#file").value})});textures=j.textures;pending=j.pending;cats.clear();onlyUnused=onlyChanged=false;const t=await api("/api/textures");tables=t.tables;render();
+ const card=textures.some(x=>x.name.startsWith("cardtitle_")||x.name.startsWith("cardicon_")),allMaps=$("#file").value==="*maps";
+ toast((allMaps?"Opened all maps: "+textures.length+" textures, "+textures.filter(x=>x.maps.length>1).length+" of them in more than one map":"Opened "+$("#file").value+": "+textures.length+" textures")
+  +(Object.keys(pending).length?"\nKept "+Object.keys(pending).length+" map picture"+(Object.keys(pending).length>1?"s":"")+" from your last Build.":"")+(card&&!tables.file&&!allMaps?"\nPut code_post_gfx_mp.ff in this folder to see which titles and emblems use each picture.":""),"ok")}catch(e){toast(e.message,"bad")}$("#openBtn").disabled=false;$("#openBtn").textContent="Open"};
 $("#search").oninput=()=>render();
 $("#clearBtn").onclick=async()=>{if(!Object.keys(pending).length)return;if(!confirm("Clear all queued replacements?"))return;const j=await api("/api/remove",{method:"POST",body:JSON.stringify({all:true})});pending=j.pending;textures=j.textures;tables=j.tables;render()};
 $("#buildBtn").onclick=async()=>{const b=$("#buildBtn");b.disabled=true;b.textContent="Building…";try{const j=await api("/api/build",{method:"POST",body:"{}"});toast("Built:\n"+j.log.join("\n")+"\n\nWrote "+j.written.join(", ")+".\nCopy "+(j.written.length>1?"them":"it")+" to _codxe\\zone\\ on your console.","ok")}catch(e){toast(e.message,"bad")}try{tables=(await api("/api/textures")).tables}catch(e){}render()};

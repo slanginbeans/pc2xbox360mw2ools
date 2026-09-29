@@ -50,7 +50,13 @@ For tables (calling card titles, unlocks, challenges...), the picker's **Tables*
    ```
    Your browser opens the picker. Leave the PowerShell window open while you use it.
 3. Pick a file at the top (for example `ui_mp.ff`) and press **Open**.
-4. Find textures with the search box or the **Emblems / Titles / Camos** buttons. **Unused** shows the
+   **All maps** at the top of the list opens every `mp_*.ff` in the folder at once. A texture several maps
+   share shows once, says which maps have it ("In 3 maps: favela, nightshift, underpass"), and a picture
+   you put on it goes into all of them.
+4. Find textures with the search box or the category buttons (Titles, Emblems, Skyboxes, Graffiti,
+   Signs & posters, Boxes & crates, Books & paper, Vehicles...). Click several to see them together; click
+   **All** to clear them. **Detail maps** (the bump, shine and lighting textures that go with the visible
+   ones) are hidden unless you pick that button or search for one. **Unused** shows the
    title and emblem pictures no title or emblem uses. With `code_post_gfx_mp.ff` in the folder, each
    title and emblem card says which ones use it.
 5. **Replace one texture:** drag a picture (PNG, JPG, GIF, DDS...) onto its card, or press
@@ -79,7 +85,10 @@ For tables (calling card titles, unlocks, challenges...), the picker's **Tables*
 10. Copy everything in `mw2tex_out` to your console (section 3).
 
 Each Build starts from the stock file and applies every queued change, so what's on the
-**Changed** list is exactly what you get.
+**Changed** list is exactly what you get. Pictures you put on map textures are also saved in a
+`mw2tex_map_changes` folder next to your files (don't copy that one to the console). That way a Build
+from `ui_mp.ff` keeps your map changes, a Build from the maps keeps your title and emblem changes, and
+opening the maps again shows what you queued last time.
 
 ## 3. Putting the files on the console
 
