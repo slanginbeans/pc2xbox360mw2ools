@@ -116,6 +116,8 @@ To undo, delete the file from `_codxe\zone\`.
   Your GIF's frames are spread over the frame count you pick (a 4-frame GIF in 32 frames shows each one
   8 times). Frames keep the picture's own size (rounded up to a power of two, so titles use 256x64) while
   the texture fits in 2048x2048; past that they're made smaller (256 title frames are 128x32).
+  Load screens can animate too: each map's load screen is in its own `mp_<map>_load.ff`; copy it into the
+  folder and open it in the picker (up to 32 frames of 512x256).
   Only menu pictures stored in the .ff can animate. Map and pak textures (walls, camos on guns) can't,
   apart from the map copies of animated titles and emblems, which Build handles for you.
   Stock animated emblems: `cardicon_prestige10`, `cardicon_prestige10_02` and `cardicon_iw`. That last

@@ -665,8 +665,8 @@ class Output:
             except ValueError:
                 pass
         if mips is None:
-            packed = False
-            if fmt == 0x12 and not image["pak"]:
+            packed = image.get("packed", False)
+            if fmt == 0x12 and not image["pak"] and "packed" not in image:
                 try:
                     packed = gray_alpha_packed(image, decode_texture(self.ff, image, unpack=False))
                 except Exception:
@@ -749,6 +749,11 @@ def grow_texture(ff, image, width, height):
     lv = image["levels"][0]
     if lv["mips"] != 1:
         sys.exit("%s has mipmaps; grow only handles single-level textures" % image["name"])
+    if fmt == 0x12 and "packed" not in image:  # decide now: the old pixels are cleared below
+        try:
+            image["packed"] = gray_alpha_packed(image, decode_texture(ff, image, unpack=False))
+        except Exception:
+            image["packed"] = False
     new_size = len(tile([b"\0" * (_up(width, FORMATS[fmt][1]) * _up(height, FORMATS[fmt][1]) * FORMATS[fmt][2])],
                         width, height, fmt, single=True))
     old_size = lv["size"]
@@ -1141,7 +1146,8 @@ def cmd_maps(stock_path, out_dir, *map_paths):
         sys.exit("no %s in %s; build or put something first" % (os.path.basename(stock_path), out_dir))
     if not map_paths:
         folder = os.path.dirname(os.path.abspath(stock_path))
-        map_paths = sorted(glob.glob(os.path.join(folder, "mp_*.ff")))
+        map_paths = sorted(p for p in glob.glob(os.path.join(folder, "mp_*.ff"))
+                           if not p.lower().endswith("_load.ff"))
     if not map_paths:
         sys.exit("no mp_*.ff map files next to %s; copy them from the console first" % stock_path)
     written = sync_maps(stock_path, built_path, map_paths, out_dir)

@@ -61,6 +61,7 @@ CATEGORIES = [
     ("Titles", ("cardtitle_",)),
     ("Emblems", ("cardicon_",)),
     ("Camos", ()),  # names starting weapon_camo, unlock_camo or camo; see category()
+    ("Menu & load screens", ()),  # load screens and menu backgrounds; see category()
     ("Detail maps", ()),
     ("Skyboxes", ("sky",)),
     ("Graffiti", ("graffiti", "graff")),
@@ -101,6 +102,9 @@ def category(name):
         return "Titles" if lower.startswith("cardtitle_") else "Emblems"
     if lower.startswith(("weapon_camo", "unlock_camo", "camo")):
         return "Camos"
+    if lower.startswith(("loadscreen_", "menu_background", "menu_mp_image", "menu_sp_image", "menu_co_image",
+                         "bg_blur")):
+        return "Menu & load screens"
     if lower[:1] in "~*#$" or lower.endswith(DETAIL_ENDINGS) or "_spc" in lower or "_spec" in lower \
             or "_nml" in lower or "_nrml" in lower or "reflection_probe" in lower or "lightmap" in lower:
         return "Detail maps"
@@ -116,8 +120,15 @@ def map_label(path):
     return base[3:] if base.lower().startswith("mp_") else base
 
 
+def is_map(path):
+    """mp_favela.ff is a map; mp_favela_load.ff only holds its load screen."""
+    base = os.path.basename(path).lower()
+    return base.startswith("mp_") and not base.endswith("_load.ff")
+
+
 def map_files():
-    return sorted(glob.glob(os.path.join(FOLDER, "mp_*.ff")), key=lambda p: os.path.basename(p).lower())
+    return sorted((p for p in glob.glob(os.path.join(FOLDER, "mp_*.ff")) if is_map(p)),
+                  key=lambda p: os.path.basename(p).lower())
 
 
 def fastfile_for(image):
@@ -213,7 +224,7 @@ def open_fastfile(filename):
     ff_cache.clear()
     state.update(ff_path=path, ff=ff, images=images, pending={}, thumbs={}, gray=gray, materials=materials,
                  image_material={v.lower(): k for k, v in materials.items()}, maps={})
-    if os.path.basename(path).lower().startswith("mp_"):
+    if is_map(path):
         state["pending"] = load_map_changes(os.path.basename(path))
     with mw2zone_gui.lock:
         mw2zone_gui.ensure_open()  # code_post_gfx_mp.ff, for which titles and emblems use each picture
@@ -530,7 +541,7 @@ def save_upload(name, filename, data):
 def build():
     with mw2zone_gui.lock:
         table_edits = bool(mw2zone_gui.state["edits"])
-    on_map = state["ff_path"] == ALL_MAPS or os.path.basename(state["ff_path"] or "").lower().startswith("mp_")
+    on_map = state["ff_path"] == ALL_MAPS or is_map(state["ff_path"] or "")
     if not state["pending"] and not table_edits and not (on_map and read_map_changes()):
         raise ValueError("nothing to build yet: drop a picture on a texture or change a table first")
     if on_map:
