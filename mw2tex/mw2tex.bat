@@ -45,19 +45,27 @@ if exist "%APP%\.git" (
 )
 for /f %%v in ('git -C "%APP%" log -1 --format^=%%h 2^>nul') do echo mw2tex version %%v
 
-rem A newer launcher came with the update: swap it in and start again. The whole block is read
-rem before it runs, so replacing this file here is safe.
+rem A newer launcher came with the update: it's swapped in when this window closes (the last line).
+set NEWBAT=
 fc /b "%APP%\tools\mw2tex\mw2tex.bat" "%~f0" >nul 2>nul
-if errorlevel 1 if exist "%APP%\tools\mw2tex\mw2tex.bat" (
-    echo Updating the launcher...
-    copy /y "%APP%\tools\mw2tex\mw2tex.bat" "%~f0" >nul && "%~f0"
-)
+if errorlevel 1 if exist "%APP%\tools\mw2tex\mw2tex.bat" set NEWBAT=1
+if defined NEWBAT echo A new launcher came with the update. It takes over next time.
 
 :run
+if not exist "%APP%\tools\mw2tex\mw2tex_gui.py" (
+    echo The tool files are missing from %APP%\tools\mw2tex.
+    echo Delete the mw2tex_app folder and start this launcher again to download them.
+    pause
+    exit /b 1
+)
 %PY% -c "import PIL" >nul 2>nul
 if errorlevel 1 (
     echo Installing Pillow, the picture library mw2tex uses...
     %PY% -m pip install --user pillow
 )
+echo Starting the texture picker. Leave this window open while you use it.
 %PY% "%APP%\tools\mw2tex\mw2tex_gui.py" %*
-if errorlevel 1 pause
+echo.
+echo The picker has stopped. If there's an error above, send it to Claude.
+pause
+if defined NEWBAT copy /y "%APP%\tools\mw2tex\mw2tex.bat" "%~f0" >nul & exit /b
