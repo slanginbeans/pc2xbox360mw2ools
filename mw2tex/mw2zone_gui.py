@@ -177,7 +177,8 @@ def set_cell(name, row, column, value):
 
 
 def files():
-    names = sorted(os.path.basename(p) for p in glob.glob(os.path.join(FOLDER, "*.ff")))
+    names = sorted(os.path.basename(p) for p in glob.glob(os.path.join(FOLDER, "*.ff"))
+                   if os.path.basename(p).lower().startswith("mp_") or os.path.splitext(p)[0].lower().endswith("_mp"))
     default = state["ff_path"] and os.path.basename(state["ff_path"])
     if not default:
         default = "code_post_gfx_mp.ff" if "code_post_gfx_mp.ff" in names else (names[0] if names else None)

@@ -70,6 +70,9 @@ Or set it up by hand instead of using the launcher:
    `ui_mp.ff` or `common_mp.ff` (Build copies titles and emblems into the maps), map textures into every map
    that has them. Queued pictures are saved in `mw2tex_map_changes` and come back next time, in any view.
    To work on one file only, pick it instead (for example Menus, which is `ui_mp.ff`).
+   The picker only works on multiplayer files: the `mp_*` maps and load screens and the files ending in
+   `_mp` (`ui_mp.ff`, `common_mp.ff`...). Single player and Special Ops `.ff` files in the folder are left
+   out of every list and every Build, and the line under the menu says how many were skipped.
    **All maps** at the top of the list opens every `mp_*.ff` in the folder at once. A texture several maps
    share shows once, says which maps have it ("In 3 maps: favela, nightshift, underpass"), and a picture
    you put on it goes into all of them.

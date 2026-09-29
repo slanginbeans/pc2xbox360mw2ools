@@ -147,11 +147,28 @@ def map_label(path):
     return name + " load screen" if load else name
 
 
-def content_files():
-    """Every fastfile in the folder that holds textures (not the table files)."""
-    skip = {mw2zone_gui.TABLES_FILE.lower(), mw2zone_gui.OUT_NAME.lower()}
-    return sorted((p for p in glob.glob(os.path.join(FOLDER, "*.ff")) if os.path.basename(p).lower() not in skip),
+def is_mp(path):
+    """Multiplayer fastfiles: the maps and their load screens (mp_*) and the shared files (ui_mp,
+    common_mp, patch_mp...). Everything else in the folder is single player or special ops, and the
+    picker leaves it out."""
+    stem = os.path.splitext(os.path.basename(path))[0].lower()
+    return stem.startswith("mp_") or stem.endswith("_mp")
+
+
+def mp_fastfiles():
+    return sorted((p for p in glob.glob(os.path.join(FOLDER, "*.ff")) if is_mp(p)),
                   key=lambda p: os.path.basename(p).lower())
+
+
+def skipped_files():
+    """Single player fastfiles in the folder, which the picker doesn't show."""
+    return sorted(os.path.basename(p) for p in glob.glob(os.path.join(FOLDER, "*.ff")) if not is_mp(p))
+
+
+def content_files():
+    """Every multiplayer fastfile in the folder that holds textures (not the table files)."""
+    skip = {mw2zone_gui.TABLES_FILE.lower(), mw2zone_gui.OUT_NAME.lower()}
+    return [p for p in mp_fastfiles() if os.path.basename(p).lower() not in skip]
 
 
 def is_map(path):
@@ -402,8 +419,9 @@ def load_map_changes(files):
     pending = {}
     names = {n.lower(): n for n in state["images"]}
     for entry in read_map_changes():
-        if files is not None and not set(entry["maps"]) & set(files):
-            continue
+        mp = [m for m in entry["maps"] if is_mp(m)]
+        if files is not None and mp and not set(mp) & set(files):
+            continue  # a picture only single player files had shows in every view, so a Build moves it
         path = os.path.join(MAP_CHANGES, entry["file"])
         name = names.get(entry["name"].lower())
         if name and os.path.exists(path):
@@ -427,6 +445,7 @@ def save_map_changes():
     for entry in read_map_changes():
         if entry["name"].lower() in shown:
             entry["maps"] = [m for m in entry["maps"] if m not in view]
+        entry["maps"] = [m for m in entry["maps"] if is_mp(m)]  # single player files are left out
         if entry["maps"]:
             entries.append(entry)
     os.makedirs(MAP_CHANGES, exist_ok=True)
@@ -705,6 +724,11 @@ def rebuild_all(log):
     """Rebuilds every non-map file with saved pictures from its stock copy (menus, camos, load
     screens), then every map. Returns the files written."""
     os.makedirs(OUT_DIR, exist_ok=True)
+    for old in glob.glob(os.path.join(OUT_DIR, "*.ff")):
+        if not is_mp(old):  # built by an older version that also changed single player files
+            os.remove(old)
+            log.append("%s: removed from mw2tex_out (single player). Delete it from _codxe\\zone\\ on the "
+                       "console too." % os.path.basename(old))
     by_file = {}
     for entry in read_map_changes():
         for file_name in entry["maps"]:
@@ -812,11 +836,12 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/":
                 self.reply(200, PAGE, "text/html; charset=utf-8")
             elif url.path == "/api/files":
-                files = sorted(os.path.basename(p) for p in glob.glob(os.path.join(FOLDER, "*.ff")))
+                files = [os.path.basename(p) for p in mp_fastfiles()]
                 paks = sorted(os.path.basename(p) for p in glob.glob(os.path.join(FOLDER, "imagefile*.pak")))
                 labels = [{"file": f, "label": map_label(f), "map": is_map(f)} for f in files]
                 self.reply(200, {"folder": FOLDER, "files": files, "labels": labels, "paks": paks,
                                  "maps": len(map_files()), "content": len(content_files()), "groups": GROUPS,
+                                 "skipped": len(skipped_files()),
                                  "open": os.path.basename(state["ff_path"]) if state["ff_path"] else None})
             elif url.path == "/api/textures":
                 self.reply(200, {"textures": texture_list(), "pending": self.pending(), "tables": self.table_state()})
@@ -1101,7 +1126,7 @@ async function choose(t,f){if(t.uses<2||pending[t.name]){try{await upload(t.name
    else{const j=await api("/api/upload?name="+encodeURIComponent(t.name)+"&filename="+encodeURIComponent(f.name)+"&only="+who.value+"&spare="+encodeURIComponent(spare.value),{method:"POST",body:f});
     pending=j.pending;textures=j.textures;tables=j.tables;render();toast("Queued "+f.name+" on "+j.redirect.new+"\n"+j.redirect.id+" now uses it (table "+j.redirect.table+", row "+(j.redirect.row+1)+"). The other "+(plan.uses.length-1)+" keep "+j.redirect.old+".","ok")}}catch(err){toast(err.message,"bad")}};
  d.returnValue="";d.showModal()}
-async function loadFiles(){const j=await api("/api/files");const s=$("#file");s.innerHTML="";if(!j.files.length){s.innerHTML="<option>no .ff files here</option>";$("#info").textContent="No .ff files in "+j.folder+". Put your fastfiles (like ui_mp.ff) in that folder and reload this page.";return}
+async function loadFiles(){const j=await api("/api/files");const s=$("#file");s.innerHTML="";if(!j.files.length){s.innerHTML="<option>no .ff files here</option>";$("#info").textContent="No multiplayer .ff files in "+j.folder+". Put your fastfiles (like ui_mp.ff and the mp_ maps) in that folder and reload this page.";return}
  if(j.content>1){const g=el("optgroup",{label:"Groups"});if(j.maps>1)g.appendChild(el("option",{value:"*maps",textContent:"All maps ("+j.maps+")"}));
   for(const[k,label]of Object.entries(j.groups))if(k!=="*all")g.appendChild(el("option",{value:k,textContent:label}));
   g.appendChild(el("option",{value:"*all",textContent:"Everything ("+j.content+" files)"}));s.appendChild(g)}
@@ -1109,7 +1134,7 @@ async function loadFiles(){const j=await api("/api/files");const s=$("#file");s.
  for(const[label,test]of groups){const items=j.labels.filter(test).sort((a,b)=>a.label.localeCompare(b.label));if(!items.length)continue;const g=el("optgroup",{label});
   for(const x of items)g.appendChild(el("option",{value:x.file,textContent:x.label===x.file.replace(/\.ff$/i,"")?x.file:x.label+" ("+x.file+")"}));s.appendChild(g)}
  s.value=j.open||(j.maps>1?"*maps":j.files.includes("ui_mp.ff")?"ui_mp.ff":j.files[0]);
- $("#info").textContent="Folder: "+j.folder+" · pak files here: "+(j.paks.join(", ")||"none (pak textures show no preview)");if(j.open){const t=await api("/api/textures");textures=t.textures;pending=t.pending;tables=t.tables;render()}else render()}
+ $("#info").textContent="Folder: "+j.folder+" · pak files here: "+(j.paks.join(", ")||"none (pak textures show no preview)")+(j.skipped?" · "+j.skipped+" single player file"+(j.skipped>1?"s":"")+" left out":"");if(j.open){const t=await api("/api/textures");textures=t.textures;pending=t.pending;tables=t.tables;render()}else render()}
 $("#openBtn").onclick=async()=>{$("#openBtn").disabled=true;$("#openBtn").textContent="Opening…";try{const j=await api("/api/open",{method:"POST",body:JSON.stringify({file:$("#file").value})});textures=j.textures;pending=j.pending;cats.clear();onlyUnused=onlyChanged=false;const t=await api("/api/textures");tables=t.tables;render();
  const card=textures.some(x=>x.name.startsWith("cardtitle_")||x.name.startsWith("cardicon_")),v=$("#file").value,allMaps=v.startsWith("*"),shown=$("#file").selectedOptions[0].textContent;
  toast((allMaps?"Opened "+shown+": "+textures.length+" textures, "+textures.filter(x=>x.maps.length+(x.files||[]).length>1).length+" of them in more than one file":"Opened "+shown+": "+textures.length+" textures")
