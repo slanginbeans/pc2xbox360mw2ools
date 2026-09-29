@@ -51,7 +51,9 @@ ALL_MAPS = "*maps"  # the file picker's "All maps" entry
 EVERYTHING = "*all"  # the file picker's "Everything" entry: every fastfile in the folder at once
 # Groups: textures of one kind from every file that has them, like Everything but narrower.
 GROUPS = {EVERYTHING: "Everything", "*ui": "UI (menus, titles, emblems, HUD, load screens)",
-          "*guns": "Guns (weapons and camos)"}
+          "*screens": "Map previews and load screens", "*titles": "Titles", "*emblems": "Emblems",
+          "*graffiti": "Graffiti", "*guns": "Guns (weapons and camos)"}
+MENU_GROUPS = ("*ui", "*screens", "*titles", "*emblems")  # only in menu files, so the maps aren't read
 # Queued pictures, kept between runs (outside mw2tex_out, which goes to the console). The folder
 # name is from when only map pictures were kept there.
 MAP_CHANGES = os.path.join(FOLDER, "mw2tex_map_changes")
@@ -119,7 +121,7 @@ def category(name):
         return "Titles" if lower.startswith("cardtitle_") else "Emblems"
     if lower.startswith(("weapon_camo", "unlock_camo", "camo")):
         return "Camos"
-    if lower.startswith(("loadscreen_", "menu_background", "menu_mp_image", "menu_sp_image", "menu_co_image",
+    if lower.startswith(("loadscreen_", "preview_mp_", "menu_background", "menu_mp_image", "menu_sp_image", "menu_co_image",
                          "bg_blur")):
         return "Menu & load screens"
     if lower[:1] in "~*#$" or lower.endswith(DETAIL_ENDINGS) or "_spc" in lower or "_spec" in lower \
@@ -216,7 +218,12 @@ def texture_list():
         material = state["image_material"].get(name.lower())
         used = (uses or {}).get(material.lower(), []) if material else []
         homes = state["maps"].get(name, {}) if state["ff"] is None else {}
+        shows = None
+        for prefix in ("preview_", "loadscreen_"):
+            if name.lower().startswith(prefix + "mp_"):
+                shows = map_label(name[len(prefix):] + ".ff")
         rows.append({
+            "shows": shows,
             "category": category(name),
             "maps": sorted(map_label(m) for m in homes if is_map(m)),
             "files": sorted(map_label(m) for m in homes if not is_map(m)),
@@ -295,8 +302,17 @@ def open_all_maps():
 
 
 def in_group(group, image, file_name):
+    lower = image["name"].lower()
     if group == "*ui":
         return not is_map(file_name) and not image["pak"]  # menu pictures live in the .ff itself
+    if group == "*screens":
+        return lower.startswith(("preview_mp_", "loadscreen_mp_"))
+    if group == "*titles":
+        return lower.startswith("cardtitle_")
+    if group == "*emblems":
+        return lower.startswith("cardicon_")
+    if group == "*graffiti":
+        return category(image["name"]) == "Graffiti"
     if group == "*guns":
         return category(image["name"]) in ("Weapons", "Camos")
     return True
@@ -306,7 +322,10 @@ def open_everything(group=EVERYTHING):
     """Every fastfile in the folder as one list (menus, camos, maps, load screens), or only the
     textures of one GROUP. A texture several files carry shows once and lists them; a picture put
     on it goes where the game reads it."""
-    paths = [p for p in content_files() if group != "*ui" or not is_map(p)]
+    paths = [p for p in content_files() if group not in MENU_GROUPS or not is_map(p)]
+    if group == "*screens":  # map previews are in ui_mp.ff, load screens in the load files
+        wanted = [p for p in paths if os.path.basename(p).lower() == "ui_mp.ff" or p.lower().endswith("_load.ff")]
+        paths = wanted or paths
     if not paths:
         raise ValueError("there are no .ff files in %s" % FOLDER)
     for item in state["pending"].values():
@@ -997,6 +1016,7 @@ function card(t){const c=document.createElement("div");c.className="card"+(pendi
  c.appendChild(pics);c.appendChild(Object.assign(document.createElement("div"),{className:"name",textContent:t.name}));
  c.appendChild(Object.assign(document.createElement("div"),{className:"meta",textContent:t.width+"x"+t.height+" "+t.format+" · "+(t.stored==="ff"?"in the .ff":"pak texture")+(t.gray?" · shows in gray only":"")}));
  const kind=t.name.startsWith("cardtitle_")?"title":"emblem";
+ if(t.shows)c.appendChild(el("div",{className:"uses",textContent:(t.name.toLowerCase().startsWith("preview_")?"Map preview: ":"Load screen: ")+t.shows}));
  if(t.files&&t.files.length)c.appendChild(el("div",{className:"uses",textContent:"In "+t.files.join(", ")+(t.maps.length?" (Build copies it into the maps)":"")}));
  if($("#file").value==="*maps"&&t.maps&&t.maps.length&&(t.name.startsWith("cardtitle_")||t.name.startsWith("cardicon_")))c.appendChild(el("div",{className:"uses",textContent:"Tip: change titles and emblems in ui_mp.ff. Its Build copies them into every map."}));
  if(t.maps&&t.maps.length>1)c.appendChild(el("div",{className:"uses shared",textContent:"In "+t.maps.length+" maps: "+t.maps.join(", ")}));

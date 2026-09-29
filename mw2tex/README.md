@@ -60,7 +60,9 @@ Or set it up by hand instead of using the launcher:
    ```
    Your browser opens the picker. Leave the PowerShell window open while you use it.
 3. Pick what to open at the top and press **Open**. **All maps** is picked for you. Under **Groups** you can
-   also open **UI** (menus, titles, emblems, HUD and load screens), **Guns** (weapons and camos) or
+   also open **UI** (menus, titles, emblems, HUD and load screens), **Map previews and load screens** (the
+   map pictures from the map list, `preview_mp_*`, and each map's load screen), **Titles**, **Emblems**,
+   **Graffiti** (from every map), **Guns** (weapons and camos) or
    **Everything**: every texture from every `.ff` in the folder in one list, so a category like Camos or
    Graffiti shows all of them at once. A texture several
    files carry shows once and says where it is. Maps and load screens are listed by their in-game names
