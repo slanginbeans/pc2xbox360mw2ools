@@ -45,6 +45,16 @@ ui_mp.ff, which hold camos, titles and emblems. Commands:
       Same as put for every picture in PICDIR named after a texture (NAME.png, NAME.dds...).
       A DDS that already matches the game texture exactly is used as-is, without Pillow.
 
+  python mw2tex.py tables  code_post_gfx_mp.ff [OUTDIR]
+  python mw2tex.py buildtables TABLEDIR [OUT.ff]
+      Export the game's tables (calling card titles, emblems, unlocks...) as .csv files, and
+      pack edited ones into codxe_patch_mp.ff. Same as mw2zone.py tables / build.
+
+  python mw2tex.py pictures ui_mp.ff code_post_gfx_mp.ff
+      Lists which titles and emblems share a picture, and the pictures no title or emblem
+      uses. To give one of the sharing titles its own picture, point its table row at an
+      unused picture (the table editor in mw2tex_gui.py does this for you).
+
 imagefile5.pak: if OUTDIR already has one (from another fastfile, or a stock one you copied
 there), new textures are added to the end of it and old contents are kept.
 
@@ -802,6 +812,18 @@ def material_of_image(ff, image):
     return None
 
 
+def material_images(ff):
+    """{material name: texture name} for the UI materials in FF. Each UI material stores its own
+    texture right after it, so the texture's material is the name just before it."""
+    out = {}
+    for image in ff.images:
+        if not image["pak"]:
+            name = ff._material_name(image["offset"])
+            if name and material_of_image(ff, image) is not None:
+                out.setdefault(name, image["name"])
+    return out
+
+
 def set_atlas(ff, name, rows, columns):
     """Sets texture atlas rows/columns on material NAME, or on the material that uses texture NAME."""
     hits = find_material(ff.zone, name)
@@ -1017,9 +1039,46 @@ def cmd_maps(stock_path, out_dir, *map_paths):
         print("wrote %d files; copy them to _codxe\\zone\\ on the console" % len(written))
 
 
+PICTURE_COLUMNS = {"mp/cardtitletable.csv": 2, "mp/cardicontable.csv": 1}
+NOT_SPARE = {"cardtitle_locked", "cardicon_locked", "cardtitle_248x48"}
+
+
+def cmd_pictures(ui_path, tables_path):
+    import mw2zone
+    materials = material_images(FastFile(ui_path))
+    tables = {t["name"]: t["rows"] for t in mw2zone.read_tables(FastFile(tables_path).zone)}
+    uses = {}
+    for name, column in PICTURE_COLUMNS.items():
+        for row in tables.get(name, []):
+            if column < len(row) and row[column]:
+                uses.setdefault(row[column].lower(), []).append(row[0])
+    for kind, label in (("cardtitle_", "titles"), ("cardicon_", "emblems")):
+        shared = sorted(((m, ids) for m, ids in uses.items() if m.startswith(kind) and len(ids) > 1),
+                        key=lambda item: -len(item[1]))
+        print("Pictures shared by several %s:" % label)
+        for material, ids in shared:
+            print("  %-34s %3d: %s%s" % (material, len(ids), ", ".join(ids[:4]), ", ..." if len(ids) > 4 else ""))
+        if not shared:
+            print("  none")
+        spare = sorted(m for m in materials if m.lower().startswith(kind) and m.lower() not in NOT_SPARE
+                       and m.lower() not in uses)
+        print("Unused %s pictures (material in the table -> texture to put your picture on):" % label[:-1])
+        for material in spare:
+            print("  %-34s -> %s" % (material, materials[material]))
+        print()
+
+
 def main():
     args = sys.argv[1:]
-    if len(args) == 2 and args[0] == "list":
+    if len(args) in (2, 3) and args[0] == "tables":
+        import mw2zone
+        mw2zone.cmd_tables(*args[1:])
+    elif len(args) in (2, 3) and args[0] == "buildtables":
+        import mw2zone
+        mw2zone.cmd_build(*args[1:])
+    elif len(args) == 3 and args[0] == "pictures":
+        cmd_pictures(*args[1:])
+    elif len(args) == 2 and args[0] == "list":
         cmd_list(args[1])
     elif len(args) in (4, 5) and args[0] == "extract":
         cmd_extract(*args[1:])

@@ -139,6 +139,43 @@ def build():
     return {"log": log, "written": [os.path.relpath(out_path(), FOLDER)], "folder": OUT_DIR}
 
 
+# Tables whose column holds a picture (UI material) name, and which column.
+PICTURE_COLUMNS = {"mp/cardtitletable.csv": 2, "mp/cardicontable.csv": 1}
+TABLES_FILE = "code_post_gfx_mp.ff"
+
+
+def ensure_open():
+    """Opens code_post_gfx_mp.ff when no table file is open yet. True when tables are available."""
+    if state["ff_path"] is None and os.path.exists(os.path.join(FOLDER, TABLES_FILE)):
+        open_fastfile(TABLES_FILE)
+    return state["ff_path"] is not None
+
+
+def current_rows(name):
+    if name in state["edits"]:
+        return state["edits"][name]
+    table = state["tables"].get(name)
+    return table["rows"] if table else None
+
+
+def picture_uses():
+    """{material name (lowercase): [{"table", "row", "column", "id"}]} for every table row that
+    shows a picture, with your edits applied."""
+    uses = {}
+    for name, column in PICTURE_COLUMNS.items():
+        for index, row in enumerate(current_rows(name) or []):
+            if column < len(row) and row[column]:
+                uses.setdefault(row[column].lower(), []).append(
+                    {"table": name, "row": index, "column": column, "id": row[0]})
+    return uses
+
+
+def set_cell(name, row, column, value):
+    rows = [list(r) for r in current_rows(name)]
+    rows[row][column] = value
+    set_table(name, rows)
+
+
 def files():
     names = sorted(os.path.basename(p) for p in glob.glob(os.path.join(FOLDER, "*.ff")))
     default = state["ff_path"] and os.path.basename(state["ff_path"])
@@ -183,7 +220,7 @@ def handle(method, path, query, body):
 
 PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mw2zone table editor</title>
+<title>mw2tex table editor</title>
 <style>
 :root{--bg:#17191d;--panel:#22252b;--card:#2a2e35;--line:#3a3f48;--text:#e6e8ec;--dim:#9aa1ad;--accent:#d6aa46;--ok:#5cb87a;--bad:#e06c6c}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 system-ui,Segoe UI,sans-serif}
@@ -207,13 +244,14 @@ th{position:sticky;top:0;background:var(--panel);color:var(--dim);font-weight:60
 td.n{color:var(--dim);padding:0 8px;text-align:right;background:var(--panel);position:sticky;left:0}
 td input{border:0;border-radius:0;background:transparent;padding:4px 8px;min-width:6ch}
 td input:focus{outline:2px solid var(--accent);background:var(--card)}
+td .cell{display:flex;align-items:center}td .cell input{flex:none}td img.mini{height:24px;max-width:120px;object-fit:contain;margin:2px 6px 2px 0;background:#30343b;border-radius:3px}
 td.changed input{background:rgba(92,184,122,.18)}td.changed input:focus{background:rgba(92,184,122,.28)}
 .empty{color:var(--dim);padding:40px 0;text-align:center}.warn{color:var(--accent);font-size:12px}
 #toast{position:fixed;left:16px;right:16px;bottom:16px;max-width:760px;margin:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:none;z-index:20;white-space:pre-wrap}
 #toast.bad{border-color:var(--bad)}#toast.ok{border-color:var(--ok)}
 </style></head><body>
 <header>
-  <h1>mw2zone</h1>
+  <h1>mw2tex</h1>
   <a class="tab" id="texTab" href="/" hidden>Textures</a><a class="tab on" href="/tables">Tables</a>
   <select id="file"></select><button id="openBtn">Open</button>
   <span style="flex:1"></span>
@@ -227,12 +265,13 @@ td.changed input{background:rgba(92,184,122,.18)}td.changed input:focus{backgrou
 </div>
 <div id="toast"></div>
 <script>
-const $=s=>document.querySelector(s);let list={tables:[],changed:[]},cur=null,rows=null,orig=null,widths=[],saveTimer=null;
+const $=s=>document.querySelector(s);let list={tables:[],changed:[]},cur=null,rows=null,orig=null,widths=[],saveTimer=null,combined=false,mats={},pics={};
 const LIMIT=800;
 function toast(msg,kind){const t=$("#toast");t.textContent=msg;t.className=kind||"";t.style.display="block";clearTimeout(t._h);t._h=setTimeout(()=>t.style.display="none",kind==="bad"?9000:6000)}
 async function api(path,opts){const r=await fetch(path,opts);const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||("request failed: "+r.status));return j}
 const post=(p,b)=>api(p,{method:"POST",body:JSON.stringify(b||{})});
-function setList(j){list=j;const n=j.changed.length;$("#buildBtn").disabled=!n;$("#buildBtn").textContent="Build"+(n?" ("+n+" table"+(n>1?"s":"")+")":"");renderList()}
+function setList(j){list=j;const t=j.changed.length,p=Object.keys(pics).length,n=t+p;$("#buildBtn").disabled=!n;
+ $("#buildBtn").textContent="Build"+(n?" ("+[t?t+" table"+(t>1?"s":""):"",p?p+" picture"+(p>1?"s":""):""].filter(Boolean).join(", ")+")":"");renderList()}
 function renderList(){const q=$("#tableSearch").value.trim().toLowerCase();const el=$("#list");el.innerHTML="";
  for(const t of list.tables){if(q&&!t.name.toLowerCase().includes(q))continue;const b=document.createElement("button");b.className="t"+(cur===t.name?" on":"")+(t.changed?" changed":"");
   b.textContent=t.name;b.appendChild(Object.assign(document.createElement("small"),{textContent:t.rows+" rows x "+t.columns+" columns"+(t.changed?" · changed":"")+(t.elsewhere?" · from another file":"")}));
@@ -255,25 +294,29 @@ function renderTable(unresolved){const m=$("#main");m.innerHTML="";const cols=ro
 function fillRows(){const tb=$("#main tbody");if(!tb)return;tb.innerHTML="";const q=($("#rowSearch").value||"").trim().toLowerCase();let shown=0,total=0;
  for(let r=0;r<rows.length;r++){if(q&&!rows[r].some(v=>v.toLowerCase().includes(q)))continue;total++;if(shown>=LIMIT)continue;shown++;
   const tr=document.createElement("tr");tr.appendChild(Object.assign(document.createElement("td"),{className:"n",textContent:r+1}));
-  for(let c=0;c<rows[r].length;c++){const td=document.createElement("td");if(isChanged(r,c))td.className="changed";const i=document.createElement("input");i.value=rows[r][c];i.setAttribute("list","col"+c);i.style.width=widths[c]+"ch";i.spellcheck=false;
+  for(let c=0;c<rows[r].length;c++){const td=document.createElement("td");if(isChanged(r,c))td.className="changed";const box=document.createElement("div");box.className="cell";td.appendChild(box);const i=document.createElement("input");
+   const pic=document.createElement("img");pic.className="mini";pic.alt="";pic.onerror=()=>pic.hidden=true;const showPic=()=>{const img=mats[(rows[r][c]||"").toLowerCase()];pic.hidden=!img;if(img){pic.title=img;pic.src=pics[img]?"/api/upload?name="+encodeURIComponent(img)+"&v="+encodeURIComponent(pics[img]):"/api/matthumb?m="+encodeURIComponent(rows[r][c])}};
+   if(combined){showPic();box.appendChild(pic)}i.value=rows[r][c];i.setAttribute("list","col"+c);i.style.width=widths[c]+"ch";i.spellcheck=false;
    i.title=orig&&orig[r]&&orig[r][c]!==rows[r][c]?"Game value: "+(orig[r][c]||"(empty)"):"";
-   i.oninput=()=>{rows[r][c]=i.value;td.className=isChanged(r,c)?"changed":"";i.title=orig&&orig[r]&&orig[r][c]!==i.value?"Game value: "+(orig[r][c]||"(empty)"):"";queueSave()};td.appendChild(i);tr.appendChild(td)}
+   i.oninput=()=>{rows[r][c]=i.value;td.className=isChanged(r,c)?"changed":"";i.title=orig&&orig[r]&&orig[r][c]!==i.value?"Game value: "+(orig[r][c]||"(empty)"):"";if(combined)showPic();queueSave()};box.appendChild(i);tr.appendChild(td)}
   tb.appendChild(tr)}
  if(total>shown){const tr=document.createElement("tr");const td=document.createElement("td");td.colSpan=rows[0].length+1;td.className="empty";td.textContent="Showing "+shown+" of "+total+" rows. Type in the box above to find the row you want.";tr.appendChild(td);tb.appendChild(tr)}}
 function queueSave(){clearTimeout(saveTimer);saveTimer=setTimeout(flush,400)}
 async function flush(){if(!saveTimer||!cur)return;clearTimeout(saveTimer);saveTimer=null;try{setList(await post("/tables/api/save",{name:cur,rows}))}catch(e){toast(e.message,"bad")}}
-async function loadFiles(){try{await fetch("/api/files").then(r=>{if(r.ok)$("#texTab").hidden=false})}catch(e){}
+async function loadPictures(){if(!combined)return;try{const j=await api("/api/materials");mats={};for(const[k,v]of Object.entries(j.materials))mats[k.toLowerCase()]=v;pics=j.pending;
+ if(j.file)$("#info").textContent+=" · pictures from "+j.file}catch(e){}}
+async function loadFiles(){try{await fetch("/api/files").then(r=>{if(r.ok){$("#texTab").hidden=false;combined=true}})}catch(e){}
  const j=await api("/tables/api/files");const s=$("#file");s.innerHTML="";
  if(!j.files.length){s.innerHTML="<option>no .ff files here</option>";$("#info").textContent="No .ff files in "+j.folder+". Put code_post_gfx_mp.ff in that folder and reload this page.";return}
  for(const f of j.files)s.appendChild(Object.assign(document.createElement("option"),{textContent:f}));s.value=j.default;
  $("#info").textContent="Folder: "+j.folder+" · Build writes mw2tex_out\\codxe_patch_mp.ff";
- const l=await api("/tables/api/list");setList(l);if(l.file){s.value=l.file}}
+ const l=await api("/tables/api/list");await loadPictures();setList(l);if(l.file){s.value=l.file}}
 $("#openBtn").onclick=async()=>{await flush();const b=$("#openBtn");b.disabled=true;b.textContent="Opening…";try{const j=await post("/tables/api/open",{file:$("#file").value});cur=null;setList(j);
  $("#main").innerHTML='<div class="empty">Pick a table on the left.</div>';
  const found=j.tables.filter(t=>!t.elsewhere).length;toast("Opened "+j.file+": "+found+" table"+(found===1?"":"s")+(j.restored&&j.restored.length?"\nKept your earlier changes from mw2tex_out\\codxe_patch_mp.ff: "+j.restored.join(", "):""),found?"ok":"bad")}catch(e){toast(e.message,"bad")}b.disabled=false;b.textContent="Open"};
 $("#tableSearch").oninput=renderList;
 $("#clearBtn").onclick=async()=>{await flush();if(!list.changed.length)return;if(!confirm("Undo every table change? The next Build starts from the game's tables."))return;setList(await post("/tables/api/revert",{all:true}));if(cur)openTable(cur)};
-$("#buildBtn").onclick=async()=>{await flush();const b=$("#buildBtn");b.disabled=true;b.textContent="Building…";try{const j=await post("/tables/api/build");toast("Built:\n"+j.log.join("\n")+"\n\nWrote "+j.written.join(", ")+".\nCopy it to _codxe\\zone\\ on your console.","ok")}catch(e){toast(e.message,"bad")}setList(await api("/tables/api/list"))};
+$("#buildBtn").onclick=async()=>{await flush();const b=$("#buildBtn");b.disabled=true;b.textContent="Building…";try{const j=combined?await post("/api/build"):await post("/tables/api/build");toast("Built:\n"+j.log.join("\n")+"\n\nWrote "+j.written.join(", ")+".\nCopy "+(j.written.length>1?"them":"it")+" to _codxe\\zone\\ on your console.","ok")}catch(e){toast(e.message,"bad")}setList(await api("/tables/api/list"))};
 window.addEventListener("beforeunload",()=>{if(saveTimer)flush()});
 loadFiles().catch(e=>toast(e.message,"bad"));
 </script></body></html>

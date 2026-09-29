@@ -35,6 +35,7 @@ For tables (calling card titles, unlocks, challenges...), the picker's **Tables*
    - the game files you want to change, copied from your console with FTP:
      - `ui_mp.ff` for emblems and calling card titles
      - `common_mp.ff` for camos
+     - `code_post_gfx_mp.ff`, which holds the tables that say which title and emblem uses which picture
      - `mp_*.ff`, every map you play on. Needed for emblems and titles too: in a match (scoreboard, killcam)
        the game uses each map's own copy of those pictures, not the one in `ui_mp.ff`.
    - optional: `imagefile1.pak` to `imagefile4.pak`. These are only needed to *preview* camo and map
@@ -49,9 +50,15 @@ For tables (calling card titles, unlocks, challenges...), the picker's **Tables*
    ```
    Your browser opens the picker. Leave the PowerShell window open while you use it.
 3. Pick a file at the top (for example `ui_mp.ff`) and press **Open**.
-4. Find textures with the search box or the **Emblems / Titles / Camos** buttons.
+4. Find textures with the search box or the **Emblems / Titles / Camos** buttons. **Unused** shows the
+   title and emblem pictures no title or emblem uses. With `code_post_gfx_mp.ff` in the folder, each
+   title and emblem card says which ones use it.
 5. **Replace one texture:** drag a picture (PNG, JPG, GIF, DDS...) onto its card, or press
    **Choose picture**. The card shows the old picture, an arrow and the new one.
+   **Shared pictures:** many titles share one picture (all 42 "Expert" weapon titles use
+   `cardtitle_assault_expert`). When you drop a picture on a shared one, the picker asks whether it's for
+   all of them or only one. For only one, it puts your picture on an unused title picture and changes
+   that title's table row to use it, so the others keep the old picture. **Undo** puts the row back too.
 6. **Replace many at once:** name each picture after the texture it replaces (for example
    `cardicon_bear.png`, `cardtitle_bloodsplat.jpg`) and drop them all anywhere on the page. The picker
    tells you which names didn't match.
@@ -59,7 +66,8 @@ For tables (calling card titles, unlocks, challenges...), the picker's **Tables*
    Build, the emblem becomes a 32-frame animation at full 64x64 size (see section 4). Untick the box to
    use only the first frame.
 8. Press **Undo** on a card to drop that change, or **Changed** to see everything you've queued.
-9. Press **Build**. The picker writes the new files into a `mw2tex_out` folder inside your work folder.
+9. Press **Build**. The picker writes the new files into a `mw2tex_out` folder inside your work folder,
+   including `codxe_patch_mp.ff` when a table changed.
    When map files (`mp_*.ff`) are in your work folder, Build also puts your emblem and title changes
    into each of them, so they show in matches and killcams too. This takes a few seconds per map.
 10. Copy everything in `mw2tex_out` to your console (section 3).
@@ -108,6 +116,9 @@ commands with the same `out` folder keeps the earlier changes.
 | What | Command |
 | --- | --- |
 | List every texture in a file (writes a .csv) | `python mw2tex.py list ui_mp.ff` |
+| Show which titles/emblems share a picture, and the unused ones | `python mw2tex.py pictures ui_mp.ff code_post_gfx_mp.ff` |
+| Export every table as .csv (into `tables`) | `python mw2tex.py tables code_post_gfx_mp.ff` |
+| Pack edited tables into `codxe_patch_mp.ff` | `python mw2tex.py buildtables tables` |
 | Export a texture as DDS | `python mw2tex.py extract ui_mp.ff . cardicon_bear` |
 | Replace one texture | `python mw2tex.py put ui_mp.ff cardicon_bear bear.png out` |
 | Replace many (pictures named after textures, in folder `pics`) | `python mw2tex.py replace ui_mp.ff pics out` |
@@ -118,7 +129,7 @@ commands with the same `out` folder keeps the earlier changes.
 
 `python mw2tex.py` with nothing after it prints the full help, including how the file format works.
 
-## 6. Tables (mw2zone.py)
+## 6. Tables
 
 The game keeps lists like calling card titles, emblems, unlocks and challenges in string tables
 (`.csv` files packed inside the fastfiles). The multiplayer ones are in `code_post_gfx_mp.ff`.
@@ -127,14 +138,15 @@ The game keeps lists like calling card titles, emblems, unlocks and challenges i
 
 1. Put `code_post_gfx_mp.ff` in your work folder, next to the four tool files.
 2. Start the texture picker (`python mw2tex_gui.py`) and click **Tables** at the top. Or run
-   `python mw2zone_gui.py` for the table editor on its own; it doesn't need Pillow.
+   `python mw2zone_gui.py` for the table editor on its own; it doesn't need Pillow but shows no pictures.
 3. Pick `code_post_gfx_mp.ff`, press **Open**, and click a table on the left, for example
    `mp/cardtitletable.csv`.
 4. Type in the box above the table to find rows (like `famas`), then click a cell and change it.
    Changed cells turn green; hover one to see the game's value. Each column suggests the values
-   already used in it, so for titles you can pick a picture from the list.
-5. Press **Build**. It writes `mw2tex_out\codxe_patch_mp.ff` with every table you changed. Copy it to
-   `_codxe\zone\` on the console.
+   already used in it, so for titles you can pick a picture from the list. Cells that name a title or
+   emblem picture show it (from `ui_mp.ff`, including a new picture you queued on the Textures tab).
+5. Press **Build**. It writes `mw2tex_out\codxe_patch_mp.ff` with every table you changed, plus any
+   pictures queued on the Textures tab. Copy them to `_codxe\zone\` on the console.
 
 Your changes are kept in that file: next time you open the editor, it loads them back, so building
 again keeps your earlier edits. **Undo this table** or **Undo all** puts tables back to the game's version.
