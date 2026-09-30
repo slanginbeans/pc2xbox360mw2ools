@@ -53,11 +53,13 @@ if exist "%APP%\.git" (
 )
 for /f %%v in ('git -C "%APP%" log -1 --format^=%%h 2^>nul') do echo mw2tex version %%v
 
-rem A newer launcher came with the update: it's swapped in when this window closes (the last line).
-set NEWBAT=
+rem A newer launcher came with the update: it replaces this one and starts straight away. It's
+rem started without "call", which hands over for good, so nothing more of this old copy runs.
 fc /b "%APP%\mw2tex\mw2tex.bat" "%~f0" >nul 2>nul
-if errorlevel 1 if exist "%APP%\mw2tex\mw2tex.bat" set NEWBAT=1
-if defined NEWBAT echo A new launcher came with the update. It takes over next time.
+if errorlevel 1 if exist "%APP%\mw2tex\mw2tex.bat" (
+    echo A new launcher came with the update. Starting it...
+    copy /y "%APP%\mw2tex\mw2tex.bat" "%~f0" >nul && "%~f0" %*
+)
 
 rem The fastfile editor's and map converter's launchers (mw2ff.bat, mw2port.bat) go next to this
 rem one the first time they arrive.
@@ -93,4 +95,3 @@ call %PY% "%APP%\mw2tex\mw2tex_gui.py" %*
 echo.
 echo The picker has stopped. If there's an error above, send it to Claude.
 pause
-if defined NEWBAT copy /y "%APP%\mw2tex\mw2tex.bat" "%~f0" >nul & exit /b
