@@ -227,6 +227,19 @@ def is_spare(material, uses):
             and material.lower() not in NOT_SPARE and not uses.get(material.lower()))
 
 
+def no_preview_reason(image):
+    """Why a texture can't show a preview, before trying: its format, or the pak files it needs
+    that aren't in the folder (the map .ff only says where its pixels are in them)."""
+    if image["format"] not in mw2tex.FORMATS:
+        return "format not supported yet"
+    if not image["pak"]:
+        return None
+    paks = image.get("paks", [])
+    if any(os.path.exists(os.path.join(FOLDER, "imagefile%d.pak" % n)) for n in paks):
+        return None
+    return "needs " + ", ".join("imagefile%d.pak" % n for n in paks)
+
+
 def texture_list():
     rows = []
     uses = table_uses()
@@ -259,6 +272,7 @@ def texture_list():
             "height": largest["height"],
             "animate_options": animate_options(image),
             "gray": name in state["gray"],
+            "no_preview": no_preview_reason(image),
         })
     rows.sort(key=lambda r: r["name"])
     return rows
@@ -880,6 +894,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, {"folder": FOLDER, "files": files, "labels": labels, "paks": paks,
                                  "maps": len(map_files()), "content": len(content_files()), "groups": GROUPS,
                                  "skipped": len(skipped_files()),
+                                 "missing": ["imagefile%d.pak" % n for n in range(1, 5)
+                                             if not os.path.exists(os.path.join(FOLDER, "imagefile%d.pak" % n))],
                                  "open": os.path.basename(state["ff_path"]) if state["ff_path"] else None})
             elif url.path == "/api/textures":
                 self.reply(200, {"textures": texture_list(), "pending": self.pending(), "tables": self.table_state()})
@@ -1085,7 +1101,7 @@ function render(){chips();const g=$("#grid");g.innerHTML="";const list=visible()
   g.appendChild(d)}}
 function card(t){const c=document.createElement("div");c.className="card"+(pending[t.name]?" changed":"");const p=pending[t.name];
  const pics=document.createElement("div");pics.className="pics"+(p?" two":"");
- const orig=new Image();orig.loading="lazy";orig.alt="";orig.src="/api/thumb?name="+encodeURIComponent(t.name);orig.onerror=()=>{orig.replaceWith(Object.assign(document.createElement("span"),{className:"none",textContent:t.stored==="pak"?"no preview (pak file missing)":"no preview"}))};pics.appendChild(orig);
+ const orig=new Image();orig.loading="lazy";orig.alt="";orig.src="/api/thumb?name="+encodeURIComponent(t.name);orig.onerror=()=>{orig.replaceWith(Object.assign(document.createElement("span"),{className:"none",textContent:t.no_preview?"no preview: "+t.no_preview+(t.no_preview.startsWith("needs")?" (copy it from your game folder into this folder; you can still replace this texture without it)":""):"no preview"}))};pics.appendChild(orig);
  if(p){pics.appendChild(Object.assign(document.createElement("span"),{className:"arrow",textContent:"→"}));const n=new Image();n.src="/api/upload?name="+encodeURIComponent(t.name)+"&v="+encodeURIComponent(p.source);pics.appendChild(n);c.appendChild(Object.assign(document.createElement("div"),{className:"badge",textContent:"NEW"}))}
  c.appendChild(pics);c.appendChild(Object.assign(document.createElement("div"),{className:"name",textContent:t.name}));
  c.appendChild(Object.assign(document.createElement("div"),{className:"meta",textContent:t.width+"x"+t.height+" "+t.format+" · "+(t.stored==="ff"?"in the .ff":"pak texture")+(t.gray?" · shows in gray only":"")}));
@@ -1178,7 +1194,7 @@ async function loadFiles(){const j=await api("/api/files");const s=$("#file");s.
  for(const[label,test]of groups){const items=j.labels.filter(test).sort((a,b)=>a.label.localeCompare(b.label));if(!items.length)continue;const g=el("optgroup",{label});
   for(const x of items)g.appendChild(el("option",{value:x.file,textContent:x.label===x.file.replace(/\.ff$/i,"")?x.file:x.label+" ("+x.file+")"}));s.appendChild(g)}
  s.value=j.open||(j.maps>1?"*maps":j.files.includes("ui_mp.ff")?"ui_mp.ff":j.files[0]);
- $("#info").textContent="Folder: "+j.folder+" · pak files here: "+(j.paks.join(", ")||"none (pak textures show no preview)")+(j.skipped?" · "+j.skipped+" single player file"+(j.skipped>1?"s":"")+" left out":"");if(j.open){const t=await api("/api/textures");textures=t.textures;pending=t.pending;tables=t.tables;render()}else render()}
+ $("#info").textContent="Folder: "+j.folder+" · pak files here: "+(j.paks.join(", ")||"none")+(j.missing&&j.missing.length?" · missing "+j.missing.join(", ")+" (textures stored there show no preview until you copy them here from your game folder)":"")+(j.skipped?" · "+j.skipped+" single player file"+(j.skipped>1?"s":"")+" left out":"");if(j.open){const t=await api("/api/textures");textures=t.textures;pending=t.pending;tables=t.tables;render()}else render()}
 $("#openBtn").onclick=async()=>{$("#openBtn").disabled=true;$("#openBtn").textContent="Opening…";try{const j=await api("/api/open",{method:"POST",body:JSON.stringify({file:$("#file").value})});textures=j.textures;pending=j.pending;cats.clear();onlyUnused=onlyChanged=false;const t=await api("/api/textures");tables=t.tables;render();
  const card=textures.some(x=>x.name.startsWith("cardtitle_")||x.name.startsWith("cardicon_")),v=$("#file").value,allMaps=v.startsWith("*"),shown=$("#file").selectedOptions[0].textContent;
  toast((allMaps?"Opened "+shown+": "+textures.length+" textures, "+textures.filter(x=>x.maps.length+(x.files||[]).length>1).length+" of them in more than one file":"Opened "+shown+": "+textures.length+" textures")

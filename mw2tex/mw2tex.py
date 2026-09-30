@@ -170,6 +170,8 @@ class FastFile:
                 if w:
                     image["levels"].append({"level": k, "width": w, "height": h, "mips": info >> 26,
                                             "entry": index * LEVELS_PER_IMAGE + k})
+            image["paks"] = sorted({self.table[lv["entry"]][0] for lv in image["levels"]
+                                    if lv["entry"] < len(self.table)})
         else:
             if name is None:
                 return  # no name found; can't be picked by name
