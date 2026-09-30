@@ -19,7 +19,8 @@ import zone as zone_mod
 BLOCK_SHIFT = 28
 OFFSET_MASK = (1 << BLOCK_SHIFT) - 1
 # Blocks whose place only moves forward during a load (temp is reused, so it is not).
-GROWING = (zone_mod.PHYSICAL, zone_mod.RUNTIME, zone_mod.VIRTUAL, zone_mod.LARGE, zone_mod.CALLBACK)
+GROWING = (zone_mod.PHYSICAL, zone_mod.RUNTIME, zone_mod.VIRTUAL, zone_mod.LARGE, zone_mod.CALLBACK,
+           zone_mod.VERTEX, zone_mod.INDEX)
 
 
 class RelocateError(Exception):
@@ -108,17 +109,19 @@ class Layout:
         return cls([sp[:4] for sp in r.spans if sp[0] in GROWING], r.block_pos, r.block_max)
 
     def dumps(self):
-        head = struct.pack(">I12I", len(self.spans), *(self.block_pos + self.block_max))
+        nb = len(self.block_pos)
+        head = struct.pack(">II%dI" % (2 * nb), len(self.spans), nb, *(self.block_pos + self.block_max))
         body = b"".join(struct.pack(">BIIi", *sp) for sp in self.spans)
         return zlib.compress(head + body, 6)
 
     @classmethod
     def loads(cls, data):
         data = zlib.decompress(data)
-        v = struct.unpack_from(">I12I", data, 0)
-        n = v[0]
-        spans = [struct.unpack_from(">BIIi", data, 52 + 13 * i) for i in range(n)]
-        return cls(spans, v[1:7], v[7:13])
+        n, nb = struct.unpack_from(">II", data, 0)
+        v = struct.unpack_from(">%dI" % (2 * nb), data, 8)
+        at = 8 + 8 * nb
+        spans = [struct.unpack_from(">BIIi", data, at + 13 * i) for i in range(n)]
+        return cls(spans, v[:nb], v[nb:])
 
 
 def relocate(new_zone, old_r, sch=None, index_map=None):
@@ -132,21 +135,23 @@ def relocate(new_zone, old_r, sch=None, index_map=None):
         raise RelocateError("the rebuilt zone doesn't read back cleanly (stopped at %d of %d)"
                             % (new_r.pos, len(new_zone)))
     table = _table(old_r, new_r, index_map)
+    E, nb = new_r.E, new_r.plat.blocks
     moved = 0
     for zp, val in new_r.alias_list:
         if zp is None:
             continue
         nv = _map(table, val)
         if nv != val:
-            struct.pack_into(">I", new_zone, zp, nv)
+            struct.pack_into(E + "I", new_zone, zp, nv)
             moved += 1
-    hdr = list(struct.unpack_from(">8I", new_zone, 0))
-    hdr[0] = len(new_zone) - 32
-    for b in range(6):
+    fmt = E + "%dI" % (2 + nb)
+    hdr = list(struct.unpack_from(fmt, new_zone, 0))
+    hdr[0] = len(new_zone) - new_r.plat.header_bytes
+    for b in range(nb):
         if b == zone_mod.TEMP:
             delta = new_r.block_max[b] - old_r.block_max[b]
         else:
             delta = new_r.block_pos[b] - old_r.block_pos[b]
         hdr[2 + b] += delta
-    struct.pack_into(">8I", new_zone, 0, *hdr)
+    struct.pack_into(fmt, new_zone, 0, *hdr)
     return bytes(new_zone), moved

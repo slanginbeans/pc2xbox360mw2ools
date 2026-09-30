@@ -158,8 +158,17 @@ class StructInfo:
         return None
 
 
+PLATFORM_DEFS = {"xbox": DEFS, "pc": os.path.join(HERE, "defs_pc")}
+ENDIAN = {"xbox": ">", "pc": "<"}
+
+
 class Schema:
-    def __init__(self, header=os.path.join(DEFS, "iw4_assets.h"), commands=os.path.join(DEFS, "commands.txt")):
+    def __init__(self, header=None, commands=None, platform="xbox"):
+        d = PLATFORM_DEFS[platform]
+        header = header or os.path.join(d, "iw4_assets.h")
+        commands = commands or os.path.join(d, "commands.txt")
+        self.platform = platform
+        self.endian = ENDIAN[platform]
         self.defs = cdefs.Defs(header)
         self.infos = {}
         self.blocks = []
@@ -472,11 +481,11 @@ class Schema:
         return [m for m in info.ordered if not m.is_leaf and not self.ignored(m)]
 
 
-_schema = None
+_schemas = {}
 
 
-def load():
-    global _schema
-    if _schema is None:
-        _schema = Schema()
-    return _schema
+def load(platform="xbox"):
+    """The definitions for the Xbox 360 (TU6) or the PC (version 276) game."""
+    if platform not in _schemas:
+        _schemas[platform] = Schema(platform=platform)
+    return _schemas[platform]

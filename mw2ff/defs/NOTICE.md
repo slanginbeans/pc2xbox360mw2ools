@@ -9,3 +9,6 @@ Changes made here: Xbox 360 TU6 layouts and load order for shaders, vertex decla
 materials, techniques, images, menus, models and model surfaces, sounds, animations, the
 sound driver globals asset, map world, collision, glass and water data. Each change was
 checked against the TU6 executable's own loading code.
+
+`../defs_pc/` holds the same OpenAssetTools files unchanged (commit f8f54426), for reading PC
+(version 276) fastfiles such as IW4x maps.

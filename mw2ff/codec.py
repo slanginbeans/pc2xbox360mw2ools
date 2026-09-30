@@ -46,22 +46,23 @@ def _is_bytes_type(t):
     return isinstance(t, Prim) and t.size == 1
 
 
-def _float(raw):
-    v = struct.unpack(">f", raw)[0]
-    if math.isnan(v) or math.isinf(v) or struct.pack(">f", v) != raw:
+def _float(raw, E=">"):
+    v = struct.unpack(E + "f", raw)[0]
+    if math.isnan(v) or math.isinf(v) or struct.pack(E + "f", v) != raw:
         return {"f32": raw.hex()}
     return v
 
 
-def _float_raw(v):
+def _float_raw(v, E=">"):
     if isinstance(v, dict):
         return bytes.fromhex(v["f32"])
-    return struct.pack(">f", v)
+    return struct.pack(E + "f", v)
 
 
 class Codec:
     def __init__(self, schema):
         self.schema = schema
+        self.E = getattr(schema, "endian", ">")
         self.types = dict(schema.defs.types)
         for info in schema.infos.values():
             self.types.setdefault(info.ctype.name, info.ctype)
@@ -75,18 +76,18 @@ class Codec:
 
     def _decode_scalar(self, t, raw):
         if isinstance(t, Prim) and t.fmt == "f":
-            return _float(raw)
+            return _float(raw, self.E)
         if isinstance(t, Prim) and t.fmt == "d":
-            v = struct.unpack(">d", raw)[0]
+            v = struct.unpack(self.E + "d", raw)[0]
             return {"f64": raw.hex()} if (math.isnan(v) or math.isinf(v)) else v
-        return struct.unpack(">" + t.fmt, raw)[0]
+        return struct.unpack(self.E + t.fmt, raw)[0]
 
     def _encode_scalar(self, t, v):
         if isinstance(t, Prim) and t.fmt == "f":
-            return _float_raw(v)
+            return _float_raw(v, self.E)
         if isinstance(t, Prim) and t.fmt == "d":
-            return bytes.fromhex(v["f64"]) if isinstance(v, dict) else struct.pack(">d", v)
-        return struct.pack(">" + t.fmt, v)
+            return bytes.fromhex(v["f64"]) if isinstance(v, dict) else struct.pack(self.E + "d", v)
+        return struct.pack(self.E + t.fmt, v)
 
     # ------------------------------------------------------------ members
 
@@ -117,7 +118,7 @@ class Codec:
     def _decode_member(self, m, raw, off):
         mods = m.mods
         if mods and mods[0] == PTR:
-            return ptr_value(struct.unpack_from(">I", raw, off + m.offset)[0])
+            return ptr_value(struct.unpack_from(self.E + "I", raw, off + m.offset)[0])
         dims = []
         for x in mods:
             if x == PTR:
@@ -128,16 +129,16 @@ class Codec:
             n = 1
             for d in dims:
                 n *= d
-            return [ptr_value(struct.unpack_from(">I", raw, off + m.offset + 4 * i)[0]) for i in range(n)]
+            return [ptr_value(struct.unpack_from(self.E + "I", raw, off + m.offset + 4 * i)[0]) for i in range(n)]
         if m.bits is not None:
-            unit = struct.unpack_from(">" + {1: "B", 2: "H", 4: "I", 8: "Q"}[m.unit], raw, off + m.offset)[0]
+            unit = struct.unpack_from(self.E + {1: "B", 2: "H", 4: "I", 8: "Q"}[m.unit], raw, off + m.offset)[0]
             return (unit >> m.bitpos) & ((1 << m.bits) - 1)
         return self._decode_array(m.type, dims, raw, off + m.offset)
 
     def _encode_member(self, m, v, out, off):
         mods = m.mods
         if mods and mods[0] == PTR:
-            struct.pack_into(">I", out, off + m.offset, ptr_raw(v))
+            struct.pack_into(self.E + "I", out, off + m.offset, ptr_raw(v))
             return
         dims = []
         for x in mods:
@@ -146,10 +147,10 @@ class Codec:
             dims.append(x)
         if len(dims) < len(mods):
             for i, p in enumerate(v):
-                struct.pack_into(">I", out, off + m.offset + 4 * i, ptr_raw(p))
+                struct.pack_into(self.E + "I", out, off + m.offset + 4 * i, ptr_raw(p))
             return
         if m.bits is not None:
-            fmt = ">" + {1: "B", 2: "H", 4: "I", 8: "Q"}[m.unit]
+            fmt = self.E + {1: "B", 2: "H", 4: "I", 8: "Q"}[m.unit]
             unit = struct.unpack_from(fmt, out, off + m.offset)[0]
             mask = ((1 << m.bits) - 1) << m.bitpos
             unit = (unit & ~mask) | ((v << m.bitpos) & mask)
@@ -213,10 +214,10 @@ class Codec:
                 rec["hex"] = raw[:-1].hex()
             return rec
         if kind == "ptrs":
-            rec["v"] = [ptr_value(x) for x in struct.unpack(">%dI" % desc[1], raw)]
+            rec["v"] = [ptr_value(x) for x in struct.unpack(self.E + "%dI" % desc[1], raw)]
             return rec
         if kind == "u32":
-            rec["v"] = list(struct.unpack(">%dI" % desc[1], raw))
+            rec["v"] = list(struct.unpack(self.E + "%dI" % desc[1], raw))
             return rec
         if kind == "raw":
             return self._blob(rec, raw, blobs)
@@ -284,9 +285,9 @@ class Codec:
                 return rec["s"].encode("utf-8") + b"\0"
             return bytes.fromhex(rec["hex"]) + b"\0"
         if kind == "ptrs":
-            return struct.pack(">%dI" % len(rec["v"]), *[ptr_raw(v) for v in rec["v"]])
+            return struct.pack(self.E + "%dI" % len(rec["v"]), *[ptr_raw(v) for v in rec["v"]])
         if kind == "u32":
-            return struct.pack(">%dI" % len(rec["v"]), *rec["v"])
+            return struct.pack(self.E + "%dI" % len(rec["v"]), *rec["v"])
         t = self.type_by_name(rec["t"])
         if "hex" in rec:
             return bytes.fromhex(rec["hex"])

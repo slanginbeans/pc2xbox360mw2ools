@@ -52,7 +52,10 @@ def script_text(asset, blobs, sch):
         return b""
     data = _raw(c, body[-1], blob)
     if head["compressedLen"] > 0:
-        return zlib.decompress(data)
+        try:
+            return zlib.decompress(data)
+        except zlib.error:
+            return data      # not compressed after all (IW4x ZoneBuilder writes a note like this)
     return data[:head["len"]]
 
 
@@ -151,7 +154,8 @@ def asset_list(doc):
 
 def _set_count(doc, count):
     head = bytearray(bytes.fromhex(doc["header"]))
-    struct.pack_into(">I", head, 40, count)
+    E = "<" if doc.get("platform") == "pc" else ">"
+    struct.pack_into(E + "I", head, len(head) - 8, count)
     doc["header"] = head.hex()
 
 

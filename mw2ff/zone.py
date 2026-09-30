@@ -35,11 +35,48 @@ ASSET_STRUCTS = {
     40: "AssetAddonMapEnts",
 }
 
-# Memory blocks on the 360 (the zone header lists six sizes).
-TEMP, PHYSICAL, RUNTIME, VIRTUAL, LARGE, CALLBACK = range(6)
+# PC (version 276) asset types: the 360 list plus vertex shaders and vertex declarations.
+PC_ASSET_TYPES = [
+    "physpreset", "phys_collmap", "xanim", "xmodelsurfs", "xmodel", "material", "pixelshader",
+    "vertexshader", "vertexdecl", "techset", "image", "sound", "sndcurve", "loaded_sound",
+    "col_map_sp", "col_map_mp", "com_map", "game_map_sp", "game_map_mp", "map_ents", "fx_map",
+    "gfx_map", "lightdef", "ui_map", "font", "menufile", "menu", "localize", "weapon",
+    "snddriverglobals", "fx", "impactfx", "aitype", "mptype", "character", "xmodelalias",
+    "rawfile", "stringtable", "leaderboarddef", "structureddatadef", "tracer", "vehicle",
+    "addon_map_ents",
+]
+PC_ASSET_STRUCTS = {
+    0: "AssetPhysPreset", 1: "AssetPhysCollMap", 2: "AssetXAnim", 4: "AssetXModel", 5: "AssetMaterial",
+    6: "AssetPixelShader", 7: "AssetVertexShader", 8: "AssetVertexDecl", 9: "AssetTechniqueSet",
+    10: "AssetImage", 11: "AssetSound", 12: "AssetSoundCurve", 13: "AssetLoadedSound", 14: "AssetClipMapMp",
+    15: "AssetClipMapMp", 16: "AssetComWorld", 17: "AssetGameWorldSp", 18: "AssetGameWorldMp",
+    19: "AssetMapEnts", 20: "AssetFxWorld", 21: "AssetGfxWorld", 22: "AssetLightDef", 24: "AssetFont",
+    25: "AssetMenuList", 26: "AssetMenu", 27: "AssetLocalize", 28: "AssetWeapon", 30: "AssetFx",
+    31: "AssetImpactFx", 36: "AssetRawFile", 37: "AssetStringTable", 38: "AssetLeaderboard",
+    39: "AssetStructuredDataDef", 40: "AssetTracer", 41: "AssetVehicle", 42: "AssetAddonMapEnts",
+}
+
+# Memory blocks. The 360 zone header lists six sizes (vertex and index data go in the physical
+# block); the PC one lists eight.
+TEMP, PHYSICAL, RUNTIME, VIRTUAL, LARGE, CALLBACK, VERTEX, INDEX = range(8)
 BLOCK_MAP = {"XFILE_BLOCK_TEMP": TEMP, "XFILE_BLOCK_PHYSICAL": PHYSICAL, "XFILE_BLOCK_RUNTIME": RUNTIME,
              "XFILE_BLOCK_VIRTUAL": VIRTUAL, "XFILE_BLOCK_LARGE": LARGE, "XFILE_BLOCK_CALLBACK": CALLBACK,
              "XFILE_BLOCK_VERTEX": PHYSICAL, "XFILE_BLOCK_INDEX": PHYSICAL}
+PC_BLOCK_MAP = dict(BLOCK_MAP, XFILE_BLOCK_VERTEX=VERTEX, XFILE_BLOCK_INDEX=INDEX)
+
+
+class Platform:
+    def __init__(self, name, endian, blocks, types, structs, block_map):
+        self.name, self.E, self.blocks = name, endian, blocks
+        self.types, self.structs, self.block_map = types, structs, block_map
+        self.header_bytes = 8 + 4 * blocks            # size, external size (PC) / 0, block sizes
+        self.list_bytes = 16                          # script string count+ptr, asset count+ptr
+
+
+PLATFORMS = {
+    "xbox": Platform("xbox", ">", 6, ASSET_TYPES, ASSET_STRUCTS, BLOCK_MAP),
+    "pc": Platform("pc", "<", 8, PC_ASSET_TYPES, PC_ASSET_STRUCTS, PC_BLOCK_MAP),
+}
 
 
 class ZoneError(Exception):
@@ -95,7 +132,7 @@ class Inst:
     def __init__(self, info, buf, off=0, index=0, where=None):
         self.info, self.buf, self.off, self.index, self.where = info, buf, off, index, where
 
-    def field(self, chain, idx=()):
+    def field(self, chain, idx=(), E=">"):
         """Value of a member chain (list of MemberInfo), with optional array indices."""
         off = self.off
         for mi in chain[:-1]:
@@ -106,7 +143,7 @@ class Inst:
         t = m.type
         dims = [x for x in m.mods if x != PTR]
         if m.mods and m.mods[0] == PTR:
-            return struct.unpack_from(">I", self.buf, off)[0]
+            return struct.unpack_from(E + "I", self.buf, off)[0]
         if idx:
             stride = t.size
             for d in dims[len(idx):]:
@@ -117,7 +154,7 @@ class Inst:
                     sub *= d
                 off += int(i) * sub
         if isinstance(t, (Prim, Enum)):
-            v = struct.unpack_from(">" + t.fmt, self.buf, off)[0]
+            v = struct.unpack_from(E + t.fmt, self.buf, off)[0]
             if m.bits is not None:
                 v = (v >> m.bitpos) & ((1 << m.bits) - 1)
             return v
@@ -130,13 +167,16 @@ class Inst:
 class Reader:
     def __init__(self, zone, sch=None, trace=False, record=False):
         self.s = sch or schema_mod.load()
+        self.plat = PLATFORMS[self.s.platform]
+        self.E = self.plat.E
+        nb = self.plat.blocks
         self.zone = zone
         self.pos = 0
         self.trace = [] if trace else None
-        hdr = struct.unpack_from(">8I", zone, 0)
+        hdr = struct.unpack_from(self.E + "%dI" % (2 + nb), zone, 0)
         self.header = hdr
-        self.block_sizes = list(hdr[2:8])
-        self.block_pos = [0] * 6
+        self.block_sizes = list(hdr[2:2 + nb])
+        self.block_pos = [0] * nb
         self.block = TEMP
         self.stack = []
         self.vars = {}
@@ -155,8 +195,8 @@ class Reader:
         # every pointer that refers back to earlier data as (zone pos of the pointer, value).
         self.spans = []
         self.alias_list = []
-        self.block_max = [0] * 6
-        self.pos = 32
+        self.block_max = [0] * nb
+        self.pos = self.plat.header_bytes
 
     # ------------------------------------------------------------ stream
 
@@ -252,11 +292,11 @@ class Reader:
             if data is None:
                 raise ZoneError("expression needs %s data but none is loaded" % chain[-1])
             t = m.type
-            return struct.unpack_from(">" + t.fmt, data, int(idx[0]) * t.size)[0]
-        return inst.field(chain, idx)
+            return struct.unpack_from(self.E + t.fmt, data, int(idx[0]) * t.size)[0]
+        return inst.field(chain, idx, self.E)
 
     def block_of(self, mi):
-        return BLOCK_MAP[mi.block.name] if mi.block else None
+        return self.plat.block_map[mi.block.name] if mi.block else None
 
     @staticmethod
     def align_of(info):
@@ -293,7 +333,7 @@ class Reader:
             self.push(VIRTUAL)
             pushed = True
         elif info.block:
-            self.push(BLOCK_MAP[info.block.name])
+            self.push(self.plat.block_map[info.block.name])
             pushed = True
         if info.is_union:
             for mi in s.used_members(info):
@@ -395,7 +435,7 @@ class Reader:
             b = bt if cond(self.lookup) else bf
         push = b is not None and not (b.kind == "normal" and b.default)
         if push:
-            self.push(BLOCK_MAP[b.name])
+            self.push(self.plat.block_map[b.name])
         self.pointer_check(inst, mi, mod_pos, combined, kind, loc)
         if push:
             self.pop()
@@ -405,7 +445,7 @@ class Reader:
         check = kind in ("array", "ptrarray", "single") and not (kind == "ptrarray" and is_array) \
             and not (kind == "single" and mi.is_string)
         if check:
-            val = struct.unpack_from(">I", inst.buf, loc)[0]
+            val = struct.unpack_from(self.E + "I", inst.buf, loc)[0]
             if not val:
                 return
             self.reuse(inst, mi, mod_pos, combined, kind, loc, val)
@@ -418,7 +458,7 @@ class Reader:
         if not make or not mi.is_reusable:
             return self.alloc_member(inst, mi, mod_pos, combined, kind, loc, val)
         if val is None:
-            val = struct.unpack_from(">I", inst.buf, loc)[0]
+            val = struct.unpack_from(self.E + "I", inst.buf, loc)[0]
         in_temp = mi.block is not None and mi.block.kind == "temp"
         if val == FOLLOWING or (in_temp and val == INSERT):
             return self.alloc_member(inst, mi, mod_pos, combined, kind, loc, val)
@@ -449,7 +489,7 @@ class Reader:
         self.alloc(align)
         in_temp = mi.block is not None and mi.block.kind == "temp"
         if val is None:
-            val = struct.unpack_from(">I", inst.buf, loc)[0]
+            val = struct.unpack_from(self.E + "I", inst.buf, loc)[0]
         if in_temp and val == INSERT:
             self.insert_pointer()
         self.type_check(inst, mi, mod_pos, combined, kind, loc)
@@ -563,7 +603,7 @@ class Reader:
             loc = 0
         t = mi.type
         for i in range(count):
-            val = struct.unpack_from(">I", buf, loc + 4 * i)[0]
+            val = struct.unpack_from(self.E + "I", buf, loc + 4 * i)[0]
             if not val:
                 continue
             if t is not None and t.asset:
@@ -583,7 +623,7 @@ class Reader:
     # ------------------------------------------------------------ strings and assets
 
     def load_xstring(self, buf, loc):
-        val = struct.unpack_from(">I", buf, loc)[0]
+        val = struct.unpack_from(self.E + "I", buf, loc)[0]
         if not val:
             return None
         if val != FOLLOWING:
@@ -605,7 +645,7 @@ class Reader:
             self.load_xstring(buf, loc + 4 * i)
 
     def load_asset_ptr(self, info, buf, loc):
-        val = struct.unpack_from(">I", buf, loc)[0]
+        val = struct.unpack_from(self.E + "I", buf, loc)[0]
         in_temp = info.block is not None and info.block.kind == "temp"
         if in_temp:
             self.push(TEMP)
@@ -627,7 +667,7 @@ class Reader:
     # ------------------------------------------------------------ zone
 
     def walk(self, types=None):
-        ss_count, ss_ptr, count, ptr = struct.unpack_from(">4I", self.zone, self.pos)
+        ss_count, ss_ptr, count, ptr = struct.unpack_from(self.E + "4I", self.zone, self.pos)
         self.list_header = (ss_count, ss_ptr, count, ptr)
         self.pos += 16
         self.script_strings = []
@@ -644,13 +684,13 @@ class Reader:
             self.alloc(4)
             buf, _ = self.read(8 * count, ("u32", 2 * count))
             for i in range(count):
-                t, p = struct.unpack_from(">II", buf, 8 * i)
+                t, p = struct.unpack_from(self.E + "II", buf, 8 * i)
                 entries.append((t, p))
             for i, (t, p) in enumerate(entries):
-                name = ASSET_STRUCTS.get(t)
+                name = self.plat.structs.get(t)
                 if name is None:
                     raise ZoneError("asset %d has unsupported type %d (%s) at %d" % (
-                        i, t, ASSET_TYPES[t] if t < len(ASSET_TYPES) else "?", self.pos))
+                        i, t, self.plat.types[t] if t < len(self.plat.types) else "?", self.pos))
                 info = self.s.assets[name]
                 self.cur_asset = (i, t)
                 self.load_asset_ptr(info, buf, 8 * i + 4)

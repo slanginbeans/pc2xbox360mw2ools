@@ -31,23 +31,60 @@ import schema as schema_mod  # noqa: E402
 import text as text_mod  # noqa: E402
 import zone as zone_mod  # noqa: E402
 
-HEADER_BYTES = 48      # zone header (8 words) + asset list header (4 words)
+PC_VERSION = b"\x14\x01\x00\x00"     # 276, little-endian: the PC game's fastfile version
 NAME_MEMBERS = ("name", "szInternalName", "aliasName", "filename", "szDisplayName")
 
 
 # ---------------------------------------------------------------- fastfile container
 
+class PCFastFile:
+    """A PC (version 276) fastfile: magic, version, a flag byte, a timestamp, then one zlib
+    stream. header_end + 8 is where the stream starts, like the 360 reader's."""
+    HEAD = 21
+
+    def __init__(self, path):
+        self.path = path
+        self.raw = open(path, "rb").read()
+        if self.raw[:8] not in (b"IWffu100",) or self.raw[8:12] != PC_VERSION:
+            raise ValueError("%s is not a PC MW2 fastfile" % path)
+        self.header_end = self.HEAD - 8
+        self.zone = bytearray(zlib.decompress(self.raw[self.HEAD:]))
+
+
+def platform_of(path):
+    with open(path, "rb") as fh:
+        head = fh.read(12)
+    return "pc" if head[8:12] == PC_VERSION else "xbox"
+
+
 def read_fastfile(path):
-    """Returns (container info, decompressed zone)."""
+    """Returns (container info, decompressed zone). Works for 360 and PC files; the
+    container's .platform says which."""
+    if platform_of(path) == "pc":
+        ff = PCFastFile(path)
+        ff.platform = "pc"
+        return ff, bytes(ff.zone)
     import mw2tex
     ff = mw2tex.FastFile(path)
+    ff.platform = "xbox"
     return ff, bytes(ff.zone)
+
+
+def zone_platform(zone):
+    """Guess the platform from a zone alone: the PC header has eight block sizes and
+    little-endian numbers."""
+    size = struct.unpack_from("<I", zone, 0)[0]
+    return "pc" if size == len(zone) - 40 else "xbox"
+
+
+def schema_for(platform):
+    return schema_mod.load(platform)
 
 
 # ---------------------------------------------------------------- zone <-> records
 
-def walk(zone):
-    r = zone_mod.Reader(zone, record=True)
+def walk(zone, platform=None):
+    r = zone_mod.Reader(zone, schema_for(platform or zone_platform(zone)), record=True)
     r.walk()
     if r.pos != len(zone):
         raise zone_mod.ZoneError("walk stopped at %d of %d bytes" % (r.pos, len(zone)))
@@ -79,7 +116,7 @@ def listing(r):
         by_index[a] = (min(lo, rec[0]), max(hi, rec[0] + rec[1]))
     for i, (t, p) in enumerate(r.entries):
         lo, hi = by_index.get(i, (0, 0))
-        out.append((i, zone_mod.ASSET_TYPES[t], asset_name(r, i), lo, hi - lo))
+        out.append((i, r.plat.types[t], asset_name(r, i), lo, hi - lo))
     return out
 
 
@@ -90,7 +127,8 @@ def decode(zone, r=None):
     c = codec_mod.Codec(r.s)
     blobs = {-1: bytearray()}
     records = {-1: []}
-    pos = HEADER_BYTES
+    head_bytes = r.plat.header_bytes + r.plat.list_bytes
+    pos = head_bytes
     for (at, n, desc, a, path) in r.records:
         if at != pos:
             raise zone_mod.ZoneError("gap in the walk at %d (next record at %d)" % (pos, at))
@@ -104,14 +142,15 @@ def decode(zone, r=None):
         raise zone_mod.ZoneError("walk ended at %d of %d" % (pos, len(zone)))
     assets = []
     for i, (t, p) in enumerate(r.entries):
-        assets.append({"index": i, "type": zone_mod.ASSET_TYPES[t], "type_id": t,
+        assets.append({"index": i, "type": r.plat.types[t], "type_id": t,
                        "name": asset_name(r, i), "records": records.get(i, [])})
-    doc = {"format": "mw2ff-1", "header": zone[:HEADER_BYTES].hex(), "zone": records[-1], "assets": assets}
+    doc = {"format": "mw2ff-1", "platform": r.plat.name, "header": zone[:head_bytes].hex(), "zone": records[-1],
+           "assets": assets}
     return doc, blobs
 
 
 def encode(doc, blobs, sch=None):
-    c = codec_mod.Codec(sch or schema_mod.load())
+    c = codec_mod.Codec(sch or schema_for(doc.get("platform", "xbox")))
     out = bytearray(bytes.fromhex(doc["header"]))
     for rec in doc["zone"]:
         out += c.encode(rec, blobs[-1])
@@ -125,7 +164,7 @@ def encode(doc, blobs, sch=None):
 def build(doc, blobs, layout, sch=None):
     """Encode a document whose pieces may have changed size (or had assets added or removed)
     and lay the zone out again: layout is relocate.Layout of the original zone (or its Reader)."""
-    sch = sch or schema_mod.load()
+    sch = sch or schema_for(doc.get("platform", "xbox"))
     raw = encode(doc, blobs, sch)
     zone, _ = relocate_mod.relocate(raw, layout, sch, text_mod.index_map(doc))
     return zone
@@ -161,7 +200,8 @@ def unpack(ff_path, out_dir, log=print):
     doc, blobs = decode(zone, r)
     sch = r.s
     os.makedirs(os.path.join(out_dir, "assets"), exist_ok=True)
-    index = {"format": doc["format"], "source": os.path.basename(ff_path), "header": doc["header"],
+    index = {"format": doc["format"], "platform": doc["platform"], "source": os.path.basename(ff_path),
+             "header": doc["header"],
              "zone": doc["zone"], "assets": []}
     open(os.path.join(out_dir, "zone.bin"), "wb").write(bytes(blobs[-1]))
     for a in doc["assets"]:
@@ -205,7 +245,8 @@ def unpack(ff_path, out_dir, log=print):
 def pack(in_dir, ff_path, log=print):
     index = json.load(open(os.path.join(in_dir, "zone.json"), encoding="utf-8"))
     blobs = {-1: bytearray(open(os.path.join(in_dir, "zone.bin"), "rb").read())}
-    doc = {"header": index["header"], "zone": index["zone"], "assets": []}
+    doc = {"platform": index.get("platform", "xbox"), "header": index["header"], "zone": index["zone"],
+           "assets": []}
     for a in index["assets"]:
         d = os.path.join(in_dir, "assets", a["folder"])
         data = json.load(open(os.path.join(d, "asset.json"), encoding="utf-8"))
@@ -213,7 +254,7 @@ def pack(in_dir, ff_path, log=print):
                               "name": a["name"], "records": data["records"]})
         p = os.path.join(d, "data.bin")
         blobs[a["index"]] = bytearray(open(p, "rb").read()) if os.path.exists(p) else bytearray()
-    sch = schema_mod.load()
+    sch = schema_for(doc["platform"])
     for note in import_texts(in_dir, index, doc, blobs, sch):
         log(note)
     layout_path = os.path.join(in_dir, "layout.bin")
@@ -270,8 +311,13 @@ def import_texts(in_dir, index, doc, blobs, sch):
 
 
 def write_container(container, zone, path):
-    """container: the original file up to and including its two size words. The zone is
-    recompressed and written unsigned, the same way mw2tex writes files."""
+    """container: the original file up to and including its two size words (360), or its
+    21-byte header (PC). The zone is recompressed and written unsigned, the same way mw2tex
+    writes files."""
+    if container[8:12] == PC_VERSION:
+        with open(path, "wb") as fh:
+            fh.write(bytes(container[:PCFastFile.HEAD]) + zlib.compress(zone, 9))
+        return
     head = bytearray(container[:-8])
     size0, size1 = struct.unpack(">II", container[-8:])
     head[:8] = b"IWffu100"
