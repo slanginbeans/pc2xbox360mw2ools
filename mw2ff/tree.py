@@ -61,6 +61,10 @@ class PtrList(list):
     raw = None
 
 
+class Tail(list):
+    """A copy of the end of another array, written with as many items as the file asks for."""
+
+
 class Ref:
     """An alias: val as streamed; target/rel/t are filled in once the walk has finished
     (the object it points into, the byte offset inside it, and that object's element type)."""
@@ -102,6 +106,36 @@ def member_value(d, t, m, codec):
         d[k] = codec._decode_member(m, bytes.fromhex(d["union"]), 0)
         d.setdefault("_um", []).append(k)
     return d[k]
+
+
+class ZBW(bytearray):
+    """Written bytes that can still be patched (a pointer turned from alias into data)."""
+    zpos = None
+
+
+def slot_asset(r):
+    """If alias r points at a pointer to an asset (an asset list entry, a temp asset's own
+    slot, or a pointer member of a struct), that asset (or Ref), else None."""
+    t, tgt, rel = r.t, r.target, r.rel
+    if isinstance(tgt, AssetEntry) and rel == 4:
+        return tgt[1]
+    if isinstance(tgt, InsertSlot):
+        return tgt.asset
+    if not isinstance(t, Compound) or t.kind != "struct":
+        return None
+    if isinstance(tgt, list):
+        i, rel = divmod(rel, t.size)
+        if i >= len(tgt):
+            return None
+        tgt = tgt[i]
+    if not isinstance(tgt, dict):
+        return None
+    for m in t.members:
+        if m.offset == rel and m.mods and m.mods[0] == PTR:
+            c = tgt.get("@", {}).get((mkey(t, m), ()))
+            if (isinstance(c, dict) and "_asset" in c) or isinstance(c, Ref):
+                return c
+    return None
 
 
 def nav(v, idx):
@@ -445,6 +479,37 @@ class TreeWriter(zone_mod.Reader):
         rel = self.map_rel(r) if self.map_rel else r.rel
         return ((at[0] << BLOCK_SHIFT) | (at[1] + rel)) + 1
 
+    def _forward(self, r, asset=False):
+        """What to write in place of alias r when its target isn't written yet (it comes later
+        in this file's order, e.g. after copying stock assets in): the target itself, else
+        None."""
+        if not isinstance(r, Ref) or r.target is None:
+            return None
+        if asset:
+            a = slot_asset(r)
+            if a is not None:
+                if isinstance(a, Ref):
+                    return self._forward(a, True) if id(a.target) not in self.loc else None
+                return a if id(a) not in self.loc and "_slot" not in a else None
+        if id(r.target) in self.loc or r.rel:
+            return None
+        return r.target
+
+    def _patch(self, buf, loc, val):
+        struct.pack_into(self.E + "I", buf, loc, val)
+        zp = zone_mod.zpos_of(buf, loc)
+        if zp is not None:
+            struct.pack_into(self.E + "I", self.zone, zp, val)
+
+    def reuse(self, inst, mi, mod_pos, combined, kind, loc, val):
+        if isinstance(self._obj, Ref) and not self.is_asset(mi) and not mi.is_string:
+            t = self._forward(self._obj)
+            if t is not None:
+                self._patch(inst.buf, loc, FOLLOWING)
+                self._obj = t
+                return self.alloc_member(inst, mi, mod_pos, combined, kind, loc, FOLLOWING)
+        return super().reuse(inst, mi, mod_pos, combined, kind, loc, val)
+
     def alias(self, buf, loc, val):
         r = self._obj
         if isinstance(r, Ref):
@@ -513,7 +578,10 @@ class TreeWriter(zone_mod.Reader):
         return self._fixed(t, v)
 
     def _enc_struct(self, t, d, out, off, size):
-        self.codec._encode_one(t, self._fixed(t, d), out, off, size)
+        try:
+            self.codec._encode_one(t, self._fixed(t, d), out, off, size)
+        except (KeyError, TypeError, IndexError, ValueError, struct.error) as e:
+            raise ZoneError("can't write %s at %s: %s %s" % (t.name, " > ".join(self.path), type(e).__name__, e))
         if self.keep_fixes and isinstance(d, dict):
             for o, h in d.get("_fix", ()):
                 b = bytes.fromhex(h)
@@ -560,6 +628,8 @@ class TreeWriter(zone_mod.Reader):
             return bytes(out)
         count = desc[2]
         items = [obj] if (count == 1 and not isinstance(obj, list)) else obj
+        if isinstance(items, Tail) and len(items) > count:
+            items = items[:count]
         if len(items) != count:
             raise ZoneError("%s: %d items to write, the file says %d (at %s)"
                             % (t.name, len(items), count, " > ".join(self.path)))
@@ -581,7 +651,7 @@ class TreeWriter(zone_mod.Reader):
                 raise ZoneError("%s: wrote %d bytes, expected %d (at %s)" % (desc[0], len(raw), n, " > ".join(self.path)))
             n = len(raw)
             zp = self.pos
-            data = ZB(raw)
+            data = ZBW(raw)
             data.zpos = zp
             self.zone += raw
             if self.records is not None and n:
@@ -653,6 +723,10 @@ class TreeWriter(zone_mod.Reader):
                 self._obj = c
                 self.load_asset_ptr(t, buf, loc + 4 * i)
                 continue
+            if mi.is_reusable and val != FOLLOWING and self._forward(c) is not None:
+                c = self._forward(c)
+                val = FOLLOWING
+                self._patch(buf, loc + 4 * i, val)
             if mi.is_reusable and val != FOLLOWING:
                 self._obj = c
                 self.alias(buf, loc + 4 * i, val)
@@ -672,6 +746,10 @@ class TreeWriter(zone_mod.Reader):
         val = struct.unpack_from(self.E + "I", buf, loc)[0]
         if not val:
             return None
+        if val != FOLLOWING and self._forward(obj) is not None:
+            obj = self._forward(obj)
+            val = FOLLOWING
+            self._patch(buf, loc, val)
         if val != FOLLOWING:
             self._obj = obj
             self.alias(buf, loc, val)
@@ -702,6 +780,10 @@ class TreeWriter(zone_mod.Reader):
         d, self._obj = self._obj, NONE
         val = struct.unpack_from(self.E + "I", buf, loc)[0]
         in_temp = info.block is not None and info.block.kind == "temp"
+        if val and val not in (FOLLOWING, INSERT) and self._forward(d, asset=True) is not None:
+            d = self._forward(d, asset=True)
+            val = FOLLOWING
+            self._patch(buf, loc, val)
         if in_temp:
             self.push(TEMP)
         inst = None
