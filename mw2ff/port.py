@@ -524,19 +524,21 @@ class Porter:
         self.pc = codec_mod.Codec(self.P)
         self.xc = codec_mod.Codec(self.X)
         self.done = set()
-        self.iwd = iwd
-        self.missing_images = []
+        # The map's own .iwd files: pictures it brings. The game looks names up without
+        # caring about case (Windows), so the index doesn't either.
+        self.iwds = [] if iwd is None else list(iwd) if isinstance(iwd, (list, tuple)) else [iwd]
+        self.map_pictures = picture_index(self.iwds)
+        self.missing_images = []        # (name, stand-in picture or None for magenta)
         # The PC game's own .iwd files (iw_00.iwd ...): pictures a map borrows from the game.
         # Later files win, as in the game.
-        self.game_pictures = {}
-        for zf in game_iwds:
-            for n in zf.namelist():
-                low = n.lower()
-                if low.startswith("images/") and low.endswith(".iwi"):
-                    self.game_pictures[low[7:-4]] = (zf, n)
+        self.game_pictures = picture_index(game_iwds)
         self.from_game = 0
         self.techset_swaps = {}
         self.magenta_materials = []     # materials given a magenta picture for one they lack
+        # Tool shader sets (wc_tools: clip, caulk, ... in Radiant) draw nothing in game. Their
+        # materials get an alpha tested shader set and a see-through picture instead.
+        self.invisible_ts = set()       # id() of techset dicts swapped in for a tool one
+        self.invisible_materials = []
         # Stock 360 assets: resident ones (use by ",name") and others to copy in.
         self.resident = {}
         self.library = {}
@@ -850,18 +852,38 @@ class Porter:
         if self.from_game:
             self.log("  %d pictures come from the PC game's own .iwd files" % self.from_game)
         if self.missing_images:
-            self.warn("%d pictures aren't in the map's .iwd%s, so magenta ones stand in (%s%s)"
-                      % (len(self.missing_images),
-                         " or the PC game's files" if self.game_pictures else "",
-                         ", ".join(self.missing_images[:5]),
-                         ", ..." if len(self.missing_images) > 5 else ""))
+            magenta = [n for n, stand in self.missing_images if stand is None]
+            flat = [n for n, stand in self.missing_images if stand is not None]
+            where = "the map's .iwd%s" % (" or the PC game's files" if self.game_pictures else "")
+            if magenta:
+                self.warn("%d picture%s %s in %s, so magenta stands in (%s%s)"
+                          % (len(magenta), "s" if len(magenta) > 1 else "",
+                             "aren't" if len(magenta) > 1 else "isn't", where,
+                             ", ".join(magenta[:5]), ", ..." if len(magenta) > 5 else ""))
+            if flat:
+                self.warn("%d normal/specular map%s %s in %s, so flat / no-shine ones stand in "
+                          "(%s%s)" % (len(flat), "s" if len(flat) > 1 else "",
+                                      "aren't" if len(flat) > 1 else "isn't", where,
+                                      ", ".join(flat[:5]), ", ..." if len(flat) > 5 else ""))
         if self.magenta_materials:
             n = len(self.magenta_materials)
             self.warn("%d material%s lack%s a picture the shader set used needs, so %s magenta "
                       "(%s%s)" % (n, "s" if n > 1 else "", "" if n > 1 else "s", "they show" if n > 1 else "it shows",
                                                ", ".join(self.magenta_materials[:5]),
                                                ", ..." if len(self.magenta_materials) > 5 else ""))
+        if self.invisible_materials:
+            n = len(self.invisible_materials)
+            self.warn("%d material%s with a tool shader set draw%s nothing (%s%s)"
+                      % (n, "s" if n > 1 else "", "" if n > 1 else "s",
+                         ", ".join(self.invisible_materials[:5]),
+                         ", ..." if n > 5 else ""))
         for a, b in sorted(self.techset_swaps.items()):
+            if self.is_tools_techset(a):
+                if self.hides(a, b):
+                    continue
+                self.warn("shader set %s isn't in the stock files given and no alpha tested one is "
+                          "either, so %s is used and its surfaces show" % (a.decode(), b.decode()))
+                continue
             self.warn("shader set %s isn't in the stock files given, so %s is used"
                       % (a.decode(), b.decode()))
         ss = self.root.get("script_strings")
@@ -1013,6 +1035,10 @@ class Porter:
         gets the plain lit shader."""
         if name in self.techset_swaps:
             return self.techset_swaps[name]
+        best = self.invisible_techset(name) if self.is_tools_techset(name) else None
+        if best is not None:
+            self.techset_swaps[name] = best
+            return best
         best = self.similar_techset(name)
         if best is not None:
             self.techset_swaps[name] = best
@@ -1036,6 +1062,31 @@ class Porter:
         if best is not None:
             self.techset_swaps[name] = best
         return best
+
+    @staticmethod
+    def is_tools_techset(name):
+        """wc_tools, mc_tools: Radiant's tool shaders, which draw nothing in game."""
+        return name.split(b"_")[1:2] == [b"tools"]
+
+    def invisible_techset(self, name):
+        """A stock alpha tested shader set of the same kind (wc_/mc_) with a color picture and
+        as few other inputs as there are: given a see-through picture, it draws nothing (no
+        shadow either, which reads the same picture)."""
+        best, score = None, None
+        for cand in self.material_templates:
+            got = self.techset_codes(cand) if cand else None
+            if got is None or not got[0].startswith(name[:3]) or got[2] \
+                    or not got[1][0].startswith(b"t") or b"c0" not in got[1] \
+                    or not self.have_techset(cand):
+                continue
+            sc = (-len(got[1]), got[0] == name[:3] + b"l_sm_", cand)
+            if score is None or sc > score:
+                best, score = cand, sc
+        return best
+
+    def hides(self, name, near):
+        """Whether shader set near, used for tool shader set name, draws nothing."""
+        return self.is_tools_techset(name) and near == self.invisible_techset(name)
 
     @staticmethod
     def techset_codes(name):
@@ -1073,6 +1124,8 @@ class Porter:
         if src is None:
             near = self.nearest_techset(name)
             if near is not None and near != name:
+                if self.hides(name, near):
+                    self.invisible_ts.add(id(d))
                 d["@"][("name", ())] = Str(near)
                 return self.pre_MaterialTechniqueSet(d, tp, tx)
         if src is None:
@@ -1080,13 +1133,7 @@ class Porter:
         return self._replace(d, self.copy_in(src))
 
     def in_iwd(self, name):
-        if self.iwd is None:
-            return False
-        try:
-            self.iwd.getinfo("images/%s.iwi" % name.decode())
-            return True
-        except KeyError:
-            return False
+        return name.decode().lower() in self.map_pictures
 
     def pre_GfxImage(self, d, tp, tx):
         name = asset_name(d)
@@ -1112,14 +1159,15 @@ class Porter:
         elif not self.in_iwd(name):
             # Not in the map's .iwd (none given) nor the PC game's files given:
             # a plain built-in picture stands in so the map still loads.
-            self.missing_images.append(name.decode())
             stand = self.stand_in(d, name)
+            self.missing_images.append((name.decode(), stand))
             if stand is None:
                 self.magenta(d)
             else:
                 return self._replace(d, self.reference("GfxImage", stand))
         else:
-            self.image_from_iwd(d, name)
+            zf, path = self.map_pictures[name.decode().lower()]
+            self.image_from_iwd(d, name, zf, path)
         self.done.add(id(d))
         return True
 
@@ -1144,8 +1192,12 @@ class Porter:
             # No stock file given has this shader set: use the closest one that is there.
             near = self.nearest_techset(tsname)
             if near is not None:
+                if self.hides(tsname, near):
+                    self.invisible_ts.add(id(ts))
                 ts["@"][("name", ())] = Str(near)
                 tsname, tpl = near, self.material_templates[near]
+        if isinstance(ts, dict) and id(ts) in self.invisible_ts:
+            d["_invisible"] = True
         if tpl is None:
             raise PortError("material %s: no stock 360 material uses techset %s to copy render "
                             "settings from" % (name.decode(), tsname))
@@ -1169,9 +1221,19 @@ class Porter:
             raise PortError("template material's render state can't be copied")
         d["@"][("stateBitsTable", ())] = c
         d["stateBitsTable"] = "follow"
-        self.fill_textures(d, tpl, asset_name(d) or b"")
+        invisible = d.pop("_invisible", False)
+        if invisible:
+            # Its own pictures go: every one the shader set reads is a stand-in, the color one
+            # see-through.
+            d["@"][("textureTable", ())] = []
+            d["textureTable"] = "follow"
+            d["textureCount"] = 0
+            iname = (asset_name(d) or b"").decode()
+            if iname not in self.invisible_materials:
+                self.invisible_materials.append(iname)
+        self.fill_textures(d, tpl, asset_name(d) or b"", invisible)
 
-    def fill_textures(self, d, tpl, name):
+    def fill_textures(self, d, tpl, name, invisible=False):
         """Give material d every picture its shader set reads (as stock material tpl, which uses
         the same set, has them) that it lacks: a swapped-in shader set can want one the PC
         material never had, and a shader without its picture draws nothing. Stand-ins: flat
@@ -1190,6 +1252,10 @@ class Porter:
                 img = self.reference("GfxImage", b"$identitynormalmap")
             elif sem == 8:
                 img = self.reference("GfxImage", b"$black")
+            elif invisible:
+                img = self.see_through(self.zero(self.X.infos["GfxImage"].ctype),
+                                       b"~invisible_%d" % len(self.invisible_materials))
+                img["_asset"] = "GfxImage"
             elif iname.startswith(b"$") and (("GfxImage", iname) in self.resident or
                                                ("GfxImage", iname) in self.named):
                 img = self.reference("GfxImage", iname)
@@ -1233,11 +1299,16 @@ class Porter:
         self.done.add(id(d))
         return d
 
-    def image_from_iwd(self, d, name, iwd=None, path=None):
-        iwd = iwd or self.iwd
-        if iwd is None:
-            raise PortError("image %s needs the map's .iwd" % name.decode())
-        path = path or "images/%s.iwi" % name.decode()
+    def see_through(self, d, name):
+        """Make image dict d a small fully see-through picture (alpha tested away)."""
+        d.setdefault("@", {})[("name", ())] = Str(name)
+        block = struct.pack("<HHI", 0, 0, 0xFFFFFFFF)       # DXT1, every texel transparent
+        self.images.build(d, "DXT1", 16, 16, [block * 16])
+        d["category"] = 3
+        self.done.add(id(d))
+        return d
+
+    def image_from_iwd(self, d, name, iwd, path):
         try:
             data = iwd.read(path)
         except KeyError:
@@ -1614,13 +1685,30 @@ def load_stock(path):
     return root
 
 
+def picture_index(iwds):
+    """{lowercase picture name: (zipfile, path)} for the images/*.iwi in the .iwd files given;
+    later files win. Paths are matched without caring about case or slash direction, as the
+    game (on Windows) does."""
+    found = {}
+    for zf in iwds:
+        for n in zf.namelist():
+            low = n.replace("\\", "/").lower()
+            if low.startswith("images/") and low.endswith(".iwi"):
+                found[low[7:-4]] = (zf, n)
+    return found
+
+
 def game_iwd_files(folder):
-    """The .iwd files in a folder (the PC game's main folder or a copy of its iw_*.iwd), in
-    the order the game loads them."""
+    """The .iwd files in a folder and its subfolders (the PC game's main folder, a copy of its
+    iw_*.iwd, or IW4x's iw4x folder), in the order the game loads them."""
     if not folder or not os.path.isdir(folder):
         return []
-    return sorted((os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(".iwd")),
-                  key=lambda p: os.path.basename(p).lower())
+    found = []
+    for top, dirs, names in os.walk(folder):
+        # Other maps and mods aren't the game's own files.
+        dirs[:] = [n for n in dirs if n.lower() not in ("usermaps", "mods")]
+        found += [os.path.join(top, n) for n in names if n.lower().endswith(".iwd")]
+    return sorted(found, key=lambda p: os.path.relpath(p, folder).lower())
 
 
 def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None,
@@ -1637,7 +1725,11 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
             log("reading stock 360 file %s" % os.path.basename(p))
             loaded[p] = load_stock(p)
         refs.append((p, loaded[p]))
-    iwd = zipfile.ZipFile(iwd_path) if iwd_path else None
+    if not iwd_path:
+        iwd_path = []
+    elif isinstance(iwd_path, str):
+        iwd_path = [iwd_path]
+    iwd = [zipfile.ZipFile(p) for p in iwd_path]
     log("converting %s" % os.path.basename(pc_path))
     porter = Porter(root, refs, iwd, log, [zipfile.ZipFile(p) for p in game_iwds])
     porter.convert()
@@ -1669,7 +1761,7 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=())
     loads = sorted(p for n, p in stock.items() if n.endswith("_load.ff"))
     base = os.path.splitext(pc_path)[0]
     name = os.path.basename(base)
-    iwd = base + ".iwd" if os.path.exists(base + ".iwd") else None
+    iwd = [base + ".iwd"] if os.path.exists(base + ".iwd") else []
     os.makedirs(out_dir, exist_ok=True)
     loaded = {}
     log("reading stock 360 file code_post_gfx_mp.ff")
@@ -1791,7 +1883,7 @@ def main(argv):
     ap = argparse.ArgumentParser(description="Convert a PC fastfile to Xbox 360 TU6 layout")
     ap.add_argument("pc_ff")
     ap.add_argument("out_ff")
-    ap.add_argument("--iwd")
+    ap.add_argument("--iwd", nargs="*", default=[], help="the map's .iwd file(s)")
     ap.add_argument("--game", help="folder with the PC game's .iwd files (its main folder)")
     ap.add_argument("--ref360", nargs="*", default=[])
     ap.add_argument("--teams", nargs=2, metavar=("ALLIES", "AXIS"),
