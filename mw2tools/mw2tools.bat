@@ -84,11 +84,13 @@ if exist "%APP%\.git" (
 )
 for /f %%v in ('git -C "%APP%" log -1 --format^=%%h 2^>nul') do echo mw2tools version %%v
 
-rem A newer launcher came with the update: it's swapped in when this window closes (the last line).
-set NEWBAT=
+rem A newer launcher came with the update: it replaces this one and starts straight away. It's
+rem started without "call", which hands over for good, so nothing more of this old copy runs.
 fc /b "%APP%\mw2tools\mw2tools.bat" "%~f0" >nul 2>nul
-if errorlevel 1 if exist "%APP%\mw2tools\mw2tools.bat" set NEWBAT=1
-if defined NEWBAT echo A new launcher came with the update. It takes over next time.
+if errorlevel 1 if exist "%APP%\mw2tools\mw2tools.bat" (
+    echo A new launcher came with the update. Starting it...
+    copy /y "%APP%\mw2tools\mw2tools.bat" "%~f0" >nul && "%~f0" %*
+)
 
 :run
 if not exist "%APP%\mw2tools\mw2tools_gui.py" (
@@ -110,4 +112,3 @@ call %PY% "%APP%\mw2tools\mw2tools_gui.py" %*
 echo.
 echo mw2tools has stopped. If there's an error above, send it to Claude.
 pause
-if defined NEWBAT copy /y "%APP%\mw2tools\mw2tools.bat" "%~f0" >nul & exit /b
