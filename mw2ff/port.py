@@ -18,6 +18,7 @@ the two platforms store differently are converted by the hooks below:
 
 import argparse
 import os
+import re
 import struct
 import sys
 import zipfile
@@ -266,11 +267,13 @@ class ImageMaker:
         self.t = xcodec.type_by_name("GfxImage")
         self.templates = templates      # gpu format -> stock 360 image dict
 
-    def build(self, d, fmt_name, width, height, mips, cube=False):
-        """Fill image dict d (in place) as a 360 image with these linear little-endian mips."""
+    def build(self, d, fmt_name, width, height, mips, cube=False, tpl=None):
+        """Fill image dict d (in place) as a 360 image with these linear little-endian mips.
+        tpl: the stock image to copy settings from (default: any of this format)."""
         tex = self.tex
         gpu = {v[0]: k for k, v in tex.FORMATS.items()}[fmt_name]
-        tpl = self.templates.get((gpu, cube))
+        if tpl is None:
+            tpl = self.templates.get((gpu, cube))
         make_cube = False
         if tpl is None and cube:
             # No stock cube map of this format inside a file: take a flat one and make it a cube.
@@ -369,6 +372,11 @@ class Porter:
                 fmt = struct.unpack_from("<I", bytes.fromhex(v["texture"]), 32)[0] & 0x3F
                 self.templates.setdefault((fmt, v.get("mapType") == 5), v)
         self.images = ImageMaker(self.xc, self.templates)
+        # Stock lightmaps: their channel order (swizzle) differs from other pictures'.
+        self.lightmap_templates = {}
+        for (typ, n), v in list(self.library.items()):
+            if typ == "GfxImage" and n.startswith(b"*lightmap") and v.get("pixels") == "follow":
+                self.lightmap_templates.setdefault(n.rsplit(b"_", 1)[-1], v)
         # Stock 360 materials by the techset they use (render state templates).
         self.material_templates = {}
         for (typ, n), v in list(self.library.items()) + list(self.resident.items()):
@@ -379,6 +387,7 @@ class Porter:
             if tn is not None:
                 self.material_templates.setdefault(tn.lstrip(b","), v)
         self.warnings = []
+        self.moved_images = []
         self.report = set()     # (type, "dropped" | "defaulted", member) seen while converting
 
     def warn(self, msg):
@@ -617,6 +626,8 @@ class Porter:
 
     def convert(self):
         ents = self.root["assets"]
+        self.world_checksum = next((e[1].get("checksum", 0) for e in ents
+                                    if e[0] == "gfx_map" and isinstance(e[1], dict)), 0)
         # Models placed only by single-player entities (IW4x maps often carry one) aren't
         # used in multiplayer; the 360 model format isn't converted yet, so leave them out.
         referenced = set()
@@ -671,6 +682,62 @@ class Porter:
         if isinstance(lf, Leaf) and lf.n > n:
             lf.raw, lf.n = lf.raw[:n * lf.t.size], n
 
+    def post_GfxWorldDraw(self, d, tx):
+        """IW4x ZoneBuilder fills the lightmap override pointers with the sky and $outdoor
+        pictures. Stock 360 maps leave them empty; set, the game would light every surface
+        with them (a cube map where a flat lightmap belongs)."""
+        for k in ("lightmapOverridePrimary", "lightmapOverrideSecondary"):
+            c = d["@"].pop((k, ()), None)
+            d[k] = None
+            if isinstance(c, dict):
+                # The picture was written here first; later pointers to it now get it instead.
+                self.moved_images.append(c)
+
+    def post_GfxWorld(self, d, tx):
+        ch = d["@"]
+        for key, c in list(ch.items()):
+            t = deref(c) if isinstance(c, Ref) else None
+            if t is not None and any(t is m for m in self.moved_images):
+                ch[key] = t
+                d[key[0]] = "insert"
+                self.moved_images = [m for m in self.moved_images if m is not t]
+        if self.moved_images:
+            raise PortError("a picture from the lightmap override is still needed elsewhere")
+
+    def post_FxGlassSystem(self, d, tx):
+        """firstFreePiece is really a 16-bit number (then padding): 0xFFFF, "no free piece",
+        reads 0x0000FFFF on the PC and 0xFFFF0000 on the 360."""
+        v = d.get("firstFreePiece")
+        if isinstance(v, int) and v <= 0xFFFF:
+            d["firstFreePiece"] = v << 16
+
+    def post_clipMap_t(self, d, tx):
+        """IW4x ZoneBuilder leaves the collision checksum 0 but writes 0xDEADBEEF into the
+        world's: stock maps have the same number in both, so use the world's."""
+        if not d.get("checksum"):
+            d["checksum"] = self.world_checksum
+
+    def post_MapEnts(self, d, tx):
+        """Single-player actors (IW4x maps often keep one) have no spawn code in
+        multiplayer and name models this file doesn't carry: leave them out."""
+        lf = d["@"].get(("entityString", ()))
+        if not isinstance(lf, Leaf):
+            return
+        text = lf.raw.rstrip(b"\0").decode("latin-1")
+        kept, dropped = [], 0
+        for ent in re.findall(r"\{[^{}]*\}", text):
+            m = re.search(r'"classname"\s+"([^"]*)"', ent)
+            if m and m.group(1).startswith("actor_"):
+                dropped += 1
+                continue
+            kept.append(ent)
+        if not dropped:
+            return
+        self.warn("left out %d single-player actor entities" % dropped)
+        raw = ("\n".join(kept) + "\n").encode("latin-1") + b"\0"
+        lf.raw, lf.n = raw, len(raw)
+        d["numEntityChars"] = len(raw)
+
     def leaf_GfxWorldVertex(self, lf, tx):
         return convert_world_vertices(lf)
 
@@ -716,7 +783,9 @@ class Porter:
 
     def pre_GfxImage(self, d, tp, tx):
         name = asset_name(d)
-        if ("GfxImage", name) in self.resident and not self.in_iwd(name):
+        # Built-in pictures ($identitynormalmap, ...) stay the game's own even when an IW4x
+        # .iwd carries a copy: a second asset with the name would replace the resident one.
+        if ("GfxImage", name) in self.resident and (name.startswith(b"$") or not self.in_iwd(name)):
             return self._replace(d, self.reference("GfxImage", name))
         tex = d.get("texture", {})
         ld = tex.get("@", {}).get(("loadDef", ())) if isinstance(tex, dict) else None
@@ -755,6 +824,9 @@ class Porter:
         for k in ("stateBitsEntry", "stateBitsCount", "stateFlags", "cameraRegion", "stateBitsTable", "unknown"):
             d[k] = tpl[k]
         d["info"]["sortKey"] = tpl["info"]["sortKey"]
+        # The game builds drawSurf itself when it registers the material; stock 360 files
+        # always hold zero here (the PC keeps its own bit layout).
+        d["info"]["drawSurf"] = tpl["info"]["drawSurf"]
         c = tpl.get("@", {}).get(("stateBitsTable", ()))
         if isinstance(c, Ref):
             c = c.target if c.rel == 0 else None
@@ -801,7 +873,10 @@ class Porter:
         mips = [data[i * face:i * face + top] for i in range(faces)]
         if out_fmt == "DXT3A":
             mips = [encode_dxt3a(m, w, h) for m in mips]
-        self.images.build(d, out_fmt, w, h, mips if cube else mips[:1], cube)
+        tpl = None
+        if name.startswith(b"*lightmap"):
+            tpl = self.lightmap_templates.get(name.rsplit(b"_", 1)[-1])
+        self.images.build(d, out_fmt, w, h, mips if cube else mips[:1], cube, tpl)
 
     # ------------------------------------------------------------ copying 360 assets in
 
