@@ -45,10 +45,21 @@ class PCFastFile:
     def __init__(self, path):
         self.path = path
         self.raw = open(path, "rb").read()
-        if self.raw[:8] not in (b"IWffu100",) or self.raw[8:12] != PC_VERSION:
+        if self.raw[:8] not in (b"IWffu100", b"IWff0100") or self.raw[8:12] != PC_VERSION:
             raise ValueError("%s is not a PC MW2 fastfile" % path)
         self.header_end = self.HEAD - 8
-        self.zone = bytearray(zlib.decompress(self.raw[self.HEAD:]))
+        body = self.raw[self.HEAD:]
+        self.signed = body[:8] == b"IWffs100"
+        if self.signed:
+            # Signed (stock) files: an 8 KB signature header, then groups of one 8 KB block of
+            # hashes followed by 2 MB of the zlib stream.
+            stream, i = bytearray(), 0x2000
+            while i < len(body):
+                i += 0x2000
+                stream += body[i:i + 0x200000]
+                i += 0x200000
+            body = bytes(stream)
+        self.zone = bytearray(zlib.decompressobj().decompress(body))
 
 
 def platform_of(path):
@@ -83,8 +94,18 @@ def schema_for(platform):
 
 # ---------------------------------------------------------------- zone <-> records
 
+def is_64bit_pc(zone):
+    """A PC zone built with 8-byte pointers (a 64-bit remaster build, not the 2009 game or
+    IW4x). Its asset list starts {count, 0, pointer(8 bytes)} right after the header."""
+    return len(zone) >= 56 and zone[44:48] == b"\0\0\0\0" and zone[48:56] == b"\xff" * 8
+
+
 def walk(zone, platform=None):
-    r = zone_mod.Reader(zone, schema_for(platform or zone_platform(zone)), record=True)
+    platform = platform or zone_platform(zone)
+    if platform == "pc" and is_64bit_pc(zone):
+        raise zone_mod.ZoneError("this PC file uses 64-bit pointers (a newer build of the game); "
+                                 "only the 2009 PC game / IW4x files can be read")
+    r = zone_mod.Reader(zone, schema_for(platform), record=True)
     r.walk()
     if r.pos != len(zone):
         raise zone_mod.ZoneError("walk stopped at %d of %d bytes" % (r.pos, len(zone)))
@@ -316,7 +337,7 @@ def write_container(container, zone, path):
     writes files."""
     if container[8:12] == PC_VERSION:
         with open(path, "wb") as fh:
-            fh.write(bytes(container[:PCFastFile.HEAD]) + zlib.compress(zone, 9))
+            fh.write(b"IWffu100" + bytes(container[8:PCFastFile.HEAD]) + zlib.compress(zone, 9))
         return
     head = bytearray(container[:-8])
     size0, size1 = struct.unpack(">II", container[-8:])
