@@ -33,6 +33,40 @@ Your changes are saved in `mw2ff_changes` and come back the next time you open t
 **Undo all changes** puts that file back the way it was. If `mw2tex_out` has a file with the same name, the console can only use
 one of the two, so the editor warns you about it.
 
+## Converting PC maps to the 360 (mw2port)
+
+`mw2port.bat` converts a PC (IW4x) multiplayer map to the Xbox 360 (TU6). `mw2tex.bat` and
+`mw2ff.bat` put it in your work folder for you, and it updates itself the same way.
+
+Your work folder needs these stock 360 files from the console (copy them over FTP):
+
+- `code_post_gfx_mp.ff`
+- at least one stock map with its loading screen file, for example `mp_favela.ff` and
+  `mp_favela_load.ff` (the converter takes 360 shaders and settings from it)
+- the stock maps that carry the teams your PC map uses. Each 360 map carries only its own
+  two teams (soldiers, flags, crates, icons), so the converter copies them from a stock map
+  that has them. `mp_favela` has Task Force 141 (desert) and Militia, `mp_nightshift` (Skidrow)
+  has US Army and Spetsnaz, `mp_underpass` has Task Force 141 (forest) and Militia,
+  `mp_rust` has OpFor, `mp_derail` has the arctic teams, and `mp_checkpoint` (Karachi) has
+  the SEALs.
+
+1. Double-click `mw2port.bat`. The converter opens in your browser.
+2. Press **Open mw2port_in** and put each PC map in its own folder there. For an IW4x map,
+   copy its whole `usermaps\<map>` folder (`.ff`, `_load.ff`, `.iwd`, `.arena`). Press
+   **Refresh**.
+3. Pick the map. The teams come from its `.arena` file; change them if you like. A team you
+   don't have a stock map for is swapped for one you do, and the log says which map to add.
+4. Press **Convert**. It takes a few minutes. The 360 files go in `mw2port_out\<map>\`.
+5. Copy both files to `_codxe\zone\` on the console, start a private match and type
+   `map <map>` in the console.
+
+From a command prompt: `python port.py <pc map.ff> <out.ff> --iwd <map.iwd> --ref360
+code_post_gfx_mp.ff mp_favela.ff [more stock maps] [--teams ALLIES AXIS]`.
+
+What it converts so far: the map itself (geometry, collision, lighting, pictures, reflection
+probes, map entities, scripts) and the two teams. Custom models, sounds and effects the PC map
+brings with it aren't converted yet.
+
 ## Commands
 
 Run these from the `tools\mw2ff` folder (Python 3, nothing to install):

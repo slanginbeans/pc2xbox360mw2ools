@@ -97,6 +97,18 @@ SIDE_TEAMS = {
                "socom_141_arctic"),
     "axis": ("opforce_composite", "opforce_airborne", "opforce_arctic", "militia"),
 }
+# Stock maps whose file carries each team (mp/basemaps.arena in code_post_gfx_mp).
+STOCK_MAP_TEAMS_BY_TEAM = {
+    'militia': ['mp_favela', 'mp_quarry', 'mp_underpass', 'mp_rundown'],
+    'opforce_airborne': ['mp_highrise', 'mp_nightshift', 'mp_brecourt', 'mp_estate', 'mp_terminal'],
+    'opforce_arctic': ['mp_derail', 'mp_subbase'],
+    'opforce_composite': ['mp_invasion', 'mp_checkpoint', 'mp_boneyard', 'mp_afghan', 'mp_rust'],
+    'seals_udt': ['mp_checkpoint', 'mp_subbase'],
+    'socom_141_arctic': ['mp_derail'],
+    'socom_141_desert': ['mp_favela', 'mp_quarry', 'mp_rundown', 'mp_boneyard', 'mp_afghan', 'mp_rust'],
+    'socom_141_forest': ['mp_brecourt', 'mp_underpass', 'mp_estate'],
+    'us_army': ['mp_invasion', 'mp_highrise', 'mp_nightshift', 'mp_terminal'],
+}
 
 
 class PortError(Exception):
@@ -1107,9 +1119,9 @@ class Porter:
                     (d for d in donors if d[2] not in [u[2] for u in used]), None)
                 if pick is None:
                     raise PortError("no stock map given (--ref360) has the %s team" % want)
-                self.warn("the map wants the %s team for %s; using %s instead (give one of %s "
-                          "with --ref360 for %s)" % (want or "(none)", side, pick[2],
-                                                     ", ".join(_team_maps(arena, want)) or "?", want))
+                self.warn("the map wants the %s team for %s; using %s instead (for %s, add one of "
+                          "these stock 360 maps: %s)" % (want or "(none)", side, pick[2], want,
+                                                         ", ".join(_team_maps(arena, want)) or "?"))
             used.append(pick)
         for n, r, team in used:
             self._pick_team(r, team)
@@ -1285,14 +1297,18 @@ def load_stock(path):
     return root
 
 
-def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None):
+def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None):
+    """loaded: {path: tree} of stock files already read (load_stock), to reuse."""
     ff, zone, root = load_tree(pc_path)
     if ff.platform != "pc":
         raise PortError("%s is not a PC fastfile" % pc_path)
     refs = []
+    loaded = {} if loaded is None else loaded
     for p in ref_paths:
-        log("reading stock 360 file %s" % os.path.basename(p))
-        refs.append((p, load_stock(p)))
+        if p not in loaded:
+            log("reading stock 360 file %s" % os.path.basename(p))
+            loaded[p] = load_stock(p)
+        refs.append((p, loaded[p]))
     iwd = zipfile.ZipFile(iwd_path) if iwd_path else None
     log("converting %s" % os.path.basename(pc_path))
     porter = Porter(root, refs, iwd, log)
@@ -1307,6 +1323,52 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None):
     _write_x360(out, out_path, pak_table(out, out_path, porter.root, w.starts))
     log("wrote %s (%d bytes of zone)" % (out_path, len(out)))
     return out, porter
+
+
+def port_map(pc_path, out_dir, stock_paths, teams=None, log=print):
+    """Convert a PC map (its .ff, and _load.ff / .iwd / .arena next to it when there) into
+    out_dir, picking what it needs from the stock 360 files given: code_post_gfx_mp.ff, a
+    stock map (render settings, shaders) and the stock maps that carry the map's teams.
+    Returns the paths written."""
+    stock = {os.path.basename(p).lower(): p for p in stock_paths}
+    cpg = stock.get("code_post_gfx_mp.ff")
+    if cpg is None:
+        raise PortError("code_post_gfx_mp.ff (from the console) is needed next to the stock maps")
+    maps = sorted(p for n, p in stock.items() if n.startswith("mp_") and not n.endswith("_load.ff"))
+    if not maps:
+        raise PortError("at least one stock 360 map (for example mp_favela.ff) is needed")
+    template = stock.get("mp_favela.ff") or maps[0]
+    loads = sorted(p for n, p in stock.items() if n.endswith("_load.ff"))
+    base = os.path.splitext(pc_path)[0]
+    name = os.path.basename(base)
+    iwd = base + ".iwd" if os.path.exists(base + ".iwd") else None
+    os.makedirs(out_dir, exist_ok=True)
+    loaded = {}
+    log("reading stock 360 file code_post_gfx_mp.ff")
+    loaded[cpg] = load_stock(cpg)
+    arena = next((_rawfile_text(e[1]) for e in loaded[cpg]["assets"]
+                  if e[0] == "rawfile" and _name(e[1]) == b"mp/basemaps.arena"), b"")
+    want = map_teams(pc_path, teams)
+    refs = [cpg, template]
+    for team in want:
+        carriers = set(_team_maps(arena, team.lower()))
+        donor = next((p for p in maps if os.path.splitext(os.path.basename(p))[0].lower() in carriers), None)
+        if donor and donor not in refs:
+            refs.append(donor)
+    written = []
+    if os.path.exists(base + "_load.ff"):
+        tpl_load = os.path.splitext(template)[0] + "_load.ff"
+        load_ref = tpl_load if tpl_load in loads else (loads[0] if loads else None)
+        if load_ref is None:
+            log("  note: no stock *_load.ff given; the loading screen file is left out")
+        else:
+            out = os.path.join(out_dir, name + "_load.ff")
+            port(base + "_load.ff", out, iwd, [cpg, template, load_ref], log, loaded=loaded)
+            written.append(out)
+    out = os.path.join(out_dir, name + ".ff")
+    port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded)
+    written.append(out)
+    return written
 
 
 def reserve_callback_block(zone, porter):

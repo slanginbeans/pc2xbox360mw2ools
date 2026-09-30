@@ -54,10 +54,15 @@ fc /b "%APP%\tools\mw2tex\mw2tex.bat" "%~f0" >nul 2>nul
 if errorlevel 1 if exist "%APP%\tools\mw2tex\mw2tex.bat" set NEWBAT=1
 if defined NEWBAT echo A new launcher came with the update. It takes over next time.
 
-rem The fastfile editor's launcher (mw2ff.bat) goes next to this one the first time it arrives.
+rem The fastfile editor's and map converter's launchers (mw2ff.bat, mw2port.bat) go next to this
+rem one the first time they arrive.
 if not exist "%~dp0mw2ff.bat" if exist "%APP%\tools\mw2ff\mw2ff.bat" (
     copy /y "%APP%\tools\mw2ff\mw2ff.bat" "%~dp0mw2ff.bat" >nul
     echo mw2ff.bat, the fastfile editor, is now in this folder too.
+)
+if not exist "%~dp0mw2port.bat" if exist "%APP%\tools\mw2ff\mw2port.bat" (
+    copy /y "%APP%\tools\mw2ff\mw2port.bat" "%~dp0mw2port.bat" >nul
+    echo mw2port.bat, the PC map converter, is now in this folder too.
 )
 
 :run

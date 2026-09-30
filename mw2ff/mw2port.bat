@@ -1,14 +1,14 @@
 @echo off
-rem mw2ff launcher. Put this file in your work folder (the one with your .ff files) and
+rem mw2port launcher. Put this file in your work folder (the one with your stock .ff files) and
 rem double-click it. It shares the up-to-date copy of the tools that mw2tex.bat keeps in the
-rem mw2tex_app folder next to it, updates it, and opens the fastfile asset editor.
+rem mw2tex_app folder next to it, updates it, and opens the PC map converter.
 rem Set NOUPDATE=1 below to skip the update check (for example when you're offline).
 setlocal
 set BRANCH=main
 set REPO=https://github.com/slanginbeans/codxe_modified.git
 set NOUPDATE=
 cd /d "%~dp0"
-title mw2ff
+title mw2port
 set APP=%~dp0mw2tex_app
 
 rem "call" everywhere below: python can be a .bat/.cmd shim (pyenv, for example), and running one
@@ -27,7 +27,7 @@ if defined NOUPDATE goto run
 where git >nul 2>nul
 if errorlevel 1 (
     echo Git isn't installed, so the tool can't update itself. Get it from https://git-scm.com/
-    if exist "%APP%\tools\mw2ff\mw2ff_gui.py" goto run
+    if exist "%APP%\tools\mw2ff\mw2port_gui.py" goto run
     pause
     exit /b 1
 )
@@ -46,30 +46,29 @@ if exist "%APP%\.git" (
     )
     git -C "%APP%" sparse-checkout set tools/mw2tex tools/mw2ff
 )
-for /f %%v in ('git -C "%APP%" log -1 --format^=%%h 2^>nul') do echo mw2ff version %%v
+for /f %%v in ('git -C "%APP%" log -1 --format^=%%h 2^>nul') do echo mw2port version %%v
 
 rem A newer launcher came with the update: it's swapped in when this window closes (the last line).
 set NEWBAT=
-fc /b "%APP%\tools\mw2ff\mw2ff.bat" "%~f0" >nul 2>nul
-if errorlevel 1 if exist "%APP%\tools\mw2ff\mw2ff.bat" set NEWBAT=1
+fc /b "%APP%\tools\mw2ff\mw2port.bat" "%~f0" >nul 2>nul
+if errorlevel 1 if exist "%APP%\tools\mw2ff\mw2port.bat" set NEWBAT=1
 if defined NEWBAT echo A new launcher came with the update. It takes over next time.
 
-rem The map converter's launcher goes next to this one the first time it arrives.
-if not exist "%~dp0mw2port.bat" if exist "%APP%\tools\mw2ff\mw2port.bat" (
-    copy /y "%APP%\tools\mw2ff\mw2port.bat" "%~dp0mw2port.bat" >nul
-    echo mw2port.bat, the PC map converter, is now in this folder too.
-)
-
 :run
-if not exist "%APP%\tools\mw2ff\mw2ff_gui.py" (
+if not exist "%APP%\tools\mw2ff\mw2port_gui.py" (
     echo The tool files are missing from %APP%\tools\mw2ff.
     echo Delete the mw2tex_app folder and start this launcher again to download them.
     pause
     exit /b 1
 )
-echo Starting the fastfile editor. Leave this window open while you use it.
-call %PY% "%APP%\tools\mw2ff\mw2ff_gui.py" %*
+call %PY% -c "import PIL" >nul 2>nul
+if errorlevel 1 (
+    echo Installing Pillow, the picture library the converter uses...
+    call %PY% -m pip install --user pillow
+)
+echo Starting the map converter. Leave this window open while you use it.
+call %PY% "%APP%\tools\mw2ff\mw2port_gui.py" %*
 echo.
-echo The editor has stopped. If there's an error above, send it to Claude.
+echo The converter has stopped. If there's an error above, send it to Claude.
 pause
-if defined NEWBAT copy /y "%APP%\tools\mw2ff\mw2ff.bat" "%~f0" >nul & exit /b
+if defined NEWBAT copy /y "%APP%\tools\mw2ff\mw2port.bat" "%~f0" >nul & exit /b
