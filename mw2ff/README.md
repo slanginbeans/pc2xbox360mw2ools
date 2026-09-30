@@ -8,6 +8,24 @@ This is step 1 of the fastfile converter: reading and writing back without chang
 Editing a field in place works (a number, a name of the same length, a flag). Changes that
 make data bigger or smaller, and adding or removing assets, come in the next steps.
 
+## The editor (easiest way)
+
+Put `mw2ff.bat` in your work folder (the one with your `.ff` files, next to `mw2tex.bat`) and
+double-click it. `mw2tex.bat` copies it there for you the first time it updates. It keeps the
+tools up to date in the same `mw2tex_app` folder that mw2tex uses, then opens the editor in
+your browser.
+
+1. Pick a fastfile on the left (multiplayer files only: names starting with `mp_` or ending
+   in `_mp`).
+2. Pick an asset. Filter by type (weapon, sound, material...) or search by name.
+3. Change the numbers you want. Anything that can't fit (a decimal in a whole-number field,
+   a value too big for the field) is refused with a message.
+4. Press **Build**. The new file goes in `mw2ff_out`. Copy it to `_codxe\zone\` on the console.
+
+Your changes are saved in `mw2ff_changes` and come back the next time you open that file.
+**Undo all changes** puts that file back the way it was. If `mw2tex_out` has a file with the same name, the console can only use
+one of the two, so the editor warns you about it.
+
 ## Commands
 
 Run these from the `tools\mw2ff` folder (Python 3, nothing to install):
