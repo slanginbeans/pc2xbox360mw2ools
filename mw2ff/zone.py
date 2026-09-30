@@ -184,6 +184,7 @@ class Reader:
         self.aliases = 0
         self.inserts = 0
         self.path = []
+        self.ctx = []       # (instance, member, indices, kind) of each pointer/member being loaded
         self.pointed = {}   # MemberInfo id -> bytes most recently loaded for that pointer
         # With record=True every piece of streamed data is kept as (pos, n, desc, asset index, path)
         # so it can be decoded into fields and written back (see codec.py).
@@ -302,6 +303,9 @@ class Reader:
     def align_of(info):
         return info.alloc_align or info.ctype.align
 
+    def on_inst(self, inst, at_start):
+        """Called for every struct instance as its members are about to load (see tree.py)."""
+
     # ------------------------------------------------------------ structs
 
     def load_struct(self, info, inst, at_start):
@@ -328,6 +332,7 @@ class Reader:
             # A union whose members are only partly known: each member streams itself.
             inst = Inst(info, ZBA(), 0, 0, (self.block, self.block_pos[self.block]))
         self.vars[info.name] = inst
+        self.on_inst(inst, at_start)
         pushed = False
         if info.asset:
             self.push(VIRTUAL)
@@ -423,9 +428,11 @@ class Reader:
             raise ZoneError("unsupported member %s" % mi)
         loc = self._member_loc(inst, mi, indices)
         self.path.append("%s%s(%s)" % (mi.name, "".join("[%d]" % i for i in indices), kind))
+        self.ctx.append((inst, mi, tuple(indices), kind))
         try:
             self.load_block(inst, mi, mod_pos, combined, kind, loc)
         finally:
+            self.ctx.pop()
             self.path.pop()
 
     def load_block(self, inst, mi, mod_pos, combined, kind, loc):
