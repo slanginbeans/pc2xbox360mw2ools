@@ -35,9 +35,9 @@ Or set it up by hand instead of using the launcher:
    Then either:
    - download the repository:
      ```
-     git clone https://github.com/slanginbeans/codxe_modified.git codxe_textures
+     git clone https://github.com/slanginbeans/pc2xbox360mw2ools.git mw2tools_src
      ```
-     The tools are in `codxe_textures\tools\mw2tex\`. Later, run `git pull` in `codxe_textures` to get updates.
+     The tools are in `mw2tools_src\mw2tex\`. Later, run `git pull` in `mw2tools_src` to get updates.
    - or just download `mw2tex.py`, `mw2tex_gui.py`, `mw2zone.py` and `mw2zone_gui.py` into one folder.
 5. **Copy into your work folder:**
    - `mw2tex.py`, `mw2tex_gui.py`, `mw2zone.py` and `mw2zone_gui.py` (not needed with the launcher)

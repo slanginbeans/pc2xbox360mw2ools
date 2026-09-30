@@ -3,11 +3,11 @@
 `mw2tools.bat` opens one browser page with a tab per tool:
 
 - **Textures & tables**: swap pictures, animate titles and emblems, edit tables (see
-  `tools/mw2tex/README.md`)
+  `mw2tex/README.md`)
 - **Fastfile editor**: every asset in a fastfile, scripts and in-game text (see
-  `tools/mw2ff/README.md`)
+  `mw2ff/README.md`)
 - **Map converter**: PC (IW4x) maps to the 360, with any two teams you pick (see "Converting
-  PC maps" in `tools/mw2ff/README.md`)
+  PC maps" in `mw2ff/README.md`)
 
 ## Setting it up
 

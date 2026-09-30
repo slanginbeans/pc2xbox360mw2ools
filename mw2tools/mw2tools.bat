@@ -9,7 +9,7 @@ rem folder into mw2tools (old launchers go in mw2tools\old_launchers).
 rem Set NOUPDATE=1 below to skip the update check (for example when you're offline).
 setlocal
 set BRANCH=main
-set REPO=https://github.com/slanginbeans/codxe_modified.git
+set REPO=https://github.com/slanginbeans/pc2xbox360mw2ools.git
 set NOUPDATE=
 cd /d "%~dp0"
 title mw2tools
@@ -58,35 +58,40 @@ if defined NOUPDATE goto run
 where git >nul 2>nul
 if errorlevel 1 (
     echo Git isn't installed, so the tools can't update themselves. Get it from https://git-scm.com/
-    if exist "%APP%\tools\mw2tools\mw2tools_gui.py" goto run
+    if exist "%APP%\mw2tools\mw2tools_gui.py" goto run
     pause
     exit /b 1
+)
+rem The tools moved from codxe_modified to their own repo: a copy from the old place is replaced.
+set CUR=
+if exist "%APP%\.git" for /f "delims=" %%u in ('git -C "%APP%" remote get-url origin 2^>nul') do set CUR=%%u
+if defined CUR if /i not "%CUR%"=="%REPO%" (
+    echo The tools have moved to their own GitHub repo. Downloading them from there...
+    rmdir /s /q "%APP%"
 )
 if exist "%APP%\.git" (
     echo Checking for updates...
     git -C "%APP%" pull -q --ff-only origin %BRANCH%
     if errorlevel 1 echo Couldn't update ^(offline?^). Using the copy you already have.
-    git -C "%APP%" sparse-checkout set tools/mw2tex tools/mw2ff tools/mw2tools
 ) else (
     echo Downloading the tools for the first time...
-    git clone -q --depth 1 --filter=blob:none --sparse -b %BRANCH% %REPO% "%APP%"
+    git clone -q --depth 1 --filter=blob:none -b %BRANCH% %REPO% "%APP%"
     if errorlevel 1 (
         echo Download failed. Check your internet connection and GitHub sign-in, then try again.
         pause
         exit /b 1
     )
-    git -C "%APP%" sparse-checkout set tools/mw2tex tools/mw2ff tools/mw2tools
 )
 for /f %%v in ('git -C "%APP%" log -1 --format^=%%h 2^>nul') do echo mw2tools version %%v
 
 rem A newer launcher came with the update: it's swapped in when this window closes (the last line).
 set NEWBAT=
-fc /b "%APP%\tools\mw2tools\mw2tools.bat" "%~f0" >nul 2>nul
-if errorlevel 1 if exist "%APP%\tools\mw2tools\mw2tools.bat" set NEWBAT=1
+fc /b "%APP%\mw2tools\mw2tools.bat" "%~f0" >nul 2>nul
+if errorlevel 1 if exist "%APP%\mw2tools\mw2tools.bat" set NEWBAT=1
 if defined NEWBAT echo A new launcher came with the update. It takes over next time.
 
 :run
-if not exist "%APP%\tools\mw2tools\mw2tools_gui.py" (
+if not exist "%APP%\mw2tools\mw2tools_gui.py" (
     echo The tool files are missing from %APP%.
     echo Delete the mw2tools\app folder and start this launcher again to download them.
     pause
@@ -101,8 +106,8 @@ echo.
 echo Your .ff files go in: %HOME_DIR%
 echo Starting mw2tools. Leave this window open while you use it.
 cd /d "%HOME_DIR%"
-call %PY% "%APP%\tools\mw2tools\mw2tools_gui.py" %*
+call %PY% "%APP%\mw2tools\mw2tools_gui.py" %*
 echo.
 echo mw2tools has stopped. If there's an error above, send it to Claude.
 pause
-if defined NEWBAT copy /y "%APP%\tools\mw2tools\mw2tools.bat" "%~f0" >nul & exit /b
+if defined NEWBAT copy /y "%APP%\mw2tools\mw2tools.bat" "%~f0" >nul & exit /b
