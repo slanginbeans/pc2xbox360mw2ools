@@ -6,6 +6,8 @@ mw2port.bat there):
 Put each PC map in its own folder under mw2port_in (for an IW4x map, copy its whole
 usermaps\\<map> folder: the .ff, _load.ff, .iwd and .arena). Pick the map, check the teams and
 press Convert. The 360 files go in mw2port_out\\<map>; copy them to _codxe\\zone\\ on the console.
+Pictures a map borrows from the PC game itself come from the iw_*.iwd files copied into
+mw2port_pc_game (optional; without them those pictures are plain gray).
 
 The converter needs these stock 360 files from the console in the work folder:
 code_post_gfx_mp.ff, at least one stock map (mp_favela.ff works best) with its _load.ff, and
@@ -29,6 +31,7 @@ import port as port_mod  # noqa: E402
 FOLDER = os.getcwd()
 IN_DIR = os.path.join(FOLDER, "mw2port_in")
 OUT_DIR = os.path.join(FOLDER, "mw2port_out")
+GAME_DIR = os.path.join(FOLDER, "mw2port_pc_game")     # the PC game's iw_*.iwd files (optional)
 PORT = 8390
 
 TEAM_NAMES = {
@@ -101,7 +104,9 @@ def status():
         missing.append("a stock map, for example mp_favela.ff")
     if not [n for n in names if n.lower().endswith("_load.ff")]:
         missing.append("a stock _load.ff, for example mp_favela_load.ff")
+    game = [os.path.basename(p) for p in port_mod.game_iwd_files(GAME_DIR)]
     return {"folder": FOLDER, "in": IN_DIR, "out": OUT_DIR, "stock": names, "missing": missing,
+            "game": game,
             "maps": pc_maps(), "teams": team_list(stock),
             "job": {k: job[k] for k in ("running", "map", "done", "error", "files")},
             "log": job["log"][-400:]}
@@ -116,7 +121,8 @@ def _log(msg):
 def _run(pc_path, teams):
     name = os.path.splitext(os.path.basename(pc_path))[0]
     try:
-        files = port_mod.port_map(pc_path, os.path.join(OUT_DIR, name), stock_files(), teams, _log)
+        files = port_mod.port_map(pc_path, os.path.join(OUT_DIR, name), stock_files(), teams, _log,
+                                  port_mod.game_iwd_files(GAME_DIR))
         job["files"] = [os.path.relpath(f, FOLDER) for f in files]
         _log("")
         _log("Done. Copy these to _codxe\\zone\\ on the console:")
@@ -155,7 +161,7 @@ def convert(req):
 
 
 def open_folder(which):
-    path = {"in": IN_DIR, "out": OUT_DIR}.get(which)
+    path = {"in": IN_DIR, "out": OUT_DIR, "game": GAME_DIR}.get(which)
     if path is None:
         raise ValueError("unknown folder")
     os.makedirs(path, exist_ok=True)
@@ -214,6 +220,10 @@ ul{margin:4px 0 0;padding-left:20px}
 <code>usermaps\&lt;map&gt;</code> folder (the .ff, _load.ff, .iwd and .arena files). Then press Refresh.</p>
 <p><button id="openIn">Open mw2port_in</button></p>
 <div id="maps"></div></section>
+<section><h2>PC game pictures (optional)</h2>
+<p class="dim">Some IW4x maps borrow pictures from the PC game itself; without them those show up plain gray.
+Copy the <code>iw_*.iwd</code> files from your PC MW2 (or IW4x) <code>main</code> folder into <code>mw2port_pc_game</code>, then press Refresh.</p>
+<p><button id="openGame">Open mw2port_pc_game</button> <span id="game" class="dim"></span></p></section>
 <section><h2>2. Teams (pick any two)</h2>
 <p class="dim">Pick the two teams you want on this map. They start as the teams the map's .arena file asks for.
 A team comes from a stock 360 map that has it, so that map's .ff has to be in your work folder. A team marked
@@ -232,6 +242,7 @@ function renderStock(){let h=`<h2>Stock 360 files in your work folder</h2><p cla
  h+=S.stock.length?`<p>${S.stock.map(esc).join(", ")}</p>`:`<p class="bad">None found.</p>`;
  if(S.missing.length)h+=`<p class="warn">Still needed (copy from the console with FTP): ${S.missing.map(esc).join("; ")}.</p>`;
  $("#stock").innerHTML=h}
+function renderGame(){$("#game").innerHTML=S.game.length?`<span class="ok">${S.game.length} .iwd files: ${esc(S.game.slice(0,4).join(", "))}${S.game.length>4?", ...":""}</span>`:`<span class="warn">none yet</span>`}
 function renderMaps(){if(!S.maps.length){$("#maps").innerHTML=`<p class="warn">No PC maps in mw2port_in yet.</p>`;pick=null;return}
  if(!pick||!S.maps.find(m=>m.path===pick))pick=S.maps[0].path;
  $("#maps").innerHTML=S.maps.map(m=>`<div class="map${m.path===pick?" on":""}" data-p="${esc(m.path)}"><b>${esc(m.name)}</b>
@@ -249,9 +260,10 @@ function renderJob(){const j=S.job;$("#convert").disabled=j.running||!pick||S.mi
  $("#state").className=j.error?"bad":(j.done&&!j.running?"ok":"dim");
  if(S.log.length){const l=$("#log");const end=l.scrollTop+l.clientHeight>=l.scrollHeight-8;l.textContent=S.log.join("\n");l.className="";if(end)l.scrollTop=l.scrollHeight}
  clearTimeout(timer);if(j.running)timer=setTimeout(()=>load(false),1500)}
-async function load(all=true){try{S=await api("/api/status");if(all){renderStock();renderMaps();renderTeams()}renderJob()}catch(e){$("#state").textContent=e.message;$("#state").className="bad"}}
+async function load(all=true){try{S=await api("/api/status");if(all){renderStock();renderGame();renderMaps();renderTeams()}renderJob()}catch(e){$("#state").textContent=e.message;$("#state").className="bad"}}
 $("#refresh").onclick=()=>load();
 $("#openIn").onclick=()=>api("/api/open",{which:"in"}).then(()=>load()).catch(e=>alert(e.message));
+$("#openGame").onclick=()=>api("/api/open",{which:"game"}).then(()=>load()).catch(e=>alert(e.message));
 $("#openOut").onclick=()=>api("/api/open",{which:"out"}).catch(e=>alert(e.message));
 $("#convert").onclick=async()=>{const m=S.maps.find(x=>x.path===pick);if(!m)return;
  try{await api("/api/convert",{path:m.path,teams:chosen[m.path]||m.teams});load(false)}catch(e){alert(e.message)}};
@@ -294,6 +306,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     os.makedirs(IN_DIR, exist_ok=True)
+    os.makedirs(GAME_DIR, exist_ok=True)
     port = PORT
     for attempt in range(20):
         try:

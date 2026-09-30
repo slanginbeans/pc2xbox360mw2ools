@@ -43,7 +43,7 @@ def start(title, module, folder, about):
         return {"title": title, "about": about, "error": str(e)}
     except Exception as e:  # noqa: BLE001 - shown on the tab instead of stopping every tool
         return {"title": title, "about": about, "error": "%s: %s" % (type(e).__name__, e)}
-    for d in (getattr(mod, "IN_DIR", None),):
+    for d in (getattr(mod, "IN_DIR", None), getattr(mod, "GAME_DIR", None)):
         if d:
             os.makedirs(d, exist_ok=True)
     port = mod.PORT

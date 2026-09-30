@@ -471,7 +471,7 @@ def encode_dxt3a(lum, width, height):
 # ================================================================ converter
 
 class Porter:
-    def __init__(self, pc_root, x_refs, iwd=None, log=print):
+    def __init__(self, pc_root, x_refs, iwd=None, log=print, game_iwds=()):
         self.root = pc_root
         self.log = log
         self.P = schema_mod.load("pc")
@@ -481,6 +481,15 @@ class Porter:
         self.done = set()
         self.iwd = iwd
         self.missing_images = []
+        # The PC game's own .iwd files (iw_00.iwd ...): pictures a map borrows from the game.
+        # Later files win, as in the game.
+        self.game_pictures = {}
+        for zf in game_iwds:
+            for n in zf.namelist():
+                low = n.lower()
+                if low.startswith("images/") and low.endswith(".iwi"):
+                    self.game_pictures[low[7:-4]] = (zf, n)
+        self.from_game = 0
         self.techset_swaps = {}
         # Stock 360 assets: resident ones (use by ",name") and others to copy in.
         self.resident = {}
@@ -809,9 +818,13 @@ class Porter:
         for a in orphans:
             self.conv_asset(a)
             a["_forward"] = True
+        if self.from_game:
+            self.log("  %d pictures come from the PC game's own .iwd files" % self.from_game)
         if self.missing_images:
-            self.warn("%d pictures aren't in the map's .iwd, so plain gray ones stand in (%s%s)"
-                      % (len(self.missing_images), ", ".join(self.missing_images[:5]),
+            self.warn("%d pictures aren't in the map's .iwd%s, so plain gray ones stand in (%s%s)"
+                      % (len(self.missing_images),
+                         " or the PC game's files" if self.game_pictures else "",
+                         ", ".join(self.missing_images[:5]),
                          ", ..." if len(self.missing_images) > 5 else ""))
         for a, b in sorted(self.techset_swaps.items()):
             self.warn("shader set %s isn't in the stock files given, so %s is used"
@@ -989,8 +1002,12 @@ class Porter:
         ld = tex.get("@", {}).get(("loadDef", ())) if isinstance(tex, dict) else None
         if isinstance(ld, dict) and ld.get("resourceSize"):
             self.image_from_loaddef(d, ld)
+        elif not self.in_iwd(name) and name.decode().lower() in self.game_pictures:
+            zf, path = self.game_pictures[name.decode().lower()]
+            self.image_from_iwd(d, name, zf, path)
+            self.from_game += 1
         elif not self.in_iwd(name):
-            # Not in the map's .iwd (none given, or a picture from the PC game's own files):
+            # Not in the map's .iwd (none given) nor the PC game's files given:
             # a plain built-in picture stands in so the map still loads.
             self.missing_images.append(name.decode())
             return self._replace(d, self.reference("GfxImage", self.stand_in(d, name)))
@@ -1059,12 +1076,13 @@ class Porter:
             return b"$black"
         return b"$gray"
 
-    def image_from_iwd(self, d, name):
-        if self.iwd is None:
+    def image_from_iwd(self, d, name, iwd=None, path=None):
+        iwd = iwd or self.iwd
+        if iwd is None:
             raise PortError("image %s needs the map's .iwd" % name.decode())
-        path = "images/%s.iwi" % name.decode()
+        path = path or "images/%s.iwi" % name.decode()
         try:
-            data = self.iwd.read(path)
+            data = iwd.read(path)
         except KeyError:
             raise PortError("image %s isn't in the .iwd" % name.decode())
         fmt, w, h, mips, cube = read_iwi(data)
@@ -1422,8 +1440,19 @@ def load_stock(path):
     return root
 
 
-def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None):
-    """loaded: {path: tree} of stock files already read (load_stock), to reuse."""
+def game_iwd_files(folder):
+    """The .iwd files in a folder (the PC game's main folder or a copy of its iw_*.iwd), in
+    the order the game loads them."""
+    if not folder or not os.path.isdir(folder):
+        return []
+    return sorted((os.path.join(folder, n) for n in os.listdir(folder) if n.lower().endswith(".iwd")),
+                  key=lambda p: os.path.basename(p).lower())
+
+
+def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None,
+         game_iwds=()):
+    """loaded: {path: tree} of stock files already read (load_stock), to reuse.
+    game_iwds: the PC game's .iwd files, for pictures the map's own .iwd doesn't have."""
     ff, zone, root = load_tree(pc_path)
     if ff.platform != "pc":
         raise PortError("%s is not a PC fastfile" % pc_path)
@@ -1436,7 +1465,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         refs.append((p, loaded[p]))
     iwd = zipfile.ZipFile(iwd_path) if iwd_path else None
     log("converting %s" % os.path.basename(pc_path))
-    porter = Porter(root, refs, iwd, log)
+    porter = Porter(root, refs, iwd, log, [zipfile.ZipFile(p) for p in game_iwds])
     porter.convert()
     if porter.map_name:
         porter.add_teams(refs, map_teams(pc_path, teams))
@@ -1450,7 +1479,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     return out, porter
 
 
-def port_map(pc_path, out_dir, stock_paths, teams=None, log=print):
+def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=()):
     """Convert a PC map (its .ff, and _load.ff / .iwd / .arena next to it when there) into
     out_dir, picking what it needs from the stock 360 files given: code_post_gfx_mp.ff, a
     stock map (render settings, shaders) and the stock maps that carry the map's teams.
@@ -1489,7 +1518,8 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print):
         else:
             out = os.path.join(out_dir, name + "_load.ff")
             try:
-                port(base + "_load.ff", out, iwd, [cpg, template, load_ref], log, loaded=loaded)
+                port(base + "_load.ff", out, iwd, [cpg, template, load_ref], log, loaded=loaded,
+                     game_iwds=game_iwds)
                 written.append(out)
             except (ValueError, PortError, mw2ff.zone_mod.ZoneError) as e:
                 # The map works without it: the game shows a plain loading screen.
@@ -1499,7 +1529,7 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print):
                     "works, with a plain loading screen): %s [file starts %s]"
                     % (name, e, head.hex(" ")))
     out = os.path.join(out_dir, name + ".ff")
-    port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded)
+    port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded, game_iwds=game_iwds)
     written.append(out)
     return written
 
@@ -1588,11 +1618,12 @@ def main(argv):
     ap.add_argument("pc_ff")
     ap.add_argument("out_ff")
     ap.add_argument("--iwd")
+    ap.add_argument("--game", help="folder with the PC game's .iwd files (its main folder)")
     ap.add_argument("--ref360", nargs="*", default=[])
     ap.add_argument("--teams", nargs=2, metavar=("ALLIES", "AXIS"),
                     help="teams to use (default: from the map's .arena next to the .ff)")
     a = ap.parse_args(argv)
-    port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams)
+    port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams, game_iwds=game_iwd_files(a.game))
 
 
 if __name__ == "__main__":
