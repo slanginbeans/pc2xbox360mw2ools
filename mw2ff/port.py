@@ -294,9 +294,14 @@ def read_iwi(data):
     fmt = data[8]
     w, h, d = struct.unpack_from("<3H", data, 10)
     name = IWI_FORMATS.get(fmt)
+    expand = IWI_EXPAND.get(fmt)
+    if expand is not None:
+        name = "ARGB8"      # the few uncompressed kinds without a 360 twin become 32-bit
     if name is None:
         raise PortError("image format %d isn't supported yet" % fmt)
     bw, bpb = (1, 4) if name == "ARGB8" else (4, 8 if name == "DXT1" else 16)
+    if expand is not None:
+        bpb = expand[0]
     sizes = []
     lw, lh = w, h
     while True:
@@ -314,9 +319,39 @@ def read_iwi(data):
     for i in range(len(sizes) - 1, -1, -1):
         levels[i] = body[pos:pos + sizes[i] * faces]
         pos += sizes[i] * faces
+    if expand is not None:
+        levels = [expand[1](lv) for lv in levels]
+        sizes = [n // expand[0] * 4 for n in sizes]
     if cube:
         return name, w, h, [levels[0][f * sizes[0]:(f + 1) * sizes[0]] for f in range(6)], True
     return name, w, h, levels, False
+
+
+def _rgb24_to_argb8(b):
+    """B,G,R -> B,G,R,A (as in a DDS / format 1 .iwi)."""
+    out = bytearray(len(b) // 3 * 4)
+    out[0::4], out[1::4], out[2::4] = b[0::3], b[1::3], b[2::3]
+    out[3::4] = b"\xff" * (len(b) // 3)
+    return bytes(out)
+
+
+def _la16_to_argb8(b):
+    """Luminance, alpha -> gray with that alpha."""
+    out = bytearray(len(b) * 2)
+    lum, alpha = b[0::2], b[1::2]
+    out[0::4], out[1::4], out[2::4], out[3::4] = lum, lum, lum, alpha
+    return bytes(out)
+
+
+def _a8_to_argb8(b):
+    """Alpha only -> black with that alpha (what the PC's A8 samples as)."""
+    out = bytearray(len(b) * 4)
+    out[3::4] = b
+    return bytes(out)
+
+
+# .iwi kinds turned into 32-bit pixels: format -> (bytes a pixel, converter)
+IWI_EXPAND = {0x02: (3, _rgb24_to_argb8), 0x03: (2, _la16_to_argb8), 0x04: (1, _a8_to_argb8)}
 
 
 def fit_picture(fmt_name, w, h, mips, limit=2048):
