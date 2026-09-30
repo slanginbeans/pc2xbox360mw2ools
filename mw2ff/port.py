@@ -1,6 +1,7 @@
 """Convert a PC (IW4x / 2009 PC, version 276) fastfile to Xbox 360 TU6 layout.
 
     python port.py mp_geometric.ff OUT.ff [--iwd mp_geometric.iwd] [--ref360 FILE.ff ...]
+                   [--characters mp_favela]
 
 The PC file is read as a tree (tree.py). Every struct is carried over to the 360's struct
 of the same name field by field (numbers in big-endian, fields matched by name); the pieces
@@ -14,9 +15,13 @@ the two platforms store differently are converted by the hooks below:
     material using the same techset
   - images: pixels from the .iwd (.iwi files) or from the fastfile are tiled for the 360 GPU
     and stored in the fastfile with their mipmaps
+  - soldiers (--characters): IW4x loads team models from its own files, the 360 only from the
+    map's file, so a stock map's bodies, heads and arms are copied in with its teams
 """
 
 import argparse
+import contextlib
+import io
 import os
 import re
 import struct
@@ -40,6 +45,7 @@ X_DEFAULT_REFS = ["code_post_gfx_mp.ff", "mp_favela.ff"]
 BYTE_UNIONS = {"GfxSurfaceLightingAndFlags"}
 # Zones the 360 keeps loaded the whole time: their assets can be used by name.
 RESIDENT = ("code_post_gfx_mp", "common_mp")
+LEVELS = 4      # pak table entries per picture
 
 
 class PortError(Exception):
@@ -94,12 +100,22 @@ def _asset_in_slot(r):
         if i >= len(tgt):
             return None
         tgt = tgt[i]
+    return _asset_in_member(t, tgt, rel)
+
+
+def _asset_in_member(t, tgt, rel):
     if not isinstance(tgt, dict):
         return None
     for m in t.members:
         if m.offset == rel and m.mods and m.mods[0] == PTR:
             c = tgt.get("@", {}).get((tree.mkey(t, m), ()))
             if (isinstance(c, dict) and "_asset" in c) or isinstance(c, Ref):
+                return c
+        elif (not m.mods and isinstance(m.type, Compound)
+              and m.offset <= rel < m.offset + m.type.size):
+            # A pointer inside an inline struct or union (MaterialTextureDef.u.image).
+            c = _asset_in_member(m.type, tgt.get(m.name), rel - m.offset)
+            if c is not None:
                 return c
     return None
 
@@ -626,6 +642,8 @@ class Porter:
 
     def convert(self):
         ents = self.root["assets"]
+        gfx = next((e[1] for e in ents if e[0] == "gfx_map" and isinstance(e[1], dict)), {})
+        self.map_name = re.sub(rb"^maps/mp/|\.d3dbsp$", b"", _name(gfx) or b"")
         self.world_checksum = next((e[1].get("checksum", 0) for e in ents
                                     if e[0] == "gfx_map" and isinstance(e[1], dict)), 0)
         # Models placed only by single-player entities (IW4x maps often carry one) aren't
@@ -888,6 +906,13 @@ class Porter:
     def copy_in(self, src):
         """A copy of a stock 360 asset subtree, safe to write into another file: pointers back
         to things outside the subtree are replaced by the things themselves."""
+        self.localize(src)
+        new = dict(src)
+        new.pop("_slot", None)
+        return new
+
+    def localize(self, src):
+        """Make src (an asset, or a list of asset list entries) self-contained, in place."""
         inside = set(id(o) for o in iter_objects(src))
         memo = {}
 
@@ -967,9 +992,127 @@ class Porter:
                         stack.append(v)
             elif isinstance(o, list):
                 stack.extend(x for x in o if isinstance(x, (dict, list)))
-        new = dict(src)
-        new.pop("_slot", None)
-        return new
+
+    # ------------------------------------------------------------ player models
+
+    def add_characters(self, x_refs, map_name):
+        """Copy the soldier models (bodies, heads, arms) of stock map map_name into this file,
+        with everything they use, and make the map's script pick that map's two teams.
+        IW4x loads team models from its own files; on the 360 each map has to carry them."""
+        src = next((r for n, r in x_refs
+                    if os.path.splitext(os.path.basename(n))[0] == map_name), None)
+        if src is None:
+            raise PortError("--characters %s: give %s.ff with --ref360" % (map_name, map_name))
+        teams = None
+        for n, r in x_refs:
+            for e in r["assets"]:
+                if e[0] == "rawfile" and _name(e[1]) == b"mp/basemaps.arena":
+                    teams = teams or _arena_teams(_rawfile_text(e[1]), map_name)
+        if teams is None:
+            raise PortError("no teams for %s in mp/basemaps.arena (give code_post_gfx_mp.ff)" % map_name)
+        ents = src["assets"]
+        owner = {}
+        for i, e in enumerate(ents):
+            for o in iter_objects(e[1]):
+                if isinstance(o, dict) and "_asset" in o:
+                    owner.setdefault(id(o), i)
+        sel = set(i for i, e in enumerate(ents) if e[0] == "xmodel"
+                  and re.match(rb"(mp_body_|head_|viewhands_)", _name(e[1]) or b""))
+        todo = list(sel)
+        while todo:
+            for o in iter_objects(ents[todo.pop()][1]):
+                if not isinstance(o, dict):
+                    continue
+                for c in o.get("@", {}).values():
+                    for x in (c if isinstance(c, list) else [c]):
+                        if not isinstance(x, Ref):
+                            continue
+                        a = x.target if isinstance(x.target, tree.AssetEntry) else _asset_in_slot(x)
+                        j = None
+                        if isinstance(a, tree.AssetEntry):
+                            j = next(k for k, e in enumerate(ents) if e is a)
+                        elif isinstance(a, dict):
+                            j = owner.get(id(a))
+                        if j is not None and j not in sel:
+                            sel.add(j)
+                            todo.append(j)
+        new = [ents[i] for i in sorted(sel)]
+        self.localize(new)
+        # Bone names are indexes into the file's script string list: move them to ours.
+        ss = self.root.get("script_strings")
+        if ss is None:
+            ss = self.root["script_strings"] = [None]
+        where = {(s.b if isinstance(s, Str) else None): k for k, s in enumerate(ss)}
+        theirs = src["script_strings"]
+        done = set()
+        for o in iter_objects(new):
+            if isinstance(o, dict) and o.get("_asset") == "XModel":
+                lf = o.get("@", {}).get(("boneNames", ()))
+                if isinstance(lf, Ref):
+                    lf = lf.target
+                if not isinstance(lf, Leaf) or id(lf) in done:
+                    continue
+                done.add(id(lf))
+                out = []
+                for v in struct.unpack(lf.E + "%dH" % lf.n, lf.raw):
+                    b = theirs[v].b if isinstance(theirs[v], Str) else None
+                    if b not in where:
+                        where[b] = len(ss)
+                        ss.append(Str(b))
+                    out.append(where[b])
+                lf.raw = struct.pack(lf.E + "%dH" % lf.n, *out)
+        self.root["assets"][:0] = new
+        # The 360 only knows the teams of its own maps (mp/basemaps.arena); set them in the
+        # map's script so the game uses the models copied in.
+        gsc = b"maps/mp/%s.gsc" % self.map_name
+        for e in self.root["assets"]:
+            if e[0] == "rawfile" and _name(e[1]) == gsc:
+                text = _rawfile_text(e[1]).decode("latin-1")
+                line = '\tgame[ "allies" ] = "%s";\n\tgame[ "axis" ] = "%s";\n' % teams
+                text, n = re.subn(r"(main\s*\(\s*\)\s*\{[^\n]*\n)", lambda m: m.group(1) + line, text, 1)
+                if n:
+                    _set_rawfile_text(e[1], text.encode("latin-1"))
+                    break
+        else:
+            self.warn("couldn't set the teams in %s" % gsc.decode())
+        self.log("  added %d %s player models (%s vs %s)" % (
+            sum(1 for e in new if e[0] == "xmodel"), map_name, teams[0], teams[1]))
+
+
+def _name(d):
+    c = d.get("@", {}).get(("name", ()))
+    if isinstance(c, Ref) and isinstance(c.target, Str) and c.rel == 0:
+        c = c.target
+    return c.b if isinstance(c, Str) else None
+
+
+def _rawfile_text(d):
+    import zlib
+    ch = d["data"]["@"]
+    lf = ch.get(("buffer", ()), ch.get(("compressedBuffer", ())))
+    if isinstance(lf, Ref):
+        lf = lf.target
+    raw = lf.raw
+    if d.get("compressedLen"):
+        raw = zlib.decompress(raw[:d["compressedLen"]])
+    return raw[:d["len"]]
+
+
+def _set_rawfile_text(d, data):
+    ch = d["data"]["@"]
+    old = ch.pop(("buffer", ()), None) or ch.pop(("compressedBuffer", ()))
+    d["compressedLen"] = 0
+    d["len"] = len(data)
+    d["data"]["@"][("buffer", ())] = Leaf(old.t, len(data) + 1, data + b"\0", old.E)
+
+
+def _arena_teams(text, map_name):
+    for block in re.findall(rb"\{(.*?)\}", text, re.S):
+        kv = dict(re.findall(rb'(\w+)\s+"?([^"\s]*)"?', block))
+        if kv.get(b"map") == map_name.encode():
+            if b"allieschar" in kv and b"axischar" in kv:
+                return kv[b"allieschar"].decode(), kv[b"axischar"].decode()
+    return None
 
 
 # ================================================================ command line
@@ -981,7 +1124,7 @@ def load_tree(path):
     return ff, zone, root
 
 
-def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print):
+def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, characters=None):
     ff, zone, root = load_tree(pc_path)
     if ff.platform != "pc":
         raise PortError("%s is not a PC fastfile" % pc_path)
@@ -993,12 +1136,14 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print):
     log("converting %s" % os.path.basename(pc_path))
     porter = Porter(root, refs, iwd, log)
     porter.convert()
+    if characters:
+        porter.add_characters(refs, characters)
     xs = schema_mod.load("xbox")
     w = tree.TreeWriter(root, xs, keep_fixes=False)
     w.map_rel = lambda r: map_rel(r, porter.P, porter.X)
     out = w.write()
     out = reserve_callback_block(out, porter)
-    _write_x360(out, out_path)
+    _write_x360(out, out_path, pak_table(out, out_path, ref_paths))
     log("wrote %s (%d bytes of zone)" % (out_path, len(out)))
     return out, porter
 
@@ -1057,13 +1202,41 @@ def _member_off(tp, tx, rem):
 X360_HEAD = bytes.fromhex("49576666753130300000010d0101ca3ec038c2e4a000000001")
 
 
-def _write_x360(zone, path):
+def _write_x360(zone, path, table=()):
     import zlib
     stream = zlib.compress(zone, 9)
-    head = X360_HEAD + struct.pack(">I", 0)
+    head = X360_HEAD + struct.pack(">I", len(table)) + b"".join(struct.pack(">III", *t) for t in table)
     total = len(head) + 8 + len(stream)
+    # The second size also counts the pictures read from imagefile1.pak while loading.
+    extra = sum(t[2] - t[1] for t in table if t[0] == 1)
     with open(path, "wb") as f:
-        f.write(head + struct.pack(">II", total, total) + stream)
+        f.write(head + struct.pack(">II", total, total + extra) + stream)
+
+
+def pak_table(zone, out_path, ref_paths):
+    """Stock pictures copied in whose pixels live in the disc's imagefile*.pak files: the
+    container lists where, 4 entries per picture in the order the zone has them. Take each
+    picture's entries from the stock file it came from."""
+    import mw2tex
+    _write_x360(zone, out_path)
+    with contextlib.redirect_stdout(io.StringIO()):
+        ours = [i for i in mw2tex.FastFile(out_path).images if i["pak"]]
+    if not ours:
+        return []
+    where = {}
+    for p in ref_paths:
+        f = mw2tex.FastFile(p)
+        for i in f.images:
+            if i["pak"]:
+                first = i["levels"][0]["entry"] // LEVELS * LEVELS if i["levels"] else None
+                where.setdefault(i["name"], f.table[first:first + LEVELS] if i["levels"] else None)
+    table = []
+    for i in ours:
+        t = where.get(i["name"])
+        if t is None or len(t) != LEVELS:
+            raise PortError("no stock pak entries for picture %s" % i["name"])
+        table += t
+    return table
 
 
 def main(argv):
@@ -1072,8 +1245,10 @@ def main(argv):
     ap.add_argument("out_ff")
     ap.add_argument("--iwd")
     ap.add_argument("--ref360", nargs="*", default=[])
+    ap.add_argument("--characters", metavar="STOCK_MAP",
+                    help="copy this stock map's soldier models and teams in (its .ff must be a --ref360)")
     a = ap.parse_args(argv)
-    port(a.pc_ff, a.out_ff, a.iwd, a.ref360)
+    port(a.pc_ff, a.out_ff, a.iwd, a.ref360, characters=a.characters)
 
 
 if __name__ == "__main__":
