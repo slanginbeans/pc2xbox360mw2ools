@@ -1,7 +1,7 @@
 """Convert a PC (IW4x / 2009 PC, version 276) fastfile to Xbox 360 TU6 layout.
 
     python port.py mp_geometric.ff OUT.ff [--iwd mp_geometric.iwd] [--ref360 FILE.ff ...]
-                   [--characters mp_favela]
+                   [--teams ALLIES AXIS]
 
 The PC file is read as a tree (tree.py). Every struct is carried over to the 360's struct
 of the same name field by field (numbers in big-endian, fields matched by name); the pieces
@@ -15,8 +15,9 @@ the two platforms store differently are converted by the hooks below:
     material using the same techset
   - images: pixels from the .iwd (.iwi files) or from the fastfile are tiled for the 360 GPU
     and stored in the fastfile with their mipmaps
-  - soldiers (--characters): IW4x loads team models from its own files, the 360 only from the
-    map's file, so a stock map's bodies, heads and arms are copied in with its teams
+  - teams: IW4x loads team assets from its own files, the 360 only from the map's file, so the
+    two teams the map's .arena names (soldiers, flags, crates, icons) are copied in from stock
+    360 maps given with --ref360 that have them
 """
 
 import argparse
@@ -46,6 +47,56 @@ BYTE_UNIONS = {"GfxSurfaceLightingAndFlags"}
 # Zones the 360 keeps loaded the whole time: their assets can be used by name.
 RESIDENT = ("code_post_gfx_mp", "common_mp")
 LEVELS = 4      # pak table entries per picture
+
+# Per team (mp/factionTable.csv + the character scripts in common_mp): the models and
+# icons a map carries for it. The 360 keeps these in each map's own file.
+TEAM_ASSETS = {
+    'us_army': {
+        "models": ['head_allies_us_army_sniper', 'head_us_army_a', 'head_us_army_b', 'head_us_army_c', 'head_us_army_d', 'head_us_army_e', 'head_us_army_f', 'mp_body_army_sniper', 'mp_body_us_army_assault_a', 'mp_body_us_army_assault_b', 'mp_body_us_army_assault_c', 'mp_body_us_army_lmg', 'mp_body_us_army_lmg_b', 'mp_body_us_army_lmg_c', 'mp_body_us_army_riot', 'mp_body_us_army_shotgun', 'mp_body_us_army_shotgun_b', 'mp_body_us_army_shotgun_c', 'mp_body_us_army_smg', 'mp_body_us_army_smg_b', 'mp_body_us_army_smg_c', 'viewhands_sniper_us_army', 'viewhands_us_army', 'prop_flag_ranger', 'prop_flag_ranger_carry', 'com_plasticcase_rangers'],
+        "materials": ['faction_128_rangers', 'faction_128_rangers_fade', 'objpoint_flag_rangers', 'headicon_rangers'],
+    },
+    'opforce_composite': {
+        "models": ['head_op_arab_sniper', 'head_opforce_arab_a', 'head_opforce_arab_b', 'head_opforce_arab_c', 'head_opforce_arab_d_hat', 'head_opforce_arab_e', 'head_riot_op_arab', 'mp_body_op_arab_sniper', 'mp_body_opforce_arab_assault_a', 'mp_body_opforce_arab_lmg_a', 'mp_body_opforce_arab_shotgun_a', 'mp_body_opforce_arab_smg_a', 'mp_body_riot_op_arab', 'viewhands_militia', 'viewhands_sniper_op_arab', 'prop_flag_opforce', 'prop_flag_opforce_carry', 'com_plasticcase_arab'],
+        "materials": ['faction_128_arab', 'faction_128_arab_fade', 'objpoint_flag_arab', 'headicon_arab'],
+    },
+    'opforce_arctic': {
+        "models": ['head_op_arctic_sniper', 'head_opforce_arctic_a', 'head_opforce_arctic_b', 'head_opforce_arctic_c', 'head_opforce_arctic_d', 'head_riot_op_arctic', 'mp_body_op_arctic_sniper', 'mp_body_opforce_arctic_assault_a', 'mp_body_opforce_arctic_assault_b', 'mp_body_opforce_arctic_assault_c', 'mp_body_opforce_arctic_lmg', 'mp_body_opforce_arctic_lmg_b', 'mp_body_opforce_arctic_lmg_c', 'mp_body_opforce_arctic_shotgun', 'mp_body_opforce_arctic_shotgun_b', 'mp_body_opforce_arctic_shotgun_c', 'mp_body_opforce_arctic_smg', 'mp_body_opforce_arctic_smg_b', 'mp_body_opforce_arctic_smg_c', 'mp_body_riot_op_arctic', 'viewhands_arctic_opforce', 'viewhands_sniper_op_arctic', 'prop_flag_speznas', 'prop_flag_speznas_carry', 'com_plasticcase_ussr'],
+        "materials": ['faction_128_ussr', 'faction_128_ussr_fade', 'objpoint_flag_ussr', 'headicon_ussr'],
+    },
+    'opforce_airborne': {
+        "models": ['head_airborne_a', 'head_airborne_b', 'head_airborne_c', 'head_airborne_d', 'head_airborne_e', 'head_op_airborne_sniper', 'head_riot_op_airborne', 'mp_body_airborne_assault_a', 'mp_body_airborne_assault_b', 'mp_body_airborne_assault_c', 'mp_body_airborne_lmg', 'mp_body_airborne_lmg_b', 'mp_body_airborne_lmg_c', 'mp_body_airborne_shotgun', 'mp_body_airborne_shotgun_b', 'mp_body_airborne_shotgun_c', 'mp_body_airborne_smg', 'mp_body_airborne_smg_b', 'mp_body_airborne_smg_c', 'mp_body_op_airborne_sniper', 'mp_body_riot_op_airborne', 'viewhands_russian_airborne', 'viewhands_sniper_op_airborne', 'prop_flag_speznas', 'prop_flag_speznas_carry', 'com_plasticcase_ussr'],
+        "materials": ['faction_128_ussr', 'faction_128_ussr_fade', 'objpoint_flag_ussr', 'headicon_ussr'],
+    },
+    'militia': {
+        "models": ['head_militia_a_wht', 'head_militia_ba_blk', 'head_militia_bb_blk_hat', 'head_militia_bc_blk', 'head_militia_bd_blk', 'head_op_militia_sniper', 'head_riot_op_militia', 'mp_body_militia_assault_aa_blk', 'mp_body_militia_assault_aa_wht', 'mp_body_militia_assault_ab_blk', 'mp_body_militia_assault_ac_blk', 'mp_body_militia_lmg_aa_blk', 'mp_body_militia_lmg_ab_blk', 'mp_body_militia_lmg_ac_blk', 'mp_body_militia_smg_aa_blk', 'mp_body_militia_smg_aa_wht', 'mp_body_militia_smg_ab_blk', 'mp_body_militia_smg_ac_blk', 'mp_body_op_miltia_sniper', 'mp_body_riot_op_militia', 'viewhands_militia', 'prop_flag_militia', 'prop_flag_militia_carry', 'com_plasticcase_militia'],
+        "materials": ['faction_128_militia', 'faction_128_militia_fade', 'objpoint_flag_militia', 'headicon_militia'],
+    },
+    'socom_141': {
+        "models": ['head_seal_soccom_a', 'head_seal_soccom_ba', 'head_seal_soccom_ca', 'head_seal_soccom_da', 'mp_body_seal_soccom_assault_a', 'mp_body_seal_soccom_assault_b', 'mp_body_seal_soccom_assault_b_blk', 'mp_body_seal_soccom_assault_c', 'mp_body_seal_soccom_assault_c_blk', 'mp_body_seal_soccom_assault_d', 'viewhands_us_army', 'prop_flag_tf141', 'prop_flag_tf141_carry', 'com_plasticcase_taskforce141'],
+        "materials": ['faction_128_taskforce141', 'faction_128_taskforce141_fade', 'objpoint_flag_taskforce', 'headicon_taskforce141'],
+    },
+    'socom_141_arctic': {
+        "models": ['head_allies_tf141_arctic_sniper', 'head_riot_tf141_arctic', 'head_tf141_arctic_a', 'head_tf141_arctic_b', 'head_tf141_arctic_c', 'head_tf141_arctic_d', 'mp_body_riot_tf141_arctic', 'mp_body_tf141_arctic_sniper', 'mp_body_tf141_assault_a', 'mp_body_tf141_assault_b', 'mp_body_tf141_lmg', 'mp_body_tf141_shotgun', 'mp_body_tf141_smg', 'viewhands_arctic', 'viewhands_sniper_tf141_arctic', 'viewhands_tf141', 'prop_flag_tf141', 'prop_flag_tf141_carry', 'com_plasticcase_taskforce141'],
+        "materials": ['faction_128_taskforce141', 'faction_128_taskforce141_fade', 'objpoint_flag_taskforce', 'headicon_taskforce141'],
+    },
+    'socom_141_desert': {
+        "models": ['head_allies_tf141_desert_sniper', 'head_riot_tf141_desert', 'head_tf141_desert_a', 'head_tf141_desert_b', 'head_tf141_desert_c', 'head_tf141_desert_d', 'mp_body_desert_tf141_assault_a', 'mp_body_desert_tf141_assault_b', 'mp_body_desert_tf141_lmg', 'mp_body_desert_tf141_shotgun', 'mp_body_desert_tf141_smg', 'mp_body_riot_tf141_desert', 'mp_body_tf141_desert_sniper', 'viewhands_sniper_tf141_desert', 'viewhands_tf141', 'prop_flag_tf141', 'prop_flag_tf141_carry', 'com_plasticcase_taskforce141'],
+        "materials": ['faction_128_taskforce141', 'faction_128_taskforce141_fade', 'objpoint_flag_taskforce', 'headicon_taskforce141'],
+    },
+    'socom_141_forest': {
+        "models": ['head_allies_tf141_forest_sniper', 'head_riot_tf141_forest', 'head_tf141_forest_a', 'head_tf141_forest_b', 'head_tf141_forest_c', 'head_tf141_forest_d', 'mp_body_forest_tf141_assault_a', 'mp_body_forest_tf141_assault_b', 'mp_body_forest_tf141_lmg', 'mp_body_forest_tf141_shotgun', 'mp_body_forest_tf141_smg', 'mp_body_riot_tf141_forest', 'mp_body_tf141_forest_sniper', 'viewhands_sniper_tf141_forest', 'viewhands_tf141', 'prop_flag_tf141', 'prop_flag_tf141_carry', 'com_plasticcase_taskforce141'],
+        "materials": ['faction_128_taskforce141', 'faction_128_taskforce141_fade', 'objpoint_flag_taskforce', 'headicon_taskforce141'],
+    },
+    'seals_udt': {
+        "models": ['head_allies_seal_udt_sniper', 'head_riot_udt', 'head_seal_udt_a', 'head_seal_udt_c', 'head_seal_udt_d', 'head_seal_udt_e', 'mp_body_riot_udt', 'mp_body_seal_udt_assault_a', 'mp_body_seal_udt_assault_b', 'mp_body_seal_udt_lmg', 'mp_body_seal_udt_smg', 'mp_body_seal_udt_sniper', 'viewhands_sniper_udt', 'viewhands_udt', 'prop_flag_seal', 'prop_flag_seal_carry', 'com_plasticcase_seals'],
+        "materials": ['faction_128_seals', 'faction_128_seals_fade', 'objpoint_flag_seals', 'headicon_seals'],
+    },
+}
+SIDE_TEAMS = {
+    "allies": ("us_army", "seals_udt", "socom_141", "socom_141_desert", "socom_141_forest",
+               "socom_141_arctic"),
+    "axis": ("opforce_composite", "opforce_airborne", "opforce_arctic", "militia"),
+}
 
 
 class PortError(Exception):
@@ -93,6 +144,11 @@ def _asset_in_slot(r):
         return tgt[1]
     if isinstance(tgt, tree.InsertSlot):
         return tgt.asset
+    if isinstance(tgt, PtrList) and rel % 4 == 0 and rel // 4 < len(tgt):
+        # An element of another asset's pointer array (XModel.materialHandles).
+        c = tgt[rel // 4]
+        if (isinstance(c, dict) and "_asset" in c) or isinstance(c, Ref):
+            return c
     if not isinstance(t, Compound) or t.kind != "struct":
         return None
     if isinstance(tgt, list):
@@ -298,9 +354,18 @@ class ImageMaker:
         if tpl is None:
             raise PortError("no stock 360 %s%s image to copy settings from" % (fmt_name, " cube" if cube else ""))
         if cube:
-            # Six faces, top level only (each face tiled on its own, one after the other).
-            levels = 1
-            pixels = b"".join(tex.tile([m], width, height, gpu, single=True) for m in mips)
+            # Six faces, each tiled on its own. mips: per face, its top mip or its whole chain.
+            # With mips: every face's top level, then each further mip slice for all six faces
+            # (as in stock reflection probes).
+            chains = [m if isinstance(m, list) else [m] for m in mips]
+            levels = min(len(c) for c in chains)
+            if levels == 1:
+                pixels = b"".join(tex.tile(c[:1], width, height, gpu, single=True) for c in chains)
+            else:
+                plan, total = tex._plan(width, height, gpu)
+                cuts = sorted(set(p[1] for p in plan[:levels])) + [total]
+                tiled = [tex.tile(c[:levels], width, height, gpu) for c in chains]
+                pixels = b"".join(t[a:b] for a, b in zip(cuts, cuts[1:]) for t in tiled)
         else:
             levels = len(mips)
             pixels = tex.tile(mips, width, height, gpu, single=(levels == 1))
@@ -315,7 +380,7 @@ class ImageMaker:
         dw[4] = (dw[4] & ~(0xF << 6)) | ((levels - 1) << 6)
         mip_addr = 0
         if levels > 1:
-            mip_addr = tex._layout(width, height, 0, gpu)[3] >> 12
+            mip_addr = tex._layout(width, height, 0, gpu)[3] * (6 if cube else 1) >> 12
         dw[5] = (dw[5] & 0xFFF & ~(1 << 11)) | (mip_addr << 12) | ((1 << 11) if levels > 1 else 0)
         if make_cube:
             dw[2] = (dw[2] & 0x3FFFFFF) | (5 << 26)          # six faces
@@ -404,6 +469,8 @@ class Porter:
                 self.material_templates.setdefault(tn.lstrip(b","), v)
         self.warnings = []
         self.moved_images = []
+        self.picked = {}        # stock file -> its asset list entries to copy in
+        self.remapped = set()
         self.report = set()     # (type, "dropped" | "defaulted", member) seen while converting
 
     def warn(self, msg):
@@ -894,6 +961,21 @@ class Porter:
         face = len(data) // faces
         top = w * h * bpp
         mips = [data[i * face:i * face + top] for i in range(faces)]
+        if cube and out_fmt == "ARGB8":
+            # Reflection probes: keep every face's mips. The smaller mips are blurrier copies
+            # the game uses for less glossy surfaces; with the top mip alone every gun and
+            # shiny surface reflects the sharp picture (too shiny).
+            chains = []
+            for i in range(faces):
+                chain, off, mw, mh = [], i * face, w, h
+                while off + mw * mh * bpp <= (i + 1) * face:
+                    chain.append(data[off:off + mw * mh * bpp])
+                    off += mw * mh * bpp
+                    if mw == 1 and mh == 1:
+                        break
+                    mw, mh = max(1, mw // 2), max(1, mh // 2)
+                chains.append(chain)
+            mips = chains
         if out_fmt == "DXT3A":
             mips = [encode_dxt3a(m, w, h) for m in mips]
         tpl = None
@@ -914,6 +996,8 @@ class Porter:
     def localize(self, src):
         """Make src (an asset, or a list of asset list entries) self-contained, in place."""
         inside = set(id(o) for o in iter_objects(src))
+        # The slot a temp-block asset reserves counts as part of it (later assets point there).
+        inside |= set(id(o["_slot"]) for o in iter_objects(src) if isinstance(o, dict) and "_slot" in o)
         memo = {}
 
         def cp(o):
@@ -993,31 +1077,73 @@ class Porter:
             elif isinstance(o, list):
                 stack.extend(x for x in o if isinstance(x, (dict, list)))
 
-    # ------------------------------------------------------------ player models
+    # ------------------------------------------------------------ teams
 
-    def add_characters(self, x_refs, map_name):
-        """Copy the soldier models (bodies, heads, arms) of stock map map_name into this file,
-        with everything they use, and make the map's script pick that map's two teams.
-        IW4x loads team models from its own files; on the 360 each map has to carry them."""
-        src = next((r for n, r in x_refs
-                    if os.path.splitext(os.path.basename(n))[0] == map_name), None)
-        if src is None:
-            raise PortError("--characters %s: give %s.ff with --ref360" % (map_name, map_name))
-        teams = None
+    def add_teams(self, x_refs, teams):
+        """Copy what the two teams need (soldier bodies, heads and arms, flag and crate models,
+        team icons) from stock 360 maps that have them, and make the map's script use those
+        teams. IW4x loads team assets from its own files; on the 360 each map carries them.
+        teams: (allies, axis) as wanted (the map's .arena); a team no stock file given has is
+        swapped for one that is there. Returns the teams used."""
+        arena = None
         for n, r in x_refs:
             for e in r["assets"]:
                 if e[0] == "rawfile" and _name(e[1]) == b"mp/basemaps.arena":
-                    teams = teams or _arena_teams(_rawfile_text(e[1]), map_name)
-        if teams is None:
-            raise PortError("no teams for %s in mp/basemaps.arena (give code_post_gfx_mp.ff)" % map_name)
+                    arena = arena or _rawfile_text(e[1])
+        donors = []         # (file name, root, team)
+        for n, r in x_refs:
+            have = set((e[0], _name(e[1])) for e in r["assets"] if isinstance(e[1], dict))
+            for team, need in TEAM_ASSETS.items():
+                if all(("xmodel", m.encode()) in have for m in need["models"]) and \
+                        all(("material", m.encode()) in have for m in need["materials"]):
+                    donors.append((n, r, team))
+        used = []
+        for side, want in zip(("allies", "axis"), teams):
+            want = (want or "").lower()
+            pick = next((d for d in donors if d[2] == want), None)
+            if pick is None:
+                pick = next((d for d in donors if d[2] in SIDE_TEAMS[side] and d[2] not in
+                             [u[2] for u in used]), None) or next(
+                    (d for d in donors if d[2] not in [u[2] for u in used]), None)
+                if pick is None:
+                    raise PortError("no stock map given (--ref360) has the %s team" % want)
+                self.warn("the map wants the %s team for %s; using %s instead (give one of %s "
+                          "with --ref360 for %s)" % (want or "(none)", side, pick[2],
+                                                     ", ".join(_team_maps(arena, want)) or "?", want))
+            used.append(pick)
+        for n, r, team in used:
+            self._pick_team(r, team)
+        for n, r, team in used:
+            self._copy_picked(r)
+        # The 360 only knows the teams of its own maps (mp/basemaps.arena); set them in the
+        # map's script so the game uses the assets copied in.
+        gsc = b"maps/mp/%s.gsc" % self.map_name
+        for e in self.root["assets"]:
+            if e[0] == "rawfile" and _name(e[1]) == gsc:
+                text = _rawfile_text(e[1]).decode("latin-1")
+                line = '\tgame[ "allies" ] = "%s";\n\tgame[ "axis" ] = "%s";\n' % (used[0][2], used[1][2])
+                text, n = re.subn(r"(main\s*\(\s*\)\s*\{[^\n]*\n)", lambda m: m.group(1) + line, text, 1)
+                if n:
+                    _set_rawfile_text(e[1], text.encode("latin-1"))
+                    break
+        else:
+            self.warn("couldn't set the teams in %s" % gsc.decode())
+        self.log("  teams: %s (from %s) vs %s (from %s)" % (
+            used[0][2], os.path.basename(used[0][0]), used[1][2], os.path.basename(used[1][0])))
+        return used[0][2], used[1][2]
+
+    def _pick_team(self, src, team):
+        need = TEAM_ASSETS[team]
+        names = set(("xmodel", m.encode()) for m in need["models"]) | \
+            set(("material", m.encode()) for m in need["materials"])
         ents = src["assets"]
+        pos = {id(e): i for i, e in enumerate(ents)}
         owner = {}
         for i, e in enumerate(ents):
             for o in iter_objects(e[1]):
                 if isinstance(o, dict) and "_asset" in o:
                     owner.setdefault(id(o), i)
-        sel = set(i for i, e in enumerate(ents) if e[0] == "xmodel"
-                  and re.match(rb"(mp_body_|head_|viewhands_)", _name(e[1]) or b""))
+        sel = set(i for i, e in enumerate(ents) if isinstance(e[1], dict) and (e[0], _name(e[1])) in names)
         todo = list(sel)
         while todo:
             for o in iter_objects(ents[todo.pop()][1]):
@@ -1030,12 +1156,21 @@ class Porter:
                         a = x.target if isinstance(x.target, tree.AssetEntry) else _asset_in_slot(x)
                         j = None
                         if isinstance(a, tree.AssetEntry):
-                            j = next(k for k, e in enumerate(ents) if e is a)
+                            j = pos[id(a)]
                         elif isinstance(a, dict):
                             j = owner.get(id(a))
                         if j is not None and j not in sel:
                             sel.add(j)
                             todo.append(j)
+        self.picked.setdefault(id(src), set()).update(sel)
+
+    def _copy_picked(self, src):
+        """Copy the entries picked from src in their stock order (both teams of one file
+        together: a later model can point into an earlier one's parts)."""
+        sel = self.picked.pop(id(src), None)
+        if not sel:
+            return
+        ents = src["assets"]
         new = [ents[i] for i in sorted(sel)]
         self.localize(new)
         # Bone names are indexes into the file's script string list: move them to ours.
@@ -1044,15 +1179,14 @@ class Porter:
             ss = self.root["script_strings"] = [None]
         where = {(s.b if isinstance(s, Str) else None): k for k, s in enumerate(ss)}
         theirs = src["script_strings"]
-        done = set()
         for o in iter_objects(new):
             if isinstance(o, dict) and o.get("_asset") == "XModel":
                 lf = o.get("@", {}).get(("boneNames", ()))
                 if isinstance(lf, Ref):
                     lf = lf.target
-                if not isinstance(lf, Leaf) or id(lf) in done:
+                if not isinstance(lf, Leaf) or id(lf) in self.remapped:
                     continue
-                done.add(id(lf))
+                self.remapped.add(id(lf))
                 out = []
                 for v in struct.unpack(lf.E + "%dH" % lf.n, lf.raw):
                     b = theirs[v].b if isinstance(theirs[v], Str) else None
@@ -1062,25 +1196,12 @@ class Porter:
                     out.append(where[b])
                 lf.raw = struct.pack(lf.E + "%dH" % lf.n, *out)
         self.root["assets"][:0] = new
-        # The 360 only knows the teams of its own maps (mp/basemaps.arena); set them in the
-        # map's script so the game uses the models copied in.
-        gsc = b"maps/mp/%s.gsc" % self.map_name
-        for e in self.root["assets"]:
-            if e[0] == "rawfile" and _name(e[1]) == gsc:
-                text = _rawfile_text(e[1]).decode("latin-1")
-                line = '\tgame[ "allies" ] = "%s";\n\tgame[ "axis" ] = "%s";\n' % teams
-                text, n = re.subn(r"(main\s*\(\s*\)\s*\{[^\n]*\n)", lambda m: m.group(1) + line, text, 1)
-                if n:
-                    _set_rawfile_text(e[1], text.encode("latin-1"))
-                    break
-        else:
-            self.warn("couldn't set the teams in %s" % gsc.decode())
-        self.log("  added %d %s player models (%s vs %s)" % (
-            sum(1 for e in new if e[0] == "xmodel"), map_name, teams[0], teams[1]))
 
 
 def _name(d):
     c = d.get("@", {}).get(("name", ()))
+    if c is None and isinstance(d.get("info"), dict):
+        c = d["info"].get("@", {}).get(("name", ()))
     if isinstance(c, Ref) and isinstance(c.target, Str) and c.rel == 0:
         c = c.target
     return c.b if isinstance(c, Str) else None
@@ -1106,6 +1227,16 @@ def _set_rawfile_text(d, data):
     d["data"]["@"][("buffer", ())] = Leaf(old.t, len(data) + 1, data + b"\0", old.E)
 
 
+def _team_maps(arena, team):
+    """Stock maps whose file carries team (from mp/basemaps.arena)."""
+    out = []
+    for block in re.findall(rb"\{(.*?)\}", arena or b"", re.S):
+        kv = dict(re.findall(rb'(\w+)\s+"?([^"\s]*)"?', block))
+        if team.encode() in (kv.get(b"allieschar"), kv.get(b"axischar")):
+            out.append(kv[b"map"].decode())
+    return out
+
+
 def _arena_teams(text, map_name):
     for block in re.findall(rb"\{(.*?)\}", text, re.S):
         kv = dict(re.findall(rb'(\w+)\s+"?([^"\s]*)"?', block))
@@ -1124,26 +1255,56 @@ def load_tree(path):
     return ff, zone, root
 
 
-def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, characters=None):
+def map_teams(pc_path, teams=None):
+    """(allies, axis) the map wants: given, or from its .arena file next to the .ff, or the
+    game's defaults for a map it doesn't know."""
+    if teams:
+        return tuple(teams)
+    arena = os.path.splitext(pc_path)[0] + ".arena"
+    if os.path.exists(arena):
+        text = open(arena, "rb").read()
+        kv = dict(re.findall(rb'(\w+)[ \t]+"?([^"\s]*)"?', text))
+        if b"allieschar" in kv and b"axischar" in kv:
+            return kv[b"allieschar"].decode(), kv[b"axischar"].decode()
+    return "us_army", "opforce_composite"
+
+
+def load_stock(path):
+    """A stock 360 file's tree, with each picture whose pixels are in the disc's
+    imagefile*.pak files marked with its container entries ("_pak")."""
+    import mw2tex
+    ff, zone = mw2ff.read_fastfile(path)
+    root, r = tree.read_tree(zone, mw2ff.schema_for(ff.platform))
+    with contextlib.redirect_stdout(io.StringIO()):
+        f = mw2tex.FastFile(path)
+    paks = {i["offset"]: k for k, i in enumerate(x for x in f.images if x["pak"])}
+    for info, inst, start, end in r.assets:
+        if info.name == "GfxImage" and start in paks:
+            k = paks[start]
+            r.reg[id(inst)][1]["_pak"] = [tuple(t) for t in f.table[k * LEVELS:(k + 1) * LEVELS]]
+    return root
+
+
+def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None):
     ff, zone, root = load_tree(pc_path)
     if ff.platform != "pc":
         raise PortError("%s is not a PC fastfile" % pc_path)
     refs = []
     for p in ref_paths:
         log("reading stock 360 file %s" % os.path.basename(p))
-        refs.append((p, load_tree(p)[2]))
+        refs.append((p, load_stock(p)))
     iwd = zipfile.ZipFile(iwd_path) if iwd_path else None
     log("converting %s" % os.path.basename(pc_path))
     porter = Porter(root, refs, iwd, log)
     porter.convert()
-    if characters:
-        porter.add_characters(refs, characters)
+    if porter.map_name:
+        porter.add_teams(refs, map_teams(pc_path, teams))
     xs = schema_mod.load("xbox")
     w = tree.TreeWriter(root, xs, keep_fixes=False)
     w.map_rel = lambda r: map_rel(r, porter.P, porter.X)
     out = w.write()
     out = reserve_callback_block(out, porter)
-    _write_x360(out, out_path, pak_table(out, out_path, ref_paths))
+    _write_x360(out, out_path, pak_table(out, out_path, porter.root, w.starts))
     log("wrote %s (%d bytes of zone)" % (out_path, len(out)))
     return out, porter
 
@@ -1213,30 +1374,18 @@ def _write_x360(zone, path, table=()):
         f.write(head + struct.pack(">II", total, total + extra) + stream)
 
 
-def pak_table(zone, out_path, ref_paths):
+def pak_table(zone, out_path, root, starts):
     """Stock pictures copied in whose pixels live in the disc's imagefile*.pak files: the
-    container lists where, 4 entries per picture in the order the zone has them. Take each
-    picture's entries from the stock file it came from."""
+    container lists where, 4 entries per picture in the order the zone has them."""
     import mw2tex
+    paks = [o for o in iter_objects(root) if isinstance(o, dict) and "_pak" in o and id(o) in starts]
+    paks.sort(key=lambda o: starts[id(o)])
     _write_x360(zone, out_path)
     with contextlib.redirect_stdout(io.StringIO()):
-        ours = [i for i in mw2tex.FastFile(out_path).images if i["pak"]]
-    if not ours:
-        return []
-    where = {}
-    for p in ref_paths:
-        f = mw2tex.FastFile(p)
-        for i in f.images:
-            if i["pak"]:
-                first = i["levels"][0]["entry"] // LEVELS * LEVELS if i["levels"] else None
-                where.setdefault(i["name"], f.table[first:first + LEVELS] if i["levels"] else None)
-    table = []
-    for i in ours:
-        t = where.get(i["name"])
-        if t is None or len(t) != LEVELS:
-            raise PortError("no stock pak entries for picture %s" % i["name"])
-        table += t
-    return table
+        found = sum(1 for i in mw2tex.FastFile(out_path).images if i["pak"])
+    if found != len(paks):
+        raise PortError("%d pak pictures written but %d found in the file" % (len(paks), found))
+    return [t for o in paks for t in o["_pak"]]
 
 
 def main(argv):
@@ -1245,10 +1394,10 @@ def main(argv):
     ap.add_argument("out_ff")
     ap.add_argument("--iwd")
     ap.add_argument("--ref360", nargs="*", default=[])
-    ap.add_argument("--characters", metavar="STOCK_MAP",
-                    help="copy this stock map's soldier models and teams in (its .ff must be a --ref360)")
+    ap.add_argument("--teams", nargs=2, metavar=("ALLIES", "AXIS"),
+                    help="teams to use (default: from the map's .arena next to the .ff)")
     a = ap.parse_args(argv)
-    port(a.pc_ff, a.out_ff, a.iwd, a.ref360, characters=a.characters)
+    port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams)
 
 
 if __name__ == "__main__":
