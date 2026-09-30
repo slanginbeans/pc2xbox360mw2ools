@@ -850,6 +850,11 @@ class Porter:
         if not cube:
             w, h, mips = fit_picture(fmt, w, h, mips, limit)
         self.images.build(d, fmt, w, h, mips, cube)
+        # Pictures from files are "load from file" on the 360 (the PC leaves them unknown);
+        # stock loading screens are plain 2D pictures.
+        d["category"] = 3
+        if name.startswith(b"loadscreen"):
+            d["semantic"] = 0
 
     def image_from_loaddef(self, d, ld):
         """Images the PC keeps in the fastfile: lightmaps, reflection probes, $outdoor."""
