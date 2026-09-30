@@ -330,14 +330,42 @@ IWI_FORMATS = {0x0B: "DXT1", 0x0C: "DXT3", 0x0D: "DXT5", 0x01: "ARGB8"}
 IWI_NOMIPMAPS, IWI_CUBE = 0x2, 0x10000
 
 
+def iwi_header(data):
+    """(flags as IW4 has them, format, width, height, header size) of an .iwi.
+    Version 8 is IW4's own; 6 is CoD4 / World at War's (maps ported from those can carry
+    them). Other versions are read when their header is laid out as one of those two and
+    its file size field matches the file."""
+    if data[:3] != b"IWi" or len(data) < 32:
+        raise PortError("not an .iwi picture")
+    ver = data[3]
+
+    def v8():
+        flags, = struct.unpack_from("<I", data, 4)
+        w, h, _ = struct.unpack_from("<3H", data, 10)
+        return flags, data[8], w, h, 32, struct.unpack_from("<I", data, 16)[0]
+
+    def v6():
+        f6 = data[5]
+        # CoD4 flags: 2 no mipmaps, 4 cube map.
+        flags = (IWI_NOMIPMAPS if f6 & 2 else 0) | (IWI_CUBE if f6 & 4 else 0)
+        w, h, _ = struct.unpack_from("<3H", data, 6)
+        return flags, data[4], w, h, 28, struct.unpack_from("<I", data, 12)[0]
+
+    if ver == 8:
+        return v8()[:5]
+    if ver == 6:
+        return v6()[:5]
+    for layout in (v8, v6):
+        flags, fmt, w, h, head, size = layout()
+        if size == len(data) and w and h and (fmt in IWI_FORMATS or fmt in IWI_EXPAND):
+            return flags, fmt, w, h, head
+    raise PortError(".iwi version %d isn't supported" % ver)
+
+
 def read_iwi(data):
-    """IW4 .iwi (version 8): returns (format name, width, height, mips largest first, is cube).
+    """.iwi picture: returns (format name, width, height, mips largest first, is cube).
     For a cube map, mips holds the six faces' top levels instead."""
-    if data[:3] != b"IWi" or data[3] != 8:
-        raise PortError("not an IW4 image (version %r)" % data[3:4])
-    flags, = struct.unpack_from("<I", data, 4)
-    fmt = data[8]
-    w, h, d = struct.unpack_from("<3H", data, 10)
+    flags, fmt, w, h, head = iwi_header(data)
     name = IWI_FORMATS.get(fmt)
     expand = IWI_EXPAND.get(fmt)
     if expand is not None:
@@ -354,7 +382,7 @@ def read_iwi(data):
         if (lw == 1 and lh == 1) or flags & IWI_NOMIPMAPS:
             break
         lw, lh = max(1, lw >> 1), max(1, lh >> 1)
-    body = data[32:]
+    body = data[head:]
     cube = bool(flags & IWI_CUBE)
     faces = 6 if cube else 1
     if len(body) < sum(sizes) * faces:
@@ -529,6 +557,7 @@ class Porter:
         self.iwds = [] if iwd is None else list(iwd) if isinstance(iwd, (list, tuple)) else [iwd]
         self.map_pictures = picture_index(self.iwds)
         self.missing_images = []        # (name, stand-in picture or None for magenta)
+        self.unreadable = []            # pictures whose .iwi couldn't be read, and why
         # The PC game's own .iwd files (iw_00.iwd ...): pictures a map borrows from the game.
         # Later files win, as in the game.
         self.game_pictures = picture_index(game_iwds)
@@ -851,6 +880,10 @@ class Porter:
             a["_forward"] = True
         if self.from_game:
             self.log("  %d pictures come from the PC game's own .iwd files" % self.from_game)
+        for u in self.unreadable[:5]:
+            self.warn("picture %s can't be read, so it's treated as missing" % u)
+        if len(self.unreadable) > 5:
+            self.warn("... and %d more pictures that can't be read" % (len(self.unreadable) - 5))
         if self.missing_images:
             magenta = [n for n, stand in self.missing_images if stand is None]
             flat = [n for n, stand in self.missing_images if stand is not None]
@@ -1152,24 +1185,35 @@ class Porter:
         ld = tex.get("@", {}).get(("loadDef", ())) if isinstance(tex, dict) else None
         if isinstance(ld, dict) and ld.get("resourceSize"):
             self.image_from_loaddef(d, ld)
-        elif not self.in_iwd(name) and name.decode().lower() in self.game_pictures:
-            zf, path = self.game_pictures[name.decode().lower()]
-            self.image_from_iwd(d, name, zf, path)
-            self.from_game += 1
-        elif not self.in_iwd(name):
-            # Not in the map's .iwd (none given) nor the PC game's files given:
-            # a plain built-in picture stands in so the map still loads.
+        elif not self.picture_from_files(d, name):
+            # Not in the map's .iwd (none given) nor the PC game's files given, or no copy
+            # there can be read: a plain built-in picture stands in so the map still loads.
             stand = self.stand_in(d, name)
             self.missing_images.append((name.decode(), stand))
             if stand is None:
                 self.magenta(d)
             else:
                 return self._replace(d, self.reference("GfxImage", stand))
-        else:
-            zf, path = self.map_pictures[name.decode().lower()]
-            self.image_from_iwd(d, name, zf, path)
         self.done.add(id(d))
         return True
+
+    def picture_from_files(self, d, name):
+        """Fill image d from the map's .iwd, else the PC game's; False when neither has a
+        copy that can be read (an unreadable one is noted, not fatal)."""
+        low = name.decode().lower()
+        for where, found in (("map", self.map_pictures), ("game", self.game_pictures)):
+            if low not in found:
+                continue
+            zf, path = found[low]
+            try:
+                self.image_from_iwd(d, name, zf, path)
+            except (PortError, struct.error, ValueError) as e:
+                self.unreadable.append("%s (%s: %s)" % (name.decode(), os.path.basename(zf.filename or "?"), e))
+                continue
+            if where == "game":
+                self.from_game += 1
+            return True
+        return False
 
     def pre_Material(self, d, tp, tx):
         name = asset_name(d)
