@@ -997,9 +997,33 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print):
     w = tree.TreeWriter(root, xs, keep_fixes=False)
     w.map_rel = lambda r: map_rel(r, porter.P, porter.X)
     out = w.write()
+    out = reserve_callback_block(out, porter)
     _write_x360(out, out_path)
     log("wrote %s (%d bytes of zone)" % (out_path, len(out)))
     return out, porter
+
+
+def reserve_callback_block(zone, porter):
+    """The 360 game fills block 5 (callback) at load time: a bump allocator there takes, for
+    every material, 4 bytes per texture (0x821e7658), 4 per model surface (0x821e7908) and
+    16 per some other assets (0x821dd2b0). The file carries no data for it, so a PC file
+    converts to size 0 and the game writes through a null pointer (console-confirmed crash at
+    0x821E7774). Stock files reserve 1-72 KB."""
+    need = 0
+    for o in iter_objects(porter.root):
+        if isinstance(o, dict) and "_asset" in o:
+            need += 16
+            if o["_asset"] == "Material":
+                need += 4 * (o.get("textureCount") or 0)
+            elif o["_asset"] == "XModel":
+                need += 4 * (o.get("numsurfs") or 0)
+    # Other load-time allocations can land here too (0x82312da8 during asset callbacks), so
+    # keep at least what a stock map reserves.
+    need = max((need * 2 + 4096 + 0xFFF) & ~0xFFF, 0x10000)
+    zone = bytearray(zone)
+    if struct.unpack_from(">I", zone, 28)[0] < need:
+        struct.pack_into(">I", zone, 28, need)
+    return bytes(zone)
 
 
 def map_rel(r, P, X):
