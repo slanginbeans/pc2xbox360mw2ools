@@ -536,6 +536,7 @@ class Porter:
                     self.game_pictures[low[7:-4]] = (zf, n)
         self.from_game = 0
         self.techset_swaps = {}
+        self.magenta_materials = []     # materials given a magenta picture for one they lack
         # Stock 360 assets: resident ones (use by ",name") and others to copy in.
         self.resident = {}
         self.library = {}
@@ -849,11 +850,17 @@ class Porter:
         if self.from_game:
             self.log("  %d pictures come from the PC game's own .iwd files" % self.from_game)
         if self.missing_images:
-            self.warn("%d pictures aren't in the map's .iwd%s, so plain gray ones stand in (%s%s)"
+            self.warn("%d pictures aren't in the map's .iwd%s, so magenta ones stand in (%s%s)"
                       % (len(self.missing_images),
                          " or the PC game's files" if self.game_pictures else "",
                          ", ".join(self.missing_images[:5]),
                          ", ..." if len(self.missing_images) > 5 else ""))
+        if self.magenta_materials:
+            n = len(self.magenta_materials)
+            self.warn("%d material%s lack%s a picture the shader set used needs, so %s magenta "
+                      "(%s%s)" % (n, "s" if n > 1 else "", "" if n > 1 else "s", "they show" if n > 1 else "it shows",
+                                               ", ".join(self.magenta_materials[:5]),
+                                               ", ..." if len(self.magenta_materials) > 5 else ""))
         for a, b in sorted(self.techset_swaps.items()):
             self.warn("shader set %s isn't in the stock files given, so %s is used"
                       % (a.decode(), b.decode()))
@@ -993,11 +1000,23 @@ class Porter:
         d["_asset"] = typ
         return d
 
+    def have_techset(self, cand):
+        key = ("MaterialTechniqueSet", cand)
+        return cand in self.material_templates and (key in self.resident or key in self.library
+                                                    or key in self.named)
+
     def nearest_techset(self, name):
-        """The stock techset whose name shares the most leading parts with name (same kind:
-        effect_, wc_, mc_, ...), or None."""
+        """A stock techset to use in place of name, or None. Lit world and model shaders keep
+        their kind and blend (wc_l_sm_t0c0s0: lit, alpha tested, color + specular) and drop or
+        add inputs (-> wc_l_sm_t0c0); inputs the material lacks are filled in (fill_textures).
+        Others: the one sharing the most leading name parts; a wc_/mc_ one sharing only that
+        gets the plain lit shader."""
         if name in self.techset_swaps:
             return self.techset_swaps[name]
+        best = self.similar_techset(name)
+        if best is not None:
+            self.techset_swaps[name] = best
+            return best
         want = name.split(b"_")
         best, score = None, (0, 0)
         for cand in self.material_templates:
@@ -1011,8 +1030,37 @@ class Porter:
             sc = (lead, len(set(want) & set(parts)) - len(set(parts) - set(want)))
             if lead and sc > score:
                 best, score = cand, sc
+        if name.startswith((b"wc_", b"mc_")) and score[0] < 2 and self.have_techset(name[:3] + b"l_sm_r0c0"):
+            # Only "wc"/"mc" in common (wc_tools -> wc_water draws nothing): plain lit instead.
+            best = name[:3] + b"l_sm_r0c0"
         if best is not None:
             self.techset_swaps[name] = best
+        return best
+
+    @staticmethod
+    def techset_codes(name):
+        """wc_l_sm_t0c0s0_nocast -> (b"wc_l_sm_", [b"t0", b"c0", b"s0"], b"_nocast"), or None."""
+        m = re.match(rb"^((?:wc|mc)_l_(?:sm_)?(?:ua_)?)((?:[a-z]\d)+)(_.*)?$", name)
+        if not m:
+            return None
+        return m.group(1), re.findall(rb"[a-z]\d", m.group(2)), m.group(3) or b""
+
+    def similar_techset(self, name):
+        """Same kind, blend and extras as name, with the fewest inputs added or dropped
+        (dropping preferred: a picture the material has but the shader doesn't use is harmless)."""
+        want = self.techset_codes(name)
+        if want is None:
+            return None
+        best, score = None, None
+        for cand in self.material_templates:
+            got = self.techset_codes(cand) if cand else None
+            if got is None or got[0] != want[0] or got[2] != want[2] or got[1][0] != want[1][0] \
+                    or not self.have_techset(cand):
+                continue
+            extra = len(set(got[1]) - set(want[1]))
+            sc = (-extra, len(set(got[1]) & set(want[1])), cand)
+            if score is None or sc > score:
+                best, score = cand, sc
         return best
 
     def pre_MaterialTechniqueSet(self, d, tp, tx):
@@ -1065,7 +1113,11 @@ class Porter:
             # Not in the map's .iwd (none given) nor the PC game's files given:
             # a plain built-in picture stands in so the map still loads.
             self.missing_images.append(name.decode())
-            return self._replace(d, self.reference("GfxImage", self.stand_in(d, name)))
+            stand = self.stand_in(d, name)
+            if stand is None:
+                self.magenta(d)
+            else:
+                return self._replace(d, self.reference("GfxImage", stand))
         else:
             self.image_from_iwd(d, name)
         self.done.add(id(d))
@@ -1117,19 +1169,69 @@ class Porter:
             raise PortError("template material's render state can't be copied")
         d["@"][("stateBitsTable", ())] = c
         d["stateBitsTable"] = "follow"
+        self.fill_textures(d, tpl, asset_name(d) or b"")
+
+    def fill_textures(self, d, tpl, name):
+        """Give material d every picture its shader set reads (as stock material tpl, which uses
+        the same set, has them) that it lacks: a swapped-in shader set can want one the PC
+        material never had, and a shader without its picture draws nothing. Stand-ins: flat
+        normal map, no shine, magenta color."""
+        table = d.get("@", {}).get(("textureTable", ()))
+        table = table if isinstance(table, list) else []
+        have = set(e.get("nameHash") for e in table if isinstance(e, dict))
+        added = []
+        for e in tpl.get("@", {}).get(("textureTable", ()), []):
+            if not isinstance(e, dict) or e.get("nameHash") in have:
+                continue
+            img = deref(e["u"].get("@", {}).get(("image", ())))
+            iname = (asset_name(img) or b"").lstrip(b",") if isinstance(img, dict) else b""
+            sem = e.get("semantic")
+            if sem == 5:
+                img = self.reference("GfxImage", b"$identitynormalmap")
+            elif sem == 8:
+                img = self.reference("GfxImage", b"$black")
+            elif iname.startswith(b"$") and (("GfxImage", iname) in self.resident or
+                                               ("GfxImage", iname) in self.named):
+                img = self.reference("GfxImage", iname)
+            else:
+                img = self.magenta(self.zero(self.X.infos["GfxImage"].ctype),
+                                   b"~magenta_%d" % len(self.magenta_materials))
+                img["_asset"] = "GfxImage"
+                if name.decode() not in self.magenta_materials:
+                    self.magenta_materials.append(name.decode())
+            new = {k: (dict(v) if isinstance(v, dict) else v) for k, v in e.items() if k != "u"}
+            new["u"] = {"union": "ffffffff", "@": {("image", ()): img}}
+            added.append(new)
+        if not added:
+            return
+        table = sorted(table + added, key=lambda e: e["nameHash"])
+        d["@"][("textureTable", ())] = table
+        d["textureTable"] = "follow"
+        d["textureCount"] = len(table)
 
     # ------------------------------------------------------------ images
 
     @staticmethod
     def stand_in(d, name):
         """The built-in picture used for one the map doesn't bring: flat for normal maps,
-        black (no shine) for specular maps, gray otherwise."""
+        black (no shine) for specular maps; None for the rest, which get a magenta one
+        (magenta()) so what's missing is easy to see."""
         semantic = d.get("semantic")
         if semantic == 5 or name.endswith((b"_nml", b"_n")):
             return b"$identitynormalmap"
         if semantic == 8 or name.endswith((b"_spc", b"_s")):
             return b"$black"
-        return b"$gray"
+        return None
+
+    def magenta(self, d, name=None):
+        """Make image dict d a small plain magenta picture (placeholder)."""
+        if name is not None:
+            d.setdefault("@", {})[("name", ())] = Str(name)
+        block = struct.pack("<HHI", 0xF81F, 0xF81F, 0)      # DXT1, both colors magenta
+        self.images.build(d, "DXT1", 16, 16, [block * 16])
+        d["category"] = 3
+        self.done.add(id(d))
+        return d
 
     def image_from_iwd(self, d, name, iwd=None, path=None):
         iwd = iwd or self.iwd
