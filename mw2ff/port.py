@@ -255,6 +255,28 @@ def _dec3n(v):
     return u
 
 
+# PC reflection probes are stored with a brightness multiplier in alpha (the largest color
+# channel is always 255); the 360 stores plain color. color = rgb * alpha / 255 * PROBE_SCALE
+# matches stock 360 probes' brightness (and turns the PC's "no probe" red into the 360's).
+PROBE_SCALE = 2.5
+
+
+def decode_probe(bgra):
+    """One probe mip (B, G, R, A bytes) to plain color; alpha is set later."""
+    out = bytearray(bgra)
+    lut = {}
+    for o in range(0, len(bgra), 4):
+        a = bgra[o + 3]
+        t = lut.get(a)
+        if t is None:
+            k = a / 255.0 * PROBE_SCALE
+            t = lut[a] = bytes(min(255, int(v * k + 0.5)) for v in range(256))
+        out[o] = t[bgra[o]]
+        out[o + 1] = t[bgra[o + 1]]
+        out[o + 2] = t[bgra[o + 2]]
+    return bytes(out)
+
+
 HIMIP_RADIUS = 1238     # the median of stock Favela's models
 
 
@@ -1163,6 +1185,8 @@ class Porter:
                         break
                     mw, mh = max(1, mw // 2), max(1, mh // 2)
                 chains.append(chain)
+            if name.startswith(b"*reflection_probe"):
+                chains = [[decode_probe(m) for m in c] for c in chains]
             mips = chains
         if out_fmt == "DXT3A":
             mips = [encode_dxt3a(m, w, h) for m in mips]
@@ -1170,6 +1194,21 @@ class Porter:
         if name.startswith(b"*lightmap"):
             tpl = self.lightmap_templates.get(name.rsplit(b"_", 1)[-1])
         self.images.build(d, out_fmt, w, h, mips if cube else mips[:1], cube, tpl)
+        if name.startswith(b"*reflection_probe"):
+            self.probe_alpha(d)
+
+    def probe_alpha(self, d):
+        """Stock 360 probes carry the same fixed pattern in alpha in every probe of a map;
+        give ours a stock one (same size, so the same place in the tiled pixels)."""
+        px = d["@"][("pixels", ())]
+        for n, v in self.library.items():
+            if n[0] == "GfxImage" and n[1].startswith(b"*reflection_probe") and isinstance(
+                    v.get("@", {}).get(("pixels", ())), Leaf) and v["@"][("pixels", ())].n == px.n \
+                    and v.get("width") == d["width"]:
+                raw = bytearray(px.raw)
+                raw[0::4] = v["@"][("pixels", ())].raw[0::4]
+                px.raw = bytes(raw)
+                return
 
     # ------------------------------------------------------------ copying 360 assets in
 
