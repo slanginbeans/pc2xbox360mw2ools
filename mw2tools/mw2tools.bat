@@ -1,0 +1,108 @@
+@echo off
+rem mw2tools launcher: the texture picker, table editor, fastfile editor and map converter in
+rem one window. Put this file in a folder of its own (or where your old mw2tex.bat is) and
+rem double-click it. Everything else lives in the mw2tools folder next to it:
+rem     mw2tools\          your .ff files and everything the tools make (mw2tex_out, ...)
+rem     mw2tools\app\      the tools themselves, updated from GitHub each time you start
+rem The first time, it moves your .ff files, output folders and old launchers from this
+rem folder into mw2tools (old launchers go in mw2tools\old_launchers).
+rem Set NOUPDATE=1 below to skip the update check (for example when you're offline).
+setlocal
+set BRANCH=main
+set REPO=https://github.com/slanginbeans/codxe_modified.git
+set NOUPDATE=
+cd /d "%~dp0"
+title mw2tools
+set HOME_DIR=%~dp0mw2tools
+set APP=%HOME_DIR%\app
+
+rem "call" everywhere below: python can be a .bat/.cmd shim (pyenv, for example), and running one
+rem without call would end this launcher silently.
+set PY=
+where python >nul 2>nul && set PY=python
+if not defined PY where py >nul 2>nul && set PY=py
+if not defined PY (
+    echo Python isn't installed. Get it from https://www.python.org/downloads/
+    echo and tick "Add python.exe to PATH" on the first installer screen.
+    pause
+    exit /b 1
+)
+
+rem ---- first run: move the old layout into mw2tools
+if not exist "%HOME_DIR%" mkdir "%HOME_DIR%"
+if not exist "%APP%" if exist "%~dp0mw2tex_app\.git" (
+    echo Moving the tools from mw2tex_app to mw2tools\app...
+    move "%~dp0mw2tex_app" "%APP%" >nul
+)
+for %%f in ("%~dp0*.ff" "%~dp0imagefile*.pak") do (
+    if not exist "%HOME_DIR%\%%~nxf" (
+        echo Moving %%~nxf to mw2tools
+        move "%%~f" "%HOME_DIR%\" >nul
+    )
+)
+for %%d in (mw2tex_out mw2tex_map_changes mw2ff_out mw2ff_changes mw2ff_scripts mw2ff_unpacked mw2port_in mw2port_out) do (
+    if exist "%~dp0%%d\" if not exist "%HOME_DIR%\%%d" (
+        echo Moving %%d to mw2tools
+        move "%~dp0%%d" "%HOME_DIR%\%%d" >nul
+    )
+)
+for %%f in (mw2tex.bat mw2ff.bat mw2port.bat) do (
+    if exist "%~dp0%%f" (
+        if not exist "%HOME_DIR%\old_launchers" mkdir "%HOME_DIR%\old_launchers"
+        echo Moving the old launcher %%f to mw2tools\old_launchers ^(use mw2tools.bat now^)
+        move /y "%~dp0%%f" "%HOME_DIR%\old_launchers\" >nul
+    )
+)
+
+if defined NOUPDATE goto run
+where git >nul 2>nul
+if errorlevel 1 (
+    echo Git isn't installed, so the tools can't update themselves. Get it from https://git-scm.com/
+    if exist "%APP%\tools\mw2tools\mw2tools_gui.py" goto run
+    pause
+    exit /b 1
+)
+if exist "%APP%\.git" (
+    echo Checking for updates...
+    git -C "%APP%" pull -q --ff-only origin %BRANCH%
+    if errorlevel 1 echo Couldn't update ^(offline?^). Using the copy you already have.
+    git -C "%APP%" sparse-checkout set tools/mw2tex tools/mw2ff tools/mw2tools
+) else (
+    echo Downloading the tools for the first time...
+    git clone -q --depth 1 --filter=blob:none --sparse -b %BRANCH% %REPO% "%APP%"
+    if errorlevel 1 (
+        echo Download failed. Check your internet connection and GitHub sign-in, then try again.
+        pause
+        exit /b 1
+    )
+    git -C "%APP%" sparse-checkout set tools/mw2tex tools/mw2ff tools/mw2tools
+)
+for /f %%v in ('git -C "%APP%" log -1 --format^=%%h 2^>nul') do echo mw2tools version %%v
+
+rem A newer launcher came with the update: it's swapped in when this window closes (the last line).
+set NEWBAT=
+fc /b "%APP%\tools\mw2tools\mw2tools.bat" "%~f0" >nul 2>nul
+if errorlevel 1 if exist "%APP%\tools\mw2tools\mw2tools.bat" set NEWBAT=1
+if defined NEWBAT echo A new launcher came with the update. It takes over next time.
+
+:run
+if not exist "%APP%\tools\mw2tools\mw2tools_gui.py" (
+    echo The tool files are missing from %APP%.
+    echo Delete the mw2tools\app folder and start this launcher again to download them.
+    pause
+    exit /b 1
+)
+call %PY% -c "import PIL" >nul 2>nul
+if errorlevel 1 (
+    echo Installing Pillow, the picture library the tools use...
+    call %PY% -m pip install --user pillow
+)
+echo.
+echo Your .ff files go in: %HOME_DIR%
+echo Starting mw2tools. Leave this window open while you use it.
+cd /d "%HOME_DIR%"
+call %PY% "%APP%\tools\mw2tools\mw2tools_gui.py" %*
+echo.
+echo mw2tools has stopped. If there's an error above, send it to Claude.
+pause
+if defined NEWBAT copy /y "%APP%\tools\mw2tools\mw2tools.bat" "%~f0" >nul & exit /b

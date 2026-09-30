@@ -35,7 +35,7 @@ if exist "%APP%\.git" (
     echo Checking for updates...
     git -C "%APP%" pull -q --ff-only origin %BRANCH%
     if errorlevel 1 echo Couldn't update ^(offline?^). Using the copy you already have.
-    git -C "%APP%" sparse-checkout add tools/mw2ff
+    git -C "%APP%" sparse-checkout add tools/mw2ff tools/mw2tools
 ) else (
     echo Downloading the tools for the first time...
     git clone -q --depth 1 --filter=blob:none --sparse -b %BRANCH% %REPO% "%APP%"
@@ -44,7 +44,7 @@ if exist "%APP%\.git" (
         pause
         exit /b 1
     )
-    git -C "%APP%" sparse-checkout set tools/mw2tex tools/mw2ff
+    git -C "%APP%" sparse-checkout set tools/mw2tex tools/mw2ff tools/mw2tools
 )
 for /f %%v in ('git -C "%APP%" log -1 --format^=%%h 2^>nul') do echo mw2port version %%v
 
@@ -53,6 +53,12 @@ set NEWBAT=
 fc /b "%APP%\tools\mw2ff\mw2port.bat" "%~f0" >nul 2>nul
 if errorlevel 1 if exist "%APP%\tools\mw2ff\mw2port.bat" set NEWBAT=1
 if defined NEWBAT echo A new launcher came with the update. It takes over next time.
+
+rem mw2tools.bat (all the tools in one window) goes next to this one the first time it arrives.
+if not exist "%~dp0mw2tools.bat" if exist "%APP%\tools\mw2tools\mw2tools.bat" (
+    copy /y "%APP%\tools\mw2tools\mw2tools.bat" "%~dp0mw2tools.bat" >nul
+    echo mw2tools.bat is now in this folder: all the tools in one window. Use it from now on.
+)
 
 :run
 if not exist "%APP%\tools\mw2ff\mw2port_gui.py" (

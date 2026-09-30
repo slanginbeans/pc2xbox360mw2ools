@@ -214,9 +214,10 @@ ul{margin:4px 0 0;padding-left:20px}
 <code>usermaps\&lt;map&gt;</code> folder (the .ff, _load.ff, .iwd and .arena files). Then press Refresh.</p>
 <p><button id="openIn">Open mw2port_in</button></p>
 <div id="maps"></div></section>
-<section><h2>2. Teams</h2>
-<p class="dim">The map's .arena file says which teams it uses. A team comes from a stock 360 map that has it,
-so that map's .ff has to be in your work folder. Teams marked "not here" are swapped for one you have.</p>
+<section><h2>2. Teams (pick any two)</h2>
+<p class="dim">Pick the two teams you want on this map. They start as the teams the map's .arena file asks for.
+A team comes from a stock 360 map that has it, so that map's .ff has to be in your work folder. A team marked
+"not here" is swapped for one you have.</p>
 <div class="teams" id="teams"><span class="dim">Pick a map first.</span></div></section>
 <section><h2>3. Convert</h2>
 <p><button id="convert" class="primary" disabled>Convert</button> <button id="openOut">Open mw2port_out</button> <span id="state" class="dim"></span></p>
