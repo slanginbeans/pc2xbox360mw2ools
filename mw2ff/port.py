@@ -994,6 +994,13 @@ class Porter:
 
     def pre_GfxImage(self, d, tp, tx):
         name = asset_name(d)
+        if name.startswith(b","):
+            # The PC file only names it (the PC game has it loaded already). Name it on the 360
+            # too when the 360 has it loaded; else it becomes a picture of the map's own.
+            name = name[1:]
+            if ("GfxImage", name) in self.resident or ("GfxImage", name) in self.named:
+                return self._replace(d, self.reference("GfxImage", name))
+            d.setdefault("@", {})[("name", ())] = Str(name)
         # Built-in pictures ($identitynormalmap, ...) stay the game's own even when an IW4x
         # .iwd carries a copy: a second asset with the name would replace the resident one.
         if ("GfxImage", name) in self.resident and (name.startswith(b"$") or not self.in_iwd(name)):
