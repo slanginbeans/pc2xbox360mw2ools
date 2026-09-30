@@ -567,7 +567,10 @@ class Reader:
                         else:
                             zextend(inst.buf, sub.buf, sub.off, t.ctype.size)
                 else:
-                    self.load_struct(t, Inst(t, inst.buf, loc, 0, inst.where), False)
+                    # A struct wrapping another at offset 0 (GfxCellTree128 around GfxCellTree)
+                    # keeps its array index, for counts written as pointer differences.
+                    index = inst.index if loc == inst.off else 0
+                    self.load_struct(t, Inst(t, inst.buf, loc, index, inst.where), False)
             elif after:
                 data, _ = self.read(t.ctype.size if t else mi.m.type.size, ("type", t.ctype if t else mi.m.type, 1))
                 if isinstance(inst.buf, bytearray):

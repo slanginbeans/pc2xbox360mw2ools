@@ -491,7 +491,9 @@ class TreeWriter(zone_mod.Reader):
             if a is not None:
                 if isinstance(a, Ref):
                     return self._forward(a, True) if id(a.target) not in self.loc else None
-                return a if id(a) not in self.loc and "_slot" not in a else None
+                # A temp asset with its own slot is written where it sits, unless nothing
+                # holds it any more but pointers ("_forward": its first pointer takes it).
+                return a if id(a) not in self.loc and ("_slot" not in a or a.get("_forward")) else None
         if id(r.target) in self.loc or r.rel:
             return None
         return r.target
@@ -783,7 +785,7 @@ class TreeWriter(zone_mod.Reader):
         in_temp = info.block is not None and info.block.kind == "temp"
         if val and val not in (FOLLOWING, INSERT) and self._forward(d, asset=True) is not None:
             d = self._forward(d, asset=True)
-            val = FOLLOWING
+            val = INSERT if in_temp and "_slot" in d else FOLLOWING
             self._patch(buf, loc, val)
         if in_temp:
             self.push(TEMP)

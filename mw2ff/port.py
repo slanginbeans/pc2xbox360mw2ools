@@ -412,11 +412,10 @@ class ImageMaker:
         new["@"] = {("name", ()): name, ("pixels", ()): Leaf(self.xc.type_by_name("unsigned char"), len(pixels),
                                                               pixels, ">")}
         new["_asset"] = "GfxImage"
-        keep_slot = d.get("_slot")
+        keep = {k: d[k] for k in ("_slot", "_forward") if k in d}
         d.clear()
         d.update(new)
-        if keep_slot is not None:
-            d["_slot"] = keep_slot
+        d.update(keep)
 
 
 def encode_dxt3a(lum, width, height):
@@ -446,14 +445,20 @@ class Porter:
         self.xc = codec_mod.Codec(self.X)
         self.done = set()
         self.iwd = iwd
+        self.missing_images = []
+        self.techset_swaps = {}
         # Stock 360 assets: resident ones (use by ",name") and others to copy in.
         self.resident = {}
         self.library = {}
+        # Assets stock maps only name (",name"): the game has them loaded from its always-loaded
+        # files (common_mp, ...) whenever a map loads, so a ported map can name them too.
+        self.named = set()
         for name, root in x_refs:
             idx = asset_index(root)
             base = os.path.splitext(os.path.basename(name))[0]
             for k, v in idx.items():
                 if k[1].startswith(b","):
+                    self.named.add((k[0], k[1][1:]))
                     continue
                 if base in RESIDENT:
                     self.resident.setdefault(k, v)
@@ -623,7 +628,7 @@ class Porter:
             else:
                 new[kx] = v
         new["@"] = self.conv_children(ch, tp, tx)
-        for k in ("_asset", "_slot", "_template"):
+        for k in ("_asset", "_slot", "_template", "_forward"):
             if k in d:
                 new[k] = d[k]
         d.clear()
@@ -742,11 +747,40 @@ class Porter:
                 continue
             keep.append(e)
         ents[:] = keep
+        # Materials and pictures a left-out model brought in first are only pointed at from
+        # then on: the writer puts each where the first remaining pointer to it is.
+        reached = set(id(o) for o in iter_objects(ents))
+        orphans = {}
+        for o in iter_objects(ents):
+            if not isinstance(o, dict):
+                continue
+            for c in o.get("@", {}).values():
+                for x in (c if isinstance(c, list) else [c]):
+                    if isinstance(x, Ref) and isinstance(x.target, tree.InsertSlot):
+                        a = x.target.asset
+                        if isinstance(a, dict) and id(a) not in reached:
+                            orphans[id(a)] = a
+        inner = set()
+        for a in orphans.values():
+            inner.update(id(o) for o in iter_objects(a) if o is not a)
+        orphans = [a for k, a in orphans.items() if k not in inner]
+        for a in orphans:
+            a["_forward"] = True
         for e in ents:
             if e[0] in ("vertexshader", "vertexdecl"):
                 raise PortError("top-level %s assets can't be converted" % e[0])
             if isinstance(e[1], dict):
                 self.conv_asset(e[1])
+        for a in orphans:
+            self.conv_asset(a)
+            a["_forward"] = True
+        if self.missing_images:
+            self.warn("%d pictures aren't in the map's .iwd, so plain gray ones stand in (%s%s)"
+                      % (len(self.missing_images), ", ".join(self.missing_images[:5]),
+                         ", ..." if len(self.missing_images) > 5 else ""))
+        for a, b in sorted(self.techset_swaps.items()):
+            self.warn("shader set %s isn't in the stock files given, so %s is used"
+                      % (a.decode(), b.decode()))
         ss = self.root.get("script_strings")
         self.root["platform"] = "xbox"
         return self.root
@@ -840,10 +874,13 @@ class Porter:
 
     def _replace(self, d, new):
         slot = d.get("_slot")
+        fwd = d.get("_forward")
         d.clear()
         d.update(new)
         if slot is not None:
             d["_slot"] = slot
+        if fwd:
+            d["_forward"] = fwd
         self.done.add(id(d))
         return True
 
@@ -860,11 +897,40 @@ class Porter:
         d["_asset"] = typ
         return d
 
+    def nearest_techset(self, name):
+        """The stock techset whose name shares the most leading parts with name (same kind:
+        effect_, wc_, mc_, ...), or None."""
+        if name in self.techset_swaps:
+            return self.techset_swaps[name]
+        want = name.split(b"_")
+        best, score = None, (0, 0)
+        for cand in self.material_templates:
+            key = ("MaterialTechniqueSet", cand)
+            if cand is None or not (key in self.resident or key in self.library or key in self.named):
+                continue
+            parts = cand.split(b"_")
+            lead = 0
+            while lead < min(len(want), len(parts)) and want[lead] == parts[lead]:
+                lead += 1
+            sc = (lead, len(set(want) & set(parts)) - len(set(parts) - set(want)))
+            if lead and sc > score:
+                best, score = cand, sc
+        if best is not None:
+            self.techset_swaps[name] = best
+        return best
+
     def pre_MaterialTechniqueSet(self, d, tp, tx):
         name = asset_name(d)
-        if ("MaterialTechniqueSet", name) in self.resident:
+        if name.startswith(b","):          # the PC file only names it too
+            name = name[1:]
+        if ("MaterialTechniqueSet", name) in self.resident or ("MaterialTechniqueSet", name) in self.named:
             return self._replace(d, self.reference("MaterialTechniqueSet", name))
         src = self.library.get(("MaterialTechniqueSet", name))
+        if src is None:
+            near = self.nearest_techset(name)
+            if near is not None and near != name:
+                d["@"][("name", ())] = Str(near)
+                return self.pre_MaterialTechniqueSet(d, tp, tx)
         if src is None:
             raise PortError("no 360 techset %s in the stock files given" % name.decode())
         return self._replace(d, self.copy_in(src))
@@ -888,6 +954,11 @@ class Porter:
         ld = tex.get("@", {}).get(("loadDef", ())) if isinstance(tex, dict) else None
         if isinstance(ld, dict) and ld.get("resourceSize"):
             self.image_from_loaddef(d, ld)
+        elif not self.in_iwd(name):
+            # Not in the map's .iwd (none given, or a picture from the PC game's own files):
+            # a plain built-in picture stands in so the map still loads.
+            self.missing_images.append(name.decode())
+            return self._replace(d, self.reference("GfxImage", self.stand_in(d, name)))
         else:
             self.image_from_iwd(d, name)
         self.done.add(id(d))
@@ -907,7 +978,15 @@ class Porter:
             return self._replace(d, self.reference("Material", name))
         ts = deref(d.get("@", {}).get(("techniqueSet", ())))
         tsname = asset_name(ts) if isinstance(ts, dict) else None
+        if tsname and tsname.startswith(b","):     # already converted to a reference
+            tsname = tsname[1:]
         tpl = self.material_templates.get(tsname)
+        if tpl is None and tsname:
+            # No stock file given has this shader set: use the closest one that is there.
+            near = self.nearest_techset(tsname)
+            if near is not None:
+                ts["@"][("name", ())] = Str(near)
+                tsname, tpl = near, self.material_templates[near]
         if tpl is None:
             raise PortError("material %s: no stock 360 material uses techset %s to copy render "
                             "settings from" % (name.decode(), tsname))
@@ -933,6 +1012,17 @@ class Porter:
         d["stateBitsTable"] = "follow"
 
     # ------------------------------------------------------------ images
+
+    @staticmethod
+    def stand_in(d, name):
+        """The built-in picture used for one the map doesn't bring: flat for normal maps,
+        black (no shine) for specular maps, gray otherwise."""
+        semantic = d.get("semantic")
+        if semantic == 5 or name.endswith((b"_nml", b"_n")):
+            return b"$identitynormalmap"
+        if semantic == 8 or name.endswith((b"_spc", b"_s")):
+            return b"$black"
+        return b"$gray"
 
     def image_from_iwd(self, d, name):
         if self.iwd is None:
@@ -1363,8 +1453,16 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print):
             log("  note: no stock *_load.ff given; the loading screen file is left out")
         else:
             out = os.path.join(out_dir, name + "_load.ff")
-            port(base + "_load.ff", out, iwd, [cpg, template, load_ref], log, loaded=loaded)
-            written.append(out)
+            try:
+                port(base + "_load.ff", out, iwd, [cpg, template, load_ref], log, loaded=loaded)
+                written.append(out)
+            except (ValueError, PortError, mw2ff.zone_mod.ZoneError) as e:
+                # The map works without it: the game shows a plain loading screen.
+                with open(base + "_load.ff", "rb") as fh:
+                    head = fh.read(16)
+                log("  note: %s_load.ff couldn't be converted, so it's left out (the map still "
+                    "works, with a plain loading screen): %s [file starts %s]"
+                    % (name, e, head.hex(" ")))
     out = os.path.join(out_dir, name + ".ff")
     port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded)
     written.append(out)

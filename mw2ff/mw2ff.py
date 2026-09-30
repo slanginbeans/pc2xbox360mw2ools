@@ -32,6 +32,9 @@ import text as text_mod  # noqa: E402
 import zone as zone_mod  # noqa: E402
 
 PC_VERSION = b"\x14\x01\x00\x00"     # 276, little-endian: the PC game's fastfile version
+# Unsigned, signed (stock), and IW4x's own header (newer IW4x ZoneBuilder: "IW4x", format 3,
+# then the same version, flag byte and timestamp as the others).
+PC_MAGICS = (b"IWffu100", b"IWff0100", b"IW4x\x03\x00\x00\x00")
 NAME_MEMBERS = ("name", "szInternalName", "aliasName", "filename", "szDisplayName")
 
 
@@ -45,7 +48,7 @@ class PCFastFile:
     def __init__(self, path):
         self.path = path
         self.raw = open(path, "rb").read()
-        if self.raw[:8] not in (b"IWffu100", b"IWff0100") or self.raw[8:12] != PC_VERSION:
+        if self.raw[:8] not in PC_MAGICS or self.raw[8:12] != PC_VERSION:
             raise ValueError("%s is not a PC MW2 fastfile" % path)
         self.header_end = self.HEAD - 8
         body = self.raw[self.HEAD:]
@@ -60,6 +63,23 @@ class PCFastFile:
                 i += 0x200000
             body = bytes(stream)
         self.zone = bytearray(zlib.decompressobj().decompress(body))
+        self.iw4x = self.raw[:4] == b"IW4x"
+        if self.iw4x:
+            # IW4x scrambles every byte after inflating (IW4x client, FastFiles::ReadXFileStub)
+            # and reads one pad byte before the zone header (FastFiles::ReadXFileHeader).
+            self.zone = unscramble_iw4x(self.zone)[1:]
+
+
+def unscramble_iw4x(data):
+    out = bytearray(len(data))
+    last = 0
+    for i, b in enumerate(data):
+        b ^= last
+        b = ((b << 4) | (b >> 4)) & 0xFF        # rotate left 4
+        b ^= 0xFF
+        b = ((b >> 6) | (b << 2)) & 0xFF        # rotate right 6
+        out[i] = last = b
+    return out
 
 
 def platform_of(path):
