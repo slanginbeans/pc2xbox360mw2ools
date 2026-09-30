@@ -789,9 +789,16 @@ def rebuild_all(log):
     previous = _built_files()
     ours = {os.path.basename(p).lower() for p in others if os.path.basename(p).lower() in by_file} | previous \
         | {os.path.basename(p).lower() for p in map_files()} | {mw2zone_gui.OUT_NAME.lower()}
-    pak = os.path.join(OUT_DIR, "imagefile%d.pak" % mw2tex.NEW_PAK)
-    if os.path.exists(pak) and all(os.path.basename(p).lower() in ours for p in glob.glob(os.path.join(OUT_DIR, "*.ff"))):
-        os.remove(pak)  # every file that points into it gets rebuilt, so start it fresh instead of growing it
+    if all(os.path.basename(p).lower() in ours for p in glob.glob(os.path.join(OUT_DIR, "*.ff"))):
+        # every file that points into it gets rebuilt, so start it fresh instead of growing it;
+        # imagefile5.pak is where older builds put pictures (pak 5 belongs to the DLC maps)
+        for n in (mw2tex.NEW_PAK, 5):
+            pak = os.path.join(OUT_DIR, "imagefile%d.pak" % n)
+            if os.path.exists(pak):
+                os.remove(pak)
+                if n == 5:
+                    log.append("Pictures now go in imagefile7.pak. Delete imagefile5.pak from _codxe\\zone\\ "
+                               "on the console and copy everything from mw2tex_out again.")
     written, built = [], set()
     for path in others:
         base = os.path.basename(path)

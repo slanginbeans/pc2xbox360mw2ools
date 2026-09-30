@@ -16,7 +16,7 @@ ui_mp.ff, which hold camos, titles and emblems. Commands:
       Replaces texture NAME with any picture (PNG, JPG, DDS, ...). The picture is resized,
       given mipmaps and compressed to match the game texture automatically. Needs Pillow:
           python -m pip install pillow
-      Writes OUTDIR\\ui_mp.ff (and OUTDIR\\imagefile5.pak when a pak texture changed).
+      Writes OUTDIR\\ui_mp.ff (and OUTDIR\\imagefile7.pak when a pak texture changed).
       Run it again with the same OUTDIR to change more textures; each run keeps the
       earlier changes. Copy what it writes to _codxe\\zone\\ on the console.
 
@@ -44,7 +44,7 @@ ui_mp.ff, which hold camos, titles and emblems. Commands:
   python mw2tex.py maps    ui_mp.ff OUTDIR [mp_rust.ff ...]
       In a match, emblems and titles come from each map's own copy, not ui_mp.ff. This copies
       every texture you changed in OUTDIR\\ui_mp.ff into the map files (all mp_*.ff next to
-      ui_mp.ff if none are named) and writes them to OUTDIR with imagefile5.pak. Animated
+      ui_mp.ff if none are named) and writes them to OUTDIR with imagefile7.pak. Animated
       titles and emblems are copied whole and set to animate in the maps too.
 
   python mw2tex.py replace ui_mp.ff PICDIR OUTDIR
@@ -61,7 +61,7 @@ ui_mp.ff, which hold camos, titles and emblems. Commands:
       uses. To give one of the sharing titles its own picture, point its table row at an
       unused picture (the table editor in mw2tex_gui.py does this for you).
 
-imagefile5.pak: if OUTDIR already has one (from another fastfile, or a stock one you copied
+imagefile7.pak: if OUTDIR already has one (from another fastfile, or a stock one you copied
 there), new textures are added to the end of it and old contents are kept.
 
 The game texture decides the size; a picture with a different shape gets stretched to fit.
@@ -100,7 +100,7 @@ FORMATS = {
     0x06: ("ARGB8", 1, 4, ()),  # uncompressed 32-bit; DDS A8R8G8B8
 }
 LEVELS_PER_IMAGE = 4
-NEW_PAK = 5
+NEW_PAK = 7  # paks 5 and 6 belong to the DLC map packs
 
 
 # ---------------------------------------------------------------- fastfile
@@ -686,7 +686,7 @@ def convert_picture(path, width, height, fmt, mip_count, packed=False):
 
 
 class Output:
-    """The rebuilt fastfile and imagefile5.pak in OUTDIR; keeps earlier changes made there."""
+    """The rebuilt fastfile and imagefile7.pak in OUTDIR; keeps earlier changes made there."""
 
     def __init__(self, ff_path, out_dir):
         os.makedirs(out_dir, exist_ok=True)
@@ -1165,7 +1165,7 @@ def _copy_blobs(built, image, target, work_dir, map_ff=None):
 def sync_maps(stock_path, built_path, map_paths, out_dir, log=print):
     """Copies every texture changed in BUILT_PATH (vs STOCK_PATH) into the map fastfiles that carry it.
 
-    Map copies live in imagefile paks, so the new pixels go into OUTDIR/imagefile5.pak once and
+    Map copies live in imagefile paks, so the new pixels go into OUTDIR/imagefile7.pak once and
     each map's table is pointed at them. Returns the files written.
     """
     built = FastFile(built_path)

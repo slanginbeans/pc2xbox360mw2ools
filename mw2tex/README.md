@@ -125,7 +125,7 @@ opening the maps again shows what you queued last time.
 1. With FTP, open the MW2 game folder (the one with `default_mp.xex`), then `_codxe`.
 2. If there's no `zone` folder, make one (in FileZilla: right-click, then "Create directory"). Name it `zone`, all lowercase.
 3. Copy the built files into `_codxe\zone\`, for example `_codxe\zone\ui_mp.ff`. If Build also made
-   `imagefile5.pak` (it does when you change camos or map textures), copy that too.
+   `imagefile7.pak` (it does when you change camos or map textures), copy that too.
 4. Start MW2 with codxe.
 
 To undo, delete the file from `_codxe\zone\`.
@@ -155,7 +155,7 @@ To undo, delete the file from `_codxe\zone\`.
   file. So copy every map's `mp_*.ff` into your work folder once, and Build (or the `maps` command) updates them
   all. Maps you leave out keep the stock pictures. Animated titles and emblems are copied into the maps whole, with the map's own material set to play them (not yet tried on a console).
 - **Pak textures.** Camos on guns and map textures live in `imagefile*.pak`. Changed ones go in a new
-  `imagefile5.pak`, which codxe loads from `_codxe\zone\`. Build adds to an existing `imagefile5.pak` in
+  `imagefile7.pak`, which codxe loads from `_codxe\zone\`. Build adds to an existing `imagefile7.pak` in
   `mw2tex_out` rather than replacing it, so it can grow over time. Delete it and rebuild if it gets big.
 - **Formats that can't be replaced yet** are marked on their card. Most textures are DXT1, DXT3 or DXT5,
   which all work.
