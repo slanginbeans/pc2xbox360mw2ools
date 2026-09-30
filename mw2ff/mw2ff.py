@@ -5,6 +5,10 @@
     python mw2ff.py pack   <folder> <new.ff>          build a fastfile from an unpacked folder
     python mw2ff.py verify <file.ff> [...]            unpack and pack in memory, check it is identical
 
+An unpacked folder also has scripts\ (every script as a plain file) and localize.txt (every
+in-game text). Edit them in any text editor, at any length, and pack: changed scripts and
+texts go back in, and a new file under scripts\ becomes a new script in the fastfile.
+
 The reader follows the same steps as the game's own loader (checked against the TU6 code),
 so every byte of the file belongs to a known field of a known asset.
 """
@@ -22,7 +26,9 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "mw2tex"))
 
 import codec as codec_mod  # noqa: E402
+import relocate as relocate_mod  # noqa: E402
 import schema as schema_mod  # noqa: E402
+import text as text_mod  # noqa: E402
 import zone as zone_mod  # noqa: E402
 
 HEADER_BYTES = 48      # zone header (8 words) + asset list header (4 words)
@@ -49,7 +55,8 @@ def walk(zone):
 
 
 def asset_name(r, index):
-    strings = r.asset_strings.get(index, [])
+    strings = [(p, r.string_at(v) if isinstance(v, int) else v) for p, v in r.asset_strings.get(index, [])]
+    strings = [(p, v) for p, v in strings if v is not None]
     for want in NAME_MEMBERS:
         for path, s in strings:
             last = path.split(" > ")[-1]
@@ -115,6 +122,15 @@ def encode(doc, blobs, sch=None):
     return bytes(out)
 
 
+def build(doc, blobs, layout, sch=None):
+    """Encode a document whose pieces may have changed size (or had assets added or removed)
+    and lay the zone out again: layout is relocate.Layout of the original zone (or its Reader)."""
+    sch = sch or schema_mod.load()
+    raw = encode(doc, blobs, sch)
+    zone, _ = relocate_mod.relocate(raw, layout, sch, text_mod.index_map(doc))
+    return zone
+
+
 # ---------------------------------------------------------------- folders
 
 def _safe(name):
@@ -122,9 +138,28 @@ def _safe(name):
     return (name or "unnamed")[:80]
 
 
+SCRIPTS_DIR = "scripts"
+LOCALIZE_FILE = "localize.txt"
+LOCALIZE_HEAD = ("# In-game text: one line per entry, KEY = text. Change the text after the = sign;\n"
+                 "# it may be any length. \\n is a new line.\n")
+
+
+def _script_path(name):
+    """Where a script goes under scripts/: its own name, with only the characters Windows
+    can't have in a file name replaced."""
+    parts = []
+    for p in name.replace("\\", "/").split("/"):
+        p = re.sub(r'[<>:"|?*\x00-\x1f]', "_", p).rstrip(". ")
+        if p and p != "..":
+            parts.append(p)
+    return "/".join(parts) or "unnamed"
+
+
 def unpack(ff_path, out_dir, log=print):
     ff, zone = read_fastfile(ff_path)
-    doc, blobs = decode(zone)
+    r = walk(zone)
+    doc, blobs = decode(zone, r)
+    sch = r.s
     os.makedirs(os.path.join(out_dir, "assets"), exist_ok=True)
     index = {"format": doc["format"], "source": os.path.basename(ff_path), "header": doc["header"],
              "zone": doc["zone"], "assets": []}
@@ -141,6 +176,25 @@ def unpack(ff_path, out_dir, log=print):
             open(os.path.join(d, "data.bin"), "wb").write(bytes(b))
         index["assets"].append({"index": a["index"], "type": a["type"], "type_id": a["type_id"],
                                 "name": a["name"], "folder": folder})
+    index["scripts"] = {}
+    lines = []
+    for a in doc["assets"]:
+        if text_mod.is_script(a):
+            rel = _script_path(a["name"])
+            while rel in index["scripts"]:
+                rel += "_"
+            path = os.path.join(out_dir, SCRIPTS_DIR, *rel.split("/"))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "wb").write(text_mod.script_text(a, blobs, sch))
+            index["scripts"][rel] = a["name"]
+        elif text_mod.is_localize(a):
+            v = text_mod.localize_value(a)
+            if v is not None:
+                lines.append("%s = %s" % (a["name"], text_mod.escape(v)))
+    if lines:
+        with open(os.path.join(out_dir, LOCALIZE_FILE), "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(LOCALIZE_HEAD + "\n".join(lines) + "\n")
+    open(os.path.join(out_dir, "layout.bin"), "wb").write(relocate_mod.Layout.of(r).dumps())
     with open(os.path.join(out_dir, "zone.json"), "w", encoding="utf-8") as fh:
         json.dump(index, fh, indent=1, ensure_ascii=False)
     # keep the container header so pack can write a complete file
@@ -155,14 +209,64 @@ def pack(in_dir, ff_path, log=print):
     for a in index["assets"]:
         d = os.path.join(in_dir, "assets", a["folder"])
         data = json.load(open(os.path.join(d, "asset.json"), encoding="utf-8"))
-        doc["assets"].append({"index": a["index"], "records": data["records"]})
+        doc["assets"].append({"index": a["index"], "type": a["type"], "type_id": a["type_id"],
+                              "name": a["name"], "records": data["records"]})
         p = os.path.join(d, "data.bin")
         blobs[a["index"]] = bytearray(open(p, "rb").read()) if os.path.exists(p) else bytearray()
-    zone = encode(doc, blobs)
+    sch = schema_mod.load()
+    for note in import_texts(in_dir, index, doc, blobs, sch):
+        log(note)
+    layout_path = os.path.join(in_dir, "layout.bin")
+    if os.path.exists(layout_path):
+        zone = build(doc, blobs, relocate_mod.Layout.loads(open(layout_path, "rb").read()), sch)
+    else:
+        zone = encode(doc, blobs, sch)     # folder from an older mw2ff: sizes must not change
     head = bytearray(open(os.path.join(in_dir, "container.bin"), "rb").read())
     write_container(head, zone, ff_path)
     log("packed %d assets into %s" % (len(doc["assets"]), ff_path))
     return zone
+
+
+def import_texts(in_dir, index, doc, blobs, sch):
+    """Take changed scripts (and new ones) and changed texts from an unpacked folder."""
+    notes = []
+    known = index.get("scripts", {})
+    by_name = {a["name"]: a for a in doc["assets"] if text_mod.is_script(a)}
+    seen = set()
+    sdir = os.path.join(in_dir, SCRIPTS_DIR)
+    for root, _dirs, files in os.walk(sdir):
+        for fn in sorted(files):
+            path = os.path.join(root, fn)
+            rel = os.path.relpath(path, sdir).replace(os.sep, "/")
+            data = open(path, "rb").read()
+            name = known.get(rel, rel)
+            if name in seen:
+                raise ValueError("two files under scripts are both %s; keep only one" % name)
+            seen.add(name)
+            a = by_name.get(name)
+            if a is None:
+                asset, blob = text_mod.new_script(name, data, 0)
+                text_mod.add_asset(doc, blobs, asset, blob)
+                notes.append("added new script %s" % name)
+            elif text_mod.script_text(a, blobs, sch) != data:
+                text_mod.set_script_text(a, blobs, data)
+                notes.append("changed script %s" % name)
+    lpath = os.path.join(in_dir, LOCALIZE_FILE)
+    if os.path.exists(lpath):
+        loc = {a["name"]: a for a in doc["assets"] if text_mod.is_localize(a)}
+        for line in open(lpath, encoding="utf-8-sig").read().split("\n"):
+            line = line.rstrip("\r")
+            if not line.strip() or line.startswith("#") or " = " not in line:
+                continue
+            key, value = line.split(" = ", 1)
+            a = loc.get(key.strip())
+            if a is None:
+                continue
+            value = text_mod.unescape(value)
+            if text_mod.localize_value(a) != value:
+                text_mod.set_localize_value(a, value)
+                notes.append("changed text %s" % key.strip())
+    return notes
 
 
 def write_container(container, zone, path):

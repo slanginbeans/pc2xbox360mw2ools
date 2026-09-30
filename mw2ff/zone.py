@@ -46,6 +46,48 @@ class ZoneError(Exception):
     pass
 
 
+class ZB(bytes):
+    """Bytes streamed from the zone, remembering where they start in it (zpos, or None for
+    runtime data that is not in the file)."""
+    zpos = None
+
+
+class ZBA(bytearray):
+    """A struct built from several streamed pieces: segs lists (offset in here, zone pos)."""
+    def __init__(self, *a):
+        super().__init__(*a)
+        self.segs = []
+
+
+def zpos_of(buf, loc):
+    """Zone position of byte loc of a streamed buffer, or None if unknown."""
+    if isinstance(buf, ZBA):
+        best = None
+        for off, zp in buf.segs:
+            if off <= loc:
+                best = (off, zp)
+        if best is None or best[1] is None:
+            return None
+        return best[1] + loc - best[0]
+    zp = getattr(buf, "zpos", None)
+    return None if zp is None else zp + loc
+
+
+def zextend(dst, src, off=0, n=None):
+    """dst.extend(src[off:off+n]) keeping track of where the bytes came from."""
+    if n is None:
+        n = len(src) - off
+    base = len(dst)
+    dst.extend(src[off:off + n])
+    if isinstance(src, ZBA):
+        for so, zp in src.segs:
+            if so < off + n:
+                rel = max(so, off)
+                dst.segs.append((base + rel - off, None if zp is None else zp + rel - so))
+    else:
+        dst.segs.append((base, zpos_of(src, off)))
+
+
 class Inst:
     """One struct (or union) instance: a view into a byte buffer."""
     __slots__ = ("info", "buf", "off", "index", "where")
@@ -108,6 +150,12 @@ class Reader:
         self.records = [] if record else None
         self.cur_asset = None
         self.asset_strings = {}
+        # Layout tracking for relocation (see relocate.py): every piece of block memory the load
+        # uses, in order, as (block, block offset, size, asset index, zone pos or None), and
+        # every pointer that refers back to earlier data as (zone pos of the pointer, value).
+        self.spans = []
+        self.alias_list = []
+        self.block_max = [0] * 6
         self.pos = 32
 
     # ------------------------------------------------------------ stream
@@ -115,10 +163,13 @@ class Reader:
     def read(self, n, desc=("raw",)):
         """Stream n bytes. desc says what they are: ("type", ctype, count), ("partial", ctype),
         ("ptrs", count), ("string",) or ("raw",)."""
+        zp = None
         if self.block == RUNTIME:
-            data = bytes(n)
+            data = ZB(bytes(n))
         else:
-            data = self.zone[self.pos:self.pos + n]
+            zp = self.pos
+            data = ZB(self.zone[self.pos:self.pos + n])
+            data.zpos = zp
             if len(data) < n:
                 raise ZoneError("read past end of zone at %d (+%d) in %s" % (self.pos, n, " > ".join(self.path)))
             if self.trace is not None and n:
@@ -128,7 +179,11 @@ class Reader:
                                      " > ".join(self.path[1:])))
             self.pos += n
         where = (self.block, self.block_pos[self.block])
+        if n:
+            self.spans.append((self.block, where[1], n, self.cur_asset[0] if self.cur_asset else -1, zp))
         self.block_pos[self.block] += n
+        if self.block_pos[self.block] > self.block_max[self.block]:
+            self.block_max[self.block] = self.block_pos[self.block]
         return data, where
 
     def alloc(self, align):
@@ -148,9 +203,32 @@ class Reader:
     def insert_pointer(self):
         self.push(VIRTUAL)
         self.alloc(4)
+        self.spans.append((VIRTUAL, self.block_pos[VIRTUAL], 4, self.cur_asset[0] if self.cur_asset else -1, None))
         self.block_pos[VIRTUAL] += 4
         self.pop()
         self.inserts += 1
+
+    def string_at(self, val):
+        """The string a back-pointer refers to (bytes), or None if it can't be found."""
+        import bisect
+        if getattr(self, "_vspans", None) is None:
+            rows = sorted((sp[1], sp[2], sp[4]) for sp in self.spans if sp[0] == VIRTUAL and sp[4] is not None)
+            self._vspans = ([r[0] for r in rows], rows)
+        starts, rows = self._vspans
+        off = (val - 1) & 0x0FFFFFFF
+        i = bisect.bisect_right(starts, off) - 1
+        if i < 0 or (val - 1) >> 28 != VIRTUAL:
+            return None
+        start, n, zp = rows[i]
+        if off - start >= n:
+            return None
+        p = zp + off - start
+        end = self.zone.find(b"\0", p)
+        return None if end < 0 else self.zone[p:end]
+
+    def alias(self, buf, loc, val):
+        self.aliases += 1
+        self.alias_list.append((zpos_of(buf, loc), val))
 
     # ------------------------------------------------------------ helpers
 
@@ -200,10 +278,15 @@ class Reader:
         if at_start and not (info.is_union and dyn is not None):
             size = dyn.m.offset if dyn is not None else info.ctype.size
             data, where = self.read(size, ("partial", info.ctype) if dyn is not None else ("type", info.ctype, 1))
-            inst = Inst(info, bytearray(data) if dyn is not None else data, 0, 0, where)
+            if dyn is not None:
+                buf = ZBA()
+                zextend(buf, data)
+            else:
+                buf = data
+            inst = Inst(info, buf, 0, 0, where)
         elif at_start:
             # A union whose members are only partly known: each member streams itself.
-            inst = Inst(info, bytearray(), 0, 0, (self.block, self.block_pos[self.block]))
+            inst = Inst(info, ZBA(), 0, 0, (self.block, self.block_pos[self.block]))
         self.vars[info.name] = inst
         pushed = False
         if info.asset:
@@ -339,7 +422,7 @@ class Reader:
         in_temp = mi.block is not None and mi.block.kind == "temp"
         if val == FOLLOWING or (in_temp and val == INSERT):
             return self.alloc_member(inst, mi, mod_pos, combined, kind, loc, val)
-        self.aliases += 1
+        self.alias(inst.buf, loc, val)
 
     def is_asset(self, mi):
         return mi.type is not None and mi.type.asset is not None
@@ -432,13 +515,16 @@ class Reader:
                 if after:
                     sub = self.load_struct(t, None, True)
                     if isinstance(inst.buf, bytearray) and sub is not None:
-                        inst.buf.extend(sub.buf[sub.off:sub.off + t.ctype.size] if not isinstance(sub.buf, bytearray) else sub.buf)
+                        if isinstance(sub.buf, bytearray):
+                            zextend(inst.buf, sub.buf)
+                        else:
+                            zextend(inst.buf, sub.buf, sub.off, t.ctype.size)
                 else:
                     self.load_struct(t, Inst(t, inst.buf, loc, 0, inst.where), False)
             elif after:
                 data, _ = self.read(t.ctype.size if t else mi.m.type.size, ("type", t.ctype if t else mi.m.type, 1))
                 if isinstance(inst.buf, bytearray):
-                    inst.buf.extend(data)
+                    zextend(inst.buf, data)
         elif kind == "dynamic":
             n = mi.array_size[mod_pos](self.lookup)
             if t is not None and not t.is_leaf:
@@ -446,7 +532,7 @@ class Reader:
             else:
                 buf, _ = self.read(self.elem_size_embedded(mi) * n, self.elem_desc(mi, 0, n))
             if isinstance(inst.buf, bytearray):
-                inst.buf.extend(buf)
+                zextend(inst.buf, buf)
 
     def elem_desc(self, mi, mod_pos, n):
         """Descriptor for n elements of what a member points to (or of a dynamic array)."""
@@ -484,7 +570,7 @@ class Reader:
                 self.load_asset_ptr(t, buf, loc + 4 * i)
                 continue
             if mi.is_reusable and val != FOLLOWING:
-                self.aliases += 1
+                self.alias(buf, loc + 4 * i, val)
                 continue
             align = self.align_of(t) if t is not None else mi.m.type.align
             self.alloc(align)
@@ -501,7 +587,9 @@ class Reader:
         if not val:
             return None
         if val != FOLLOWING:
-            self.aliases += 1
+            self.alias(buf, loc, val)
+            if self.cur_asset is not None and len(self.path) <= 4:
+                self.asset_strings.setdefault(self.cur_asset[0], []).append((" > ".join(self.path), val))
             return None
         end = self.zone.index(b"\0", self.pos)
         data, _ = self.read(end + 1 - self.pos, ("string",))
@@ -531,7 +619,7 @@ class Reader:
                 inst = self.load_struct(info, None, True)
                 self.assets.append((info, inst, start, self.pos))
             else:
-                self.aliases += 1
+                self.alias(buf, loc, val)
         if in_temp:
             self.pop()
         return inst
