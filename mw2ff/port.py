@@ -255,6 +255,29 @@ def _dec3n(v):
     return u
 
 
+HIMIP_RADIUS = 1238     # the median of stock Favela's models
+
+
+def convert_model_vertices(leaf):
+    """GfxPackedVertex: floats to big-endian, color and packed texture coordinates as the
+    same 32-bit value, normal and tangent repacked as 10:10:10 signed (checked against stock
+    mil_tntbomb_mp, whose vertices match exactly)."""
+    raw = leaf.raw
+    out = bytearray(len(raw))
+    cache = {}
+    for o in range(0, len(raw), 32):
+        struct.pack_into(">4f", out, o, *struct.unpack_from("<4f", raw, o))
+        out[o + 16:o + 20] = raw[o + 16:o + 20][::-1]
+        out[o + 20:o + 24] = raw[o + 20:o + 24][::-1]
+        for k in (24, 28):
+            key = raw[o + k:o + k + 4]
+            u = cache.get(key)
+            if u is None:
+                u = cache[key] = _dec3n(_pc_unit(key))
+            struct.pack_into(">I", out, o + k, u)
+    return Leaf(leaf.t, leaf.n, out, ">")
+
+
 def convert_world_vertices(leaf):
     """GfxWorldVertex: floats to big-endian, color as the same 32-bit value, normal and
     tangent repacked as 10:10:10 signed (checked against stock Favela: 99% within 0.02)."""
@@ -774,24 +797,7 @@ class Porter:
         self.map_name = re.sub(rb"^maps/mp/|\.d3dbsp$", b"", _name(gfx) or b"")
         self.world_checksum = next((e[1].get("checksum", 0) for e in ents
                                     if e[0] == "gfx_map" and isinstance(e[1], dict)), 0)
-        # Models placed only by single-player entities (IW4x maps often carry one) aren't
-        # used in multiplayer; the 360 model format isn't converted yet, so leave them out.
-        referenced = set()
-        for o in iter_objects(self.root):
-            if isinstance(o, dict):
-                for c in o.get("@", {}).values():
-                    for x in (c if isinstance(c, list) else [c]):
-                        if isinstance(x, Ref) and isinstance(x.target, tree.AssetEntry):
-                            referenced.add(id(x.target))
-        keep = []
-        for e in ents:
-            if e[0] == "xmodel" and id(e) not in referenced:
-                self.warn("left out model %s (the 360 model format isn't converted yet)"
-                          % asset_name(e[1]).decode())
-                continue
-            keep.append(e)
-        ents[:] = keep
-        # Materials and pictures a left-out model brought in first are only pointed at from
+        # Materials and pictures a left-out asset brought in first are only pointed at from
         # then on: the writer puts each where the first remaining pointer to it is.
         reached = set(id(o) for o in iter_objects(ents))
         orphans = {}
@@ -919,6 +925,26 @@ class Porter:
 
     def leaf_GfxWorldVertex(self, lf, tx):
         return convert_world_vertices(lf)
+
+    def leaf_GfxPackedVertex(self, lf, tx):
+        return convert_model_vertices(lf)
+
+    def post_XSurface(self, d, tx):
+        # The PC's buffer handle means nothing here; the 360 builds its vertex and index
+        # buffers from verts0 / triIndices when the file loads (both zero in stock files).
+        d["zoneHandle"] = 0
+        d["unknown"] = 0
+        d["vertexBuffer"] = [0] * 8
+        d["indexBuffer"] = [0] * 8
+
+    def post_XModel(self, d, tx):
+        """The 360 keeps a number per surface for texture streaming (himipRadii); the game
+        reads it for every model when the file loads. Stock models use about 1240."""
+        m = next(m for m in tx.members if m.name == "himipRadii")
+        n = d["numsurfs"]
+        d["himipRadii"] = "follow" if n else None
+        if n:
+            d["@"][("himipRadii", ())] = Leaf(m.type, n, struct.pack(">%dH" % n, *[HIMIP_RADIUS] * n), ">")
 
     def _replace(self, d, new):
         slot = d.get("_slot")
