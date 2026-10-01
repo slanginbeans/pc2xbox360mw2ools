@@ -847,11 +847,6 @@ class Porter:
 
     def convert(self):
         ents = self.root["assets"]
-        # IW4x ZoneBuilder adds a rawfile named after the zone that only says who built it.
-        # Stock 360 files have none. With a map's _load.ff carrying one, the 360 stopped with
-        # "MT_GetSize: max allocation exceeded ... for script usage" (mp_waw_castle).
-        ents[:] = [e for e in ents if not (e[0] == "rawfile" and isinstance(e[1], dict)
-                                           and _is_builder_signature(e[1]))]
         gfx = next((e[1] for e in ents if e[0] == "gfx_map" and isinstance(e[1], dict)), {})
         self.map_name = re.sub(rb"^maps/mp/|\.d3dbsp$", b"", _name(gfx) or b"")
         self.world_checksum = next((e[1].get("checksum", 0) for e in ents
@@ -1366,6 +1361,11 @@ class Porter:
         limit = 1024 if name.startswith(b"loadscreen") else 2048
         if not cube:
             w, h, mips = fit_picture(fmt, w, h, mips, limit)
+        if name.startswith(b"loadscreen"):
+            # Stock loading screens have no mipmaps. With them (1024x1024 DXT1, 704 KB) the
+            # console stopped loading mp_waw_castle with "MT_GetSize: max allocation exceeded
+            # ... for script usage"; the top level alone (512 KB) loads.
+            mips = mips[:1]
         self.images.build(d, fmt, w, h, mips, cube)
         # Pictures from files are "load from file" on the 360 (the PC leaves them unknown);
         # stock loading screens are plain 2D pictures.
@@ -1666,16 +1666,6 @@ def _rawfile_text(d):
     if d.get("compressedLen"):
         raw = zlib.decompress(raw[:d["compressedLen"]])
     return raw[:d["len"]]
-
-
-def _is_builder_signature(d):
-    """The rawfile IW4x ZoneBuilder signs a file with: its text stored as is, but marked
-    compressed (compressedLen set, len 0)."""
-    ch = d.get("data", {}).get("@", {})
-    lf = ch.get(("buffer", ()), ch.get(("compressedBuffer", ())))
-    if isinstance(lf, Ref):
-        lf = lf.target
-    return isinstance(lf, Leaf) and lf.raw.startswith(b"FastFile built using the IW4x ZoneBuilder")
 
 
 def _set_rawfile_text(d, data):
