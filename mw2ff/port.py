@@ -1361,6 +1361,11 @@ class Porter:
         limit = 1024 if name.startswith(b"loadscreen") else 2048
         if not cube:
             w, h, mips = fit_picture(fmt, w, h, mips, limit)
+        if name.startswith(b"loadscreen"):
+            # Stock loading screens have no mipmaps. With them (1024x1024 DXT1, 704 KB) the
+            # console stopped loading mp_waw_castle with "MT_GetSize: max allocation exceeded
+            # ... for script usage"; the top level alone (512 KB) loads.
+            mips = mips[:1]
         self.images.build(d, fmt, w, h, mips, cube)
         # Pictures from files are "load from file" on the 360 (the PC leaves them unknown);
         # stock loading screens are plain 2D pictures.
