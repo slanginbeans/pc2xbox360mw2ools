@@ -357,7 +357,8 @@ def iwi_header(data):
         return v6()[:5]
     for layout in (v8, v6):
         flags, fmt, w, h, head, size = layout()
-        if size == len(data) and w and h and (fmt in IWI_FORMATS or fmt in IWI_EXPAND):
+        if size == len(data) and w and h and (fmt in IWI_FORMATS or fmt in IWI_EXPAND
+                                              or fmt in IWI_WAVELET):
             return flags, fmt, w, h, head
     raise PortError(".iwi version %d isn't supported" % ver)
 
@@ -366,6 +367,8 @@ def read_iwi(data):
     """.iwi picture: returns (format name, width, height, mips largest first, is cube).
     For a cube map, mips holds the six faces' top levels instead."""
     flags, fmt, w, h, head = iwi_header(data)
+    if fmt in IWI_WAVELET:
+        return read_iwi_wavelet(data, flags, fmt, w, h, head)
     name = IWI_FORMATS.get(fmt)
     expand = IWI_EXPAND.get(fmt)
     if expand is not None:
@@ -425,6 +428,35 @@ def _a8_to_argb8(b):
 
 # .iwi kinds turned into 32-bit pixels: format -> (bytes a pixel, converter)
 IWI_EXPAND = {0x02: (3, _rgb24_to_argb8), 0x03: (2, _la16_to_argb8), 0x04: (1, _a8_to_argb8)}
+
+
+def _l8_to_argb8(b):
+    """Luminance -> opaque gray."""
+    out = bytearray(len(b) * 4)
+    out[0::4] = out[1::4] = out[2::4] = b
+    out[3::4] = b"\xff" * len(b)
+    return bytes(out)
+
+
+# Wavelet-compressed .iwi kinds (see wavelet.py): format -> (channels in the stream, converter
+# to 32-bit pixels or None when the stream already is B,G,R,A).
+IWI_WAVELET = {0x06: (4, None), 0x07: (3, _rgb24_to_argb8), 0x08: (2, _la16_to_argb8),
+               0x09: (1, _l8_to_argb8), 0x0A: (1, _a8_to_argb8)}
+
+
+def read_iwi_wavelet(data, flags, fmt, w, h, head):
+    """read_iwi for the wavelet kinds: every mip level is decoded, then made 32-bit pixels."""
+    import wavelet
+    if flags & IWI_CUBE:
+        raise PortError("wavelet cube map pictures aren't supported yet")
+    if flags & IWI_NOMIPMAPS:
+        raise PortError("wavelet pictures without mipmaps aren't supported")
+    channels, convert = IWI_WAVELET[fmt]
+    try:
+        levels, _ = wavelet.decode(data[head:], w, h, channels)
+    except wavelet.WaveletError as e:
+        raise PortError("wavelet picture: %s" % e)
+    return "ARGB8", w, h, [lv if convert is None else convert(lv) for lv in levels], False
 
 
 def fit_picture(fmt_name, w, h, mips, limit=2048):
