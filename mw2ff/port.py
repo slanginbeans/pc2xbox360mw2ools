@@ -847,6 +847,11 @@ class Porter:
 
     def convert(self):
         ents = self.root["assets"]
+        # IW4x ZoneBuilder adds a rawfile named after the zone that only says who built it.
+        # Stock 360 files have none. With a map's _load.ff carrying one, the 360 stopped with
+        # "MT_GetSize: max allocation exceeded ... for script usage" (mp_waw_castle).
+        ents[:] = [e for e in ents if not (e[0] == "rawfile" and isinstance(e[1], dict)
+                                           and _is_builder_signature(e[1]))]
         gfx = next((e[1] for e in ents if e[0] == "gfx_map" and isinstance(e[1], dict)), {})
         self.map_name = re.sub(rb"^maps/mp/|\.d3dbsp$", b"", _name(gfx) or b"")
         self.world_checksum = next((e[1].get("checksum", 0) for e in ents
@@ -1661,6 +1666,16 @@ def _rawfile_text(d):
     if d.get("compressedLen"):
         raw = zlib.decompress(raw[:d["compressedLen"]])
     return raw[:d["len"]]
+
+
+def _is_builder_signature(d):
+    """The rawfile IW4x ZoneBuilder signs a file with: its text stored as is, but marked
+    compressed (compressedLen set, len 0)."""
+    ch = d.get("data", {}).get("@", {})
+    lf = ch.get(("buffer", ()), ch.get(("compressedBuffer", ())))
+    if isinstance(lf, Ref):
+        lf = lf.target
+    return isinstance(lf, Leaf) and lf.raw.startswith(b"FastFile built using the IW4x ZoneBuilder")
 
 
 def _set_rawfile_text(d, data):
