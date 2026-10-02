@@ -48,7 +48,7 @@ job = {"running": False, "map": None, "log": [], "done": False, "error": None, "
 
 
 def settings():
-    base = {"card_pak": False, "card_source": "auto", "variants": False,
+    base = {"card_pak": False, "card_source": "auto", "variants": False, "profile": False,
             "fixes": dict(port_mod.DEFAULT_FIXES)}
     try:
         with open(SETTINGS) as fh:
@@ -62,7 +62,7 @@ def settings():
 
 def save_settings(req):
     s = settings()
-    for k in ("card_pak", "variants"):
+    for k in ("card_pak", "variants", "profile"):
         if k in req:
             s[k] = bool(req[k])
     if req.get("card_source") in ("auto", "stock"):
@@ -175,9 +175,24 @@ def _convert_one(pc_path, teams):
     s = settings()
     ui = card_ui() if s["card_pak"] else None
     make = port_mod.port_map_variants if s["variants"] else port_mod.port_map
+    out_dir = os.path.join(OUT_DIR, name)
+
+    def run():
+        return make(pc_path, out_dir, stock_files(), teams, _log,
+                    port_mod.game_iwd_files(GAME_DIR), card_ui=ui, fixes=s["fixes"])
+
     try:
-        files = make(pc_path, os.path.join(OUT_DIR, name), stock_files(), teams, _log,
-                     port_mod.game_iwd_files(GAME_DIR), card_ui=ui, fixes=s["fixes"])
+        if not s["profile"]:
+            files = run()
+        else:
+            import cProfile
+            prof = cProfile.Profile()
+            try:
+                files = prof.runcall(run)
+            finally:
+                os.makedirs(out_dir, exist_ok=True)
+                for line in port_mod.profile_report(prof, os.path.join(out_dir, name + ".prof")).splitlines():
+                    _log(line)
         return [os.path.relpath(f, FOLDER) for f in files], None
     except port_mod.PortError as e:
         _log("Stopped: %s" % e)
@@ -434,7 +449,11 @@ without it, to see on the console whether it helps or hurts.</p>
 <label class="toggle" style="margin-top:10px"><input type="checkbox" id="variants"><span><b>Also build test variants</b><br>
 <span class="dim">Besides the map itself, converts it once more for every fix that is ticked, with just that fix off,
 into <code>mw2port_out\&lt;map&gt;\variants\no_&lt;fix&gt;</code>. Try them one after another on the console to find
-which fix is behind a problem. A few minutes per variant.</span></span></label></section>
+which fix is behind a problem. A few minutes per variant.</span></span></label>
+<label class="toggle" style="margin-top:10px"><input type="checkbox" id="profile"><span><b>Time this conversion</b><br>
+<span class="dim">When a map is done, the log lists the parts of the converter that took the longest (copy them to Claude
+to speed it up), and the full timings go in <code>mw2port_out\&lt;map&gt;\&lt;map&gt;.prof</code>. Converting is a little
+slower while it's timed; the files it makes are the same.</span></span></label></section>
 <section><h2>3. Convert</h2>
 <p><button id="convert" class="primary" disabled>Convert</button> <button id="openOut">Open mw2port_out</button> <span id="state" class="dim"></span></p>
 <pre id="log" class="dim">Nothing converted yet.</pre></section>
@@ -461,7 +480,7 @@ function renderMaps(){if(!S.maps.length){$("#maps").innerHTML=`<p class="warn">N
  document.querySelectorAll(".tick").forEach(c=>c.onchange=()=>{c.checked?ticked.add(c.dataset.p):ticked.delete(c.dataset.p);renderJob()})}
 function renderFixes(){$("#fixes").innerHTML=S.fixes.map(f=>`<label class="toggle" style="margin:6px 0"><input type="checkbox" class="fix" data-k="${f.id}"${S.settings.fixes[f.id]?" checked":""}><span><b>${esc(f.label)}</b> <code class="dim">${f.id}</code><br><span class="dim">${esc(f.help)}</span></span></label>`).join("");
  document.querySelectorAll(".fix").forEach(c=>c.onchange=async()=>{try{S.settings=await api("/api/settings",{fixes:{[c.dataset.k]:c.checked}})}catch(e){alert(e.message)}});
- $("#variants").checked=!!S.settings.variants}
+ $("#variants").checked=!!S.settings.variants;$("#profile").checked=!!S.settings.profile}
 function renderCards(){$("#cardPak").checked=!!S.settings.card_pak;$("#cardSource").value=S.settings.card_source||"auto";
  $("#cardInfo").innerHTML=S.ui?`Filled from <code>${esc(S.ui)}</code>.`:`<span class="warn">No ui_mp.ff in the work folder or mw2tex_out yet: copy it from the console.</span>`}
 function renderTeams(){const m=S.maps.find(x=>x.path===pick);if(!m){$("#teams").innerHTML=`<span class="dim">Pick a map first.</span>`;return}
@@ -487,6 +506,7 @@ $("#cardPak").onchange=async e=>{try{S.settings=await api("/api/settings",{card_
 $("#cardSource").onchange=async e=>{try{S.settings=await api("/api/settings",{card_source:e.target.value});load()}catch(err){alert(err.message)}};
 $("#cardPakBuild").onclick=async()=>{try{await api("/api/cardpak",{});load(false)}catch(e){alert(e.message)}};
 $("#variants").onchange=async e=>{try{S.settings=await api("/api/settings",{variants:e.target.checked})}catch(err){alert(err.message)}};
+$("#profile").onchange=async e=>{try{S.settings=await api("/api/settings",{profile:e.target.checked})}catch(err){alert(err.message)}};
 $("#patch").onclick=async()=>{if(!confirm("Write patched copies of every stock map ("+S.stock_maps+") and imagefile8.pak to mw2port_out\\stock?"))return;
  try{await api("/api/patch",{});load(false)}catch(e){alert(e.message)}};
 load();
