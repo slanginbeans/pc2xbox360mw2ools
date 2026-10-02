@@ -57,6 +57,9 @@ TEXTURE_BUDGET_MB = 40
 # much more than the plain sum of the levels (mp_backlot: 90 MB counted, 115 MB in the block).
 TILING_PAD = 1.28
 LEVELS = 4      # pak table entries per picture
+# Stock 360 effects in place of the map's own (stock_effects). Off: with them mp_backlot failed
+# to load ("MT_GetSize: max allocation exceeded ... for script usage"), cause not found yet.
+STOCK_EFFECTS = False
 COLOR_MAP, COLOR_MAP1 = 0xA0AB1041, 0xB60D1850     # texture table name hashes
 
 # Per team (mp/factionTable.csv + the character scripts in common_mp): the models and
@@ -1076,6 +1079,8 @@ class Porter:
         the map's scripts name effects rather than point at them, so the stock one goes in under
         the name and the converted one is renamed out of the way (it stays: the map's other
         assets can point at materials it brings)."""
+        if not STOCK_EFFECTS:
+            return
         new, names = [], []
         for e in ents:
             if e[0] != "fx" or not isinstance(e[1], dict):
@@ -2246,7 +2251,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     refs = []
     loaded = {} if loaded is None else loaded
     ref_paths = list(ref_paths)
-    if fx_paths:
+    if fx_paths and STOCK_EFFECTS:
         for p in ref_paths:
             if p not in loaded:
                 log("reading stock 360 file %s" % os.path.basename(p))

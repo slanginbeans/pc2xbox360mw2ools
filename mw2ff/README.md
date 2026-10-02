@@ -75,10 +75,8 @@ code_post_gfx_mp.ff mp_favela.ff [more stock maps] [--teams ALLIES AXIS]`.
 
 What it converts so far: the map itself (geometry, collision, lighting, pictures, reflection
 probes, map entities, scripts) and the two teams. Custom models, sounds and effects the PC map
-brings with it aren't converted yet. Effects a stock 360 map also has (dust, car glass, fires)
-come from that map instead of being converted (the stock maps in the folder are searched for
-them), and pictures over 40 MB lose their top mip levels so the map fits in memory
-(`--texture-budget` from a command prompt).
+brings with it aren't converted yet. Pictures over 40 MB lose their top mip levels so the map
+fits in memory (`--texture-budget` from a command prompt).
 
 ## Commands
 
