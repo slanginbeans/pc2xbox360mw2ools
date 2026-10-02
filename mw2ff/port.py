@@ -46,6 +46,14 @@ X_DEFAULT_REFS = ["code_post_gfx_mp.ff", "mp_favela.ff"]
 BYTE_UNIONS = {"GfxSurfaceLightingAndFlags"}
 # Zones the 360 keeps loaded the whole time: their assets can be used by name.
 RESIDENT = ("code_post_gfx_mp", "common_mp")
+# The pictures a ported map carries sit in the file's physical memory block (stock maps keep
+# most of theirs in the console's image files: 9 to 26 MB). The console ran out of memory with
+# 201 MB of them (mp_backlot) and loads 90 MB (mp_waw_castle). Pictures above this budget (MB
+# of physical memory) lose their top mip levels, the largest first. 0 keeps them all.
+TEXTURE_BUDGET_MB = 80
+# The 360 tiles pictures and pads the small mip levels: the physical block comes to about this
+# much more than the plain sum of the levels (mp_backlot: 90 MB counted, 115 MB in the block).
+TILING_PAD = 1.28
 LEVELS = 4      # pak table entries per picture
 
 # Per team (mp/factionTable.csv + the character scripts in common_mp): the models and
@@ -576,9 +584,11 @@ def encode_dxt3a(lum, width, height):
 # ================================================================ converter
 
 class Porter:
-    def __init__(self, pc_root, x_refs, iwd=None, log=print, game_iwds=()):
+    def __init__(self, pc_root, x_refs, iwd=None, log=print, game_iwds=(), texture_budget=0):
         self.root = pc_root
         self.log = log
+        self.texture_budget = texture_budget    # MB; 0: no limit
+        self.mip_drop = {}                      # picture name -> top mip levels left out
         self.P = schema_mod.load("pc")
         self.X = schema_mod.load("xbox")
         self.pc = codec_mod.Codec(self.P)
@@ -891,8 +901,64 @@ class Porter:
         tx = self.X.infos[name].ctype
         return self.conv_dict(d, tp, tx)
 
+    def plan_texture_budget(self):
+        """Decide which pictures lose top mip levels so the map's pictures fit the budget:
+        the largest picture goes down a level at a time. Lightmaps, reflection probes and
+        loading screens stay as they are."""
+        import heapq
+        budget = int(self.texture_budget * 1048576 / TILING_PAD)
+        fixed, items = 0, {}
+        for o in iter_objects(self.root["assets"]):
+            if not (isinstance(o, dict) and o.get("_asset") == "GfxImage"):
+                continue
+            name = asset_name(o)
+            if not name or name.startswith(b",") or name.startswith(b"loadscreen"):
+                continue
+            if ("GfxImage", name) in self.resident and (name.startswith(b"$") or not self.in_iwd(name)):
+                continue
+            tex = o.get("texture", {})
+            ld = tex.get("@", {}).get(("loadDef", ())) if isinstance(tex, dict) else None
+            if isinstance(ld, dict) and ld.get("resourceSize"):
+                fixed += ld["resourceSize"]
+                continue
+            low = name.decode().lower()
+            found = self.map_pictures.get(low) or self.game_pictures.get(low)
+            if found is None:
+                continue
+            try:
+                fmt, w, h, mips, cube = read_iwi(found[0].read(found[1]))
+            except (PortError, struct.error, ValueError, KeyError):
+                continue
+            if cube or len(mips) < 2:
+                fixed += sum(len(m) for m in mips)
+            else:
+                items[name] = ([len(m) for m in mips], w, h)
+        before = total = fixed + sum(sum(s) for s, w, h in items.values())
+        heap = [(-sum(s), n) for n, (s, w, h) in items.items()]
+        heapq.heapify(heap)
+        while total > budget and heap:
+            _, n = heapq.heappop(heap)
+            sizes, w, h = items[n]
+            k = self.mip_drop.get(n, 0)
+            if k + 1 >= len(sizes) or min(w, h) >> (k + 1) < 32:
+                continue
+            total -= sizes[k]
+            self.mip_drop[n] = k + 1
+            heapq.heappush(heap, (-sum(sizes[k + 1:]), n))
+        if self.mip_drop:
+            self.log("  pictures: about %.0f MB, over the %d MB budget, so %d pictures lose their "
+                     "top mip levels (about %.0f MB left)"
+                     % (before * TILING_PAD / 1048576, self.texture_budget, len(self.mip_drop),
+                        total * TILING_PAD / 1048576))
+            if total > budget:
+                self.warn("the pictures still come to about %.0f MB (budget %d MB): the rest "
+                          "are lightmaps, probes and pictures that are already small"
+                          % (total * TILING_PAD / 1048576, self.texture_budget))
+
     def convert(self):
         ents = self.root["assets"]
+        if self.texture_budget:
+            self.plan_texture_budget()
         # IW4x ZoneBuilder signs a file with a rawfile named after the zone: its text stored as
         # is, but marked compressed (compressedLen 42, len 0). The 360 would take it for a
         # zlib stream. Stock files have the same rawfile empty (0, 0, one zero byte).
@@ -1431,6 +1497,9 @@ class Porter:
         limit = 1024 if name.startswith(b"loadscreen") else 2048
         if not cube:
             w, h, mips = fit_picture(fmt, w, h, mips, limit)
+            k = self.mip_drop.get(name, 0)
+            if k and len(mips) > k:
+                mips, w, h = mips[k:], max(1, w >> k), max(1, h >> k)
         if name.startswith(b"loadscreen"):
             # Stock loading screens have no mipmaps. With them (1024x1024 DXT1, 704 KB) the
             # console stopped loading mp_waw_castle with "MT_GetSize: max allocation exceeded
@@ -1843,7 +1912,7 @@ def game_iwd_files(folder):
 
 
 def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None,
-         game_iwds=()):
+         game_iwds=(), texture_budget=0):
     """loaded: {path: tree} of stock files already read (load_stock), to reuse.
     game_iwds: the PC game's .iwd files, for pictures the map's own .iwd doesn't have."""
     ff, zone, root = load_tree(pc_path)
@@ -1862,7 +1931,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         iwd_path = [iwd_path]
     iwd = [zipfile.ZipFile(p) for p in iwd_path]
     log("converting %s" % os.path.basename(pc_path))
-    porter = Porter(root, refs, iwd, log, [zipfile.ZipFile(p) for p in game_iwds])
+    porter = Porter(root, refs, iwd, log, [zipfile.ZipFile(p) for p in game_iwds], texture_budget)
     porter.convert()
     if porter.map_name:
         porter.add_teams(refs, map_teams(pc_path, teams))
@@ -1876,7 +1945,8 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     return out, porter
 
 
-def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=()):
+def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
+             texture_budget=TEXTURE_BUDGET_MB):
     """Convert a PC map (its .ff, and _load.ff / .iwd / .arena next to it when there) into
     out_dir, picking what it needs from the stock 360 files given: code_post_gfx_mp.ff, a
     stock map (render settings, shaders) and the stock maps that carry the map's teams.
@@ -1932,7 +2002,8 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=())
                     "works, with a plain loading screen): %s [file starts %s]"
                     % (name, e, head.hex(" ")))
     out = os.path.join(out_dir, name + ".ff")
-    port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded, game_iwds=game_iwds)
+    port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded, game_iwds=game_iwds,
+         texture_budget=texture_budget)
     written.append(out)
     return written
 
@@ -2023,10 +2094,13 @@ def main(argv):
     ap.add_argument("--iwd", nargs="*", default=[], help="the map's .iwd file(s)")
     ap.add_argument("--game", help="folder with the PC game's .iwd files (its main folder)")
     ap.add_argument("--ref360", nargs="*", default=[])
+    ap.add_argument("--texture-budget", type=int, default=TEXTURE_BUDGET_MB, metavar="MB",
+                    help="picture memory to stay within, in MB (0: no limit; default %(default)s)")
     ap.add_argument("--teams", nargs=2, metavar=("ALLIES", "AXIS"),
                     help="teams to use (default: from the map's .arena next to the .ff)")
     a = ap.parse_args(argv)
-    port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams, game_iwds=game_iwd_files(a.game))
+    port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams, game_iwds=game_iwd_files(a.game),
+         texture_budget=a.texture_budget)
 
 
 if __name__ == "__main__":
