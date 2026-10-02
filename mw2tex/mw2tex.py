@@ -108,7 +108,8 @@ NEW_PAK = 7  # paks 5 and 6 belong to the DLC map packs
 
 
 class FastFile:
-    def __init__(self, path):
+    def __init__(self, path, scan=True):
+        """scan=False: the texture records are found when first asked for (ff.images), not now."""
         self.path = path
         self.raw = open(path, "rb").read()
         magic = self.raw[:8]
@@ -130,11 +131,20 @@ class FastFile:
         self.stream = body
         self.zone = bytearray(zlib.decompressobj().decompress(body))
         self.zone_changed = False
-        self._scan()
+        self._images = None
+        if scan:
+            self._scan()
+
+    @property
+    def images(self):
+        """Every texture record in the zone (found the first time they're asked for)."""
+        if self._images is None:
+            self._scan()
+        return self._images
 
     def _scan(self):
         z = self.zone
-        self.images = []
+        self._images = []
         streamed = 0
         # Every texture record has the same 16 bytes at 0x3C, except byte 0x47 (1 or 2).
         for m in re.finditer(rb"\x00{5}\x01\x00\x01\x00\x01\x01[\x01\x02]\x00{4}", z):
@@ -180,7 +190,7 @@ class FastFile:
             image["name"] = name
             image["levels"].append({"level": 0, "width": w, "height": h, "mips": z[o + 0x46], "data": data,
                                     "size": struct.unpack(">I", z[o + 0x3C:o + 0x40])[0]})
-        self.images.append(image)
+        self._images.append(image)
 
     def _material_name(self, o):
         """Name of the material that owns the texture, for textures whose own name isn't stored inline.

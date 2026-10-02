@@ -96,7 +96,7 @@ def read_fastfile(path):
         ff.platform = "pc"
         return ff, bytes(ff.zone)
     import mw2tex
-    ff = mw2tex.FastFile(path)
+    ff = mw2tex.FastFile(path, scan=False)
     ff.platform = "xbox"
     return ff, bytes(ff.zone)
 

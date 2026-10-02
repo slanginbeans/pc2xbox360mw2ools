@@ -62,6 +62,11 @@ Your work folder needs these stock 360 files from the console (copy them over FT
 
 Tick several maps to convert them one after another in one go.
 
+The first conversion reads every stock file it uses, which takes a while, and keeps what it read
+in `mw2port_cache` next to them, so later conversions start much sooner. That folder takes about
+as much room as the stock files unpacked (a few hundred MB). Deleting it is safe: it's made again.
+A stock file that changes, or a tools update that reads files differently, is read again by itself.
+
 **Titles and emblems.** In a match the game draws them from the map's own copy, so converted maps carry
 the stock ones. With **Take titles and emblems from imagefile8.pak** ticked, a converted map points them
 at fixed places in `imagefile8.pak` (written next to it, filled from `ui_mp.ff`: mw2tex's built one in
