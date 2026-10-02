@@ -76,6 +76,10 @@ FIXES = [
     ("stock_material_state", "Render state from same-named stock materials",
      "A material a stock 360 file also has (same name, same shader set) takes that material's "
      "culling and draw order, instead of another material's with the same shader set."),
+    ("tree_model_bounds", "Tree boxes enclose their models",
+     "Each culling tree node's box grows to enclose every static model it lists, as in stock 360 "
+     "maps (mp_rust: all of them). CoD4 ports (mp_backlot: 471 of 3,619 models, up to 537 units "
+     "out) list models that stick out of their node, which the 360 then skips as you turn."),
     ("hide_tool_surfaces", "Hide tool surfaces",
      "Radiant tool shaders (clip, caulk, ...) get a see-through stand-in so they draw nothing."),
     ("portal_multiply", "HDR portals as multiply",
@@ -1205,6 +1209,8 @@ class Porter:
     def post_GfxWorld(self, d, tx):
         if self.fixes["surface_bounds"]:
             self.fill_surface_bounds(d)
+        if self.fixes["tree_model_bounds"]:
+            self.grow_tree_bounds(d)
         ch = d["@"]
         for key, c in list(ch.items()):
             t = deref(c) if isinstance(c, Ref) else None
@@ -1214,6 +1220,62 @@ class Porter:
                 self.moved_images = [m for m in self.moved_images if m is not t]
         if self.moved_images:
             raise PortError("a picture from the lightmap override is still needed elsewhere")
+
+    def grow_tree_bounds(self, world):
+        """Grow every culling tree node's box (GfxAabbTree.bounds) to enclose the static models
+        it lists. Stock 360 maps always have them inside (mp_rust: 28,821 of 28,821 listings);
+        maps ported from CoD4 don't (mp_backlot: 471 models, up to 537 units out), and the 360
+        skips a node's models when its box is off screen: they vanish as you turn. A bigger box
+        only means drawing more, never less."""
+        def tgt(c):
+            return c.target if isinstance(c, Ref) else c
+        dpvs = world.get("dpvs") or {}
+        insts = tgt(dpvs.get("@", {}).get(("smodelInsts", ())))
+        trees = tgt(world.get("@", {}).get(("aabbTrees", ())))
+        if not isinstance(insts, Leaf) or not isinstance(trees, list):
+            return
+        E = insts.E
+        boxes = [struct.unpack_from(E + "6f", insts.raw, 36 * i) for i in range(len(insts.raw) // 36)]
+
+        def get(u):
+            h = bytes.fromhex(u["union"])
+            return list(struct.unpack(">%df" % (len(h) // 4), h))
+
+        grown = 0
+        far = 0.0
+        for ct in trees:
+            nodes = tgt(ct.get("@", {}).get(("aabbTree", ()))) if isinstance(ct, dict) else None
+            for nd in nodes or []:
+                cnt = nd.get("smodelIndexCount") or 0
+                c = nd.get("@", {}).get(("smodelIndexes", ()))
+                off = 0
+                if isinstance(c, Ref):
+                    off, c = c.rel, c.target
+                if not cnt or not isinstance(c, Leaf):
+                    continue
+                mid, half = get(nd["bounds"]["midPoint"]), get(nd["bounds"]["halfSize"])
+                lo = [mid[k] - half[k] for k in range(3)]
+                hi = [mid[k] + half[k] for k in range(3)]
+                out = False
+                for i in struct.unpack_from(c.E + "%dH" % cnt, c.raw, off):
+                    if i >= len(boxes):
+                        continue
+                    b = boxes[i]
+                    for k in range(3):
+                        if b[k] - b[3 + k] < lo[k] or b[k] + b[3 + k] > hi[k]:
+                            far = max(far, lo[k] - (b[k] - b[3 + k]), (b[k] + b[3 + k]) - hi[k])
+                            lo[k] = min(lo[k], b[k] - b[3 + k])
+                            hi[k] = max(hi[k], b[k] + b[3 + k])
+                            out = True
+                if out:
+                    grown += 1
+                    nd["bounds"]["midPoint"]["union"] = struct.pack(
+                        ">3f", *[(lo[k] + hi[k]) / 2 for k in range(3)]).hex()
+                    nd["bounds"]["halfSize"]["union"] = struct.pack(
+                        ">3f", *[(hi[k] - lo[k]) / 2 for k in range(3)]).hex()
+        if grown:
+            self.log("  culling tree: %d node boxes grown to enclose their static models (up to %.0f "
+                     "units)" % (grown, far))
 
     def fill_surface_bounds(self, world):
         """GfxSurfaceBounds has two more words on the 360 (the PC has none of it): the first

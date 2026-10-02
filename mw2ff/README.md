@@ -100,6 +100,7 @@ with `--fix-off NAME` (repeatable). All are on by default:
 | `surface_bounds` | Fills in the 360-only culling radius / texture density of every world surface |
 | `model_lods` | Model detail levels' partBits and surfs written as stock files have them (0 and empty) |
 | `stock_material_state` | A material a stock file also has takes that material's culling and draw order |
+| `tree_model_bounds` | Culling tree boxes grow to enclose the static models they list (CoD4 ports list models sticking out of their box, which vanish as you turn) |
 | `hide_tool_surfaces` | Radiant tool shaders (clip, caulk, ...) draw nothing |
 | `portal_multiply` | HDR portal sheets drawn with a multiply shader (off: hidden like tool surfaces) |
 
