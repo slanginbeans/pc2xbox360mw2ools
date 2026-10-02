@@ -1317,6 +1317,16 @@ class Porter:
         d["himipRadii"] = "follow" if n else None
         if n:
             d["@"][("himipRadii", ())] = Leaf(m.type, n, struct.pack(">%dH" % n, *[HIMIP_RADIUS] * n), ">")
+        # Each detail level's partBits and surfs: stock 360 models always hold 0 and null here
+        # (the game fills them in when it loads the model); the PC file has them set.
+        for li in d.get("lodInfo") or []:
+            if not isinstance(li, dict):
+                continue
+            li["partBits"] = [0] * len(li.get("partBits") or [0] * 6)
+            c = li.get("@", {}).get(("surfs", ()))
+            if c is None or isinstance(c, Ref):
+                li.get("@", {}).pop(("surfs", ()), None)
+                li["surfs"] = None
 
     def _replace(self, d, new):
         slot = d.get("_slot")
@@ -1594,6 +1604,13 @@ class Porter:
         if tsname and tsname.startswith(b","):     # already converted to a reference
             tsname = tsname[1:]
         tpl = self.material_templates.get(tsname)
+        # A stock material of the same name and shader set: its own render state (culling,
+        # draw order), not that of another material that happens to share the shader set.
+        same = self.library.get(("Material", name)) or self.common_materials.get(("Material", name))
+        if isinstance(same, dict) and tsname:
+            sts = deref(same.get("@", {}).get(("techniqueSet", ())))
+            if isinstance(sts, dict) and (asset_name(sts) or b"").lstrip(b",") == tsname:
+                tpl = same
         if tpl is None and tsname:
             # No stock file given has this shader set: use the closest one that is there.
             near = self.nearest_techset(tsname)
