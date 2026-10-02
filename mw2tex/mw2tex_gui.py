@@ -750,9 +750,6 @@ def build():
     files) and every map, and packs the tables when they changed."""
     with mw2zone_gui.lock:
         table_edits = bool(mw2zone_gui.state["edits"])
-    if not state["pending"] and not state["queue"] and not table_edits and not read_map_changes() \
-            and not _built_files() and not music_pending() and settings()["menu_music"]:
-        raise ValueError("nothing to build yet: drop a picture on a texture or change a table first")
     log = []
     for name, item in sorted(dict(state["pending"], **{i["name"]: i for i in state["queue"].values()}).items()):
         if item.get("redirect"):
@@ -770,7 +767,8 @@ def build():
         log += tables["log"]
         written += tables["written"]
     if not written:
-        log.append("Nothing to write: no pictures are queued.")
+        log.append("Nothing to write: no pictures or tables changed%s." % (
+            ", and menu music is on as in the stock game" if settings()["menu_music"] else ""))
     return {"log": log, "written": written, "folder": OUT_DIR}
 
 
@@ -1147,7 +1145,7 @@ dialog label.opt:has(input:checked){border-color:var(--accent)}dialog select{wid
   <div class="chips" id="chips"></div>
   <button id="clearBtn">Clear changes</button>
   <label title="Off: Build writes ui_mp.ff and patch_mp.ff with the main menu's music silenced. Saved for every Build."><input type="checkbox" id="menuMusic" checked> Menu music</label>
-  <button id="buildBtn" class="primary" disabled>Build</button>
+  <button id="buildBtn" class="primary">Build</button>
 </header>
 <div class="info" id="info">Loading…</div>
 <main id="grid"></main>
@@ -1177,7 +1175,7 @@ function render(){chips();const g=$("#grid");g.innerHTML="";const list=visible()
  const key=$("#search").value+"|"+[...cats].join(",")+"|"+onlyUnused+onlyChanged+"|"+textures.length+"|"+$("#file").value;
  if(key!==lastKey){lastKey=key;limit=FIRST}  // a new search, filter or file starts again at the first 50
  shown=Math.min(list.length,limit);
- const n=Object.keys(pending).length+tables.changed.length;$("#buildBtn").disabled=!n&&!musicPending;$("#buildBtn").textContent="Build"+(n?" ("+n+")":"");
+ const n=Object.keys(pending).length+tables.changed.length;$("#buildBtn").disabled=false;$("#buildBtn").textContent="Build"+(n?" ("+n+")":"");
  if(!textures.length){g.innerHTML='<div class="empty">Pick a fastfile above and press Open.</div>';return}
  if(!list.length){g.innerHTML='<div class="empty">No textures match.</div>';return}
  for(const t of list.slice(0,limit))g.appendChild(card(t));
@@ -1289,7 +1287,7 @@ $("#openBtn").onclick=async()=>{$("#openBtn").disabled=true;$("#openBtn").textCo
   +(Object.keys(pending).length?"\n"+Object.keys(pending).length+" queued picture"+(Object.keys(pending).length>1?"s":"")+" in this view (press Changed to see them).":"")+(j.elsewhere&&j.elsewhere.length?"\n"+j.elsewhere.length+" more queued in other files ("+j.elsewhere.slice(0,4).join(", ")+(j.elsewhere.length>4?"…":"")+"). Build writes them too; Clear changes drops them.":"")+(card&&!tables.file&&!allMaps?"\nPut code_post_gfx_mp.ff in this folder to see which titles and emblems use each picture.":""),"ok")}catch(e){toast(e.message,"bad")}$("#openBtn").disabled=false;$("#openBtn").textContent="Open"};
 $("#search").oninput=()=>render();
 $("#clearBtn").onclick=async()=>{if(!confirm("Clear all queued replacements, in every file?"))return;const j=await api("/api/remove",{method:"POST",body:JSON.stringify({all:true})});pending=j.pending;textures=j.textures;tables=j.tables;render()};
-$("#buildBtn").onclick=async()=>{const b=$("#buildBtn");b.disabled=true;b.textContent="Building…";try{const j=await api("/api/build",{method:"POST",body:"{}"});musicPending=false;toast("Built:\n"+j.log.join("\n")+"\n\nWrote "+j.written.join(", ")+".\nCopy "+(j.written.length>1?"them":"it")+" to _codxe\\zone\\ on your console.","ok")}catch(e){toast(e.message,"bad")}try{tables=(await api("/api/textures")).tables}catch(e){}render()};
+$("#buildBtn").onclick=async()=>{const b=$("#buildBtn");b.disabled=true;b.textContent="Building…";try{const j=await api("/api/build",{method:"POST",body:"{}"});musicPending=false;toast(j.written.length?"Built:\n"+j.log.join("\n")+"\n\nWrote "+j.written.join(", ")+".\nCopy "+(j.written.length>1?"them":"it")+" to _codxe\\zone\\ on your console.":j.log.join("\n"),"ok")}catch(e){toast(e.message,"bad")}try{tables=(await api("/api/textures")).tables}catch(e){}render()};
 let depth=0;window.addEventListener("dragenter",e=>{if(e.dataTransfer.types.includes("Files")&&textures.length){depth++;$("#drop").style.display="flex"}});
 window.addEventListener("dragleave",()=>{if(--depth<=0){depth=0;$("#drop").style.display="none"}});
 window.addEventListener("dragover",e=>e.preventDefault());
