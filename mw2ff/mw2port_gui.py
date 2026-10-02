@@ -336,9 +336,12 @@ def convert(req):
     else:
         _log("Converting %d maps one after another (a few minutes each); keep this page open." % len(items))
     s = settings()
-    off = [label for k, label, _ in port_mod.FIXES if not s["fixes"][k]]
+    off = [label for k, label, _ in port_mod.FIXES if not s["fixes"][k] and port_mod.DEFAULT_FIXES[k]]
+    on = [label for k, label, _ in port_mod.FIXES if s["fixes"][k] and not port_mod.DEFAULT_FIXES[k]]
     if off:
         _log("Fixes switched off: %s." % ", ".join(off))
+    if on:
+        _log("Switched on (off by default): %s." % ", ".join(on))
     if s["variants"]:
         _log("Also building a test variant per fix that is on (with just that fix off), in "
              "mw2port_out\\<map>\\variants. That takes a few minutes per variant.")
