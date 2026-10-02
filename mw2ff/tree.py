@@ -157,14 +157,17 @@ def _set_nav(d, name, idx, value):
 # ================================================================ reading
 
 class TreeReader(zone_mod.Reader):
-    def __init__(self, zone, sch=None):
+    def __init__(self, zone, sch=None, lenient=False):
         super().__init__(zone, sch)
+        self.lenient = lenient    # keep going past what can be read but not written back
         self.codec = codec_mod.Codec(self.s)
         self.reg = {}        # id(inst) -> (inst, dict)
         self.locs = []       # (block, offset, size, object, element type or size)
         self.refs = []
         self._cap = NONE
         self._slot = None
+        self._asset_insert = False
+        self._member_slots = []     # slots reserved by struct members (not assets), innermost last
 
     # ---------------------------------------------------------------- values
 
@@ -198,7 +201,12 @@ class TreeReader(zone_mod.Reader):
             return
         if at_start:
             if isinstance(inst.buf, zone_mod.ZBA) and not len(inst.buf):
-                raise ZoneError("%s: unions streamed member by member aren't supported yet" % inst.info.name)
+                if not self.lenient:
+                    raise ZoneError("%s: unions streamed member by member aren't supported yet" % inst.info.name)
+                # Only for files that are looked things up in, never written (an animation's
+                # translation data): the walk stays in step, the union itself isn't kept.
+                self.reg[id(inst)] = (inst, {})
+                return
             raw = bytes(inst.buf[inst.off:])
             d = self._decode(inst.info.ctype, raw)
             self.locs.append((inst.where[0], inst.where[1], len(raw), d, inst.info.ctype))
@@ -234,8 +242,18 @@ class TreeReader(zone_mod.Reader):
 
     def load_block(self, inst, mi, mod_pos, combined, kind, loc):
         self._cap = NONE
+        depth = len(self._member_slots)
         super().load_block(inst, mi, mod_pos, combined, kind, loc)
         cap, self._cap = self._cap, NONE
+        if len(self._member_slots) > depth:
+            # This member reserved a pointer slot (XModelLodInfo.modelSurfs): later pointers
+            # to what it holds point at the slot, so the slot must be something they can find.
+            slot = self._member_slots.pop()
+            if cap is not NONE:
+                mark = InsertSlot(cap)
+                if isinstance(cap, dict):
+                    cap["_slot"] = mark
+                self.locs.append((VIRTUAL, slot, 4, mark, 4))
         if cap is NONE:
             return
         if isinstance(cap, Leaf):
@@ -324,6 +342,8 @@ class TreeReader(zone_mod.Reader):
         self._slot = self.block_pos[VIRTUAL]
         self.pop()
         super().insert_pointer()
+        if not self._asset_insert:
+            self._member_slots.append(self._slot)
 
     def load_asset_ptr(self, info, buf, loc):
         val = struct.unpack_from(self.E + "I", buf, loc)[0]
@@ -337,7 +357,9 @@ class TreeReader(zone_mod.Reader):
                 self.alloc(self.align_of(info))
                 slot = None
                 if in_temp and val == INSERT:
+                    self._asset_insert = True
                     self.insert_pointer()
+                    self._asset_insert = False
                     slot = self._slot
                 start = self.pos
                 inst = self.load_struct(info, None, True)
@@ -426,8 +448,8 @@ class TreeReader(zone_mod.Reader):
                 i -= 1
 
 
-def read_tree(zone, sch):
-    r = TreeReader(zone, sch)
+def read_tree(zone, sch, lenient=False):
+    r = TreeReader(zone, sch, lenient)
     r.walk()
     if r.pos != len(zone):
         raise ZoneError("walk stopped at %d of %d bytes" % (r.pos, len(zone)))
@@ -778,6 +800,11 @@ class TreeWriter(zone_mod.Reader):
         self._slot = self.block_pos[VIRTUAL]
         self.pop()
         super().insert_pointer()
+        # A struct member's slot (XModelLodInfo.modelSurfs); an asset's is registered in
+        # load_asset_ptr.
+        o = self._obj
+        if isinstance(o, dict) and "_slot" in o and id(o["_slot"]) not in self.loc:
+            self.loc[id(o["_slot"])] = (VIRTUAL, self._slot)
 
     def load_asset_ptr(self, info, buf, loc):
         d, self._obj = self._obj, NONE

@@ -40,7 +40,7 @@ one of the two, so the editor warns you about it.
 
 Your work folder needs these stock 360 files from the console (copy them over FTP):
 
-- `code_post_gfx_mp.ff`
+- `code_post_gfx_mp.ff` and `common_mp.ff`
 - at least one stock map with its loading screen file, for example `mp_favela.ff` and
   `mp_favela_load.ff` (the converter takes 360 shaders and settings from it)
 - the stock maps that carry the teams your PC map uses. Each 360 map carries only its own

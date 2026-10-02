@@ -10,7 +10,7 @@ Pictures a map borrows from the PC game itself come from the iw_*.iwd files copi
 mw2port_pc_game (optional; without them those pictures are plain gray).
 
 The converter needs these stock 360 files from the console in the work folder:
-code_post_gfx_mp.ff, at least one stock map (mp_favela.ff works best) with its _load.ff, and
+code_post_gfx_mp.ff, common_mp.ff, at least one stock map (mp_favela.ff works best) with its _load.ff, and
 the stock maps that carry the teams the map uses. Nothing is sent anywhere: the page talks
 only to this program on your own PC.
 """
@@ -51,7 +51,7 @@ def stock_files():
     out = []
     for p in sorted(glob.glob(os.path.join(FOLDER, "*.ff"))):
         n = os.path.basename(p).lower()
-        if n == "code_post_gfx_mp.ff" or n.startswith("mp_"):
+        if n in ("code_post_gfx_mp.ff", "common_mp.ff") or n.startswith("mp_"):
             try:
                 if mw2ff.platform_of(p) == "xbox":
                     out.append(p)
