@@ -893,6 +893,12 @@ class Porter:
 
     def convert(self):
         ents = self.root["assets"]
+        # IW4x ZoneBuilder signs a file with a rawfile named after the zone: its text stored as
+        # is, but marked compressed (compressedLen 42, len 0). The 360 would take it for a
+        # zlib stream. Stock files have the same rawfile empty (0, 0, one zero byte).
+        for e in ents:
+            if e[0] == "rawfile" and isinstance(e[1], dict) and _is_builder_signature(e[1]):
+                _set_rawfile_text(e[1], b"")
         gfx = next((e[1] for e in ents if e[0] == "gfx_map" and isinstance(e[1], dict)), {})
         self.map_name = re.sub(rb"^maps/mp/|\.d3dbsp$", b"", _name(gfx) or b"")
         self.world_checksum = next((e[1].get("checksum", 0) for e in ents
@@ -1730,6 +1736,15 @@ def _rawfile_text(d):
     if d.get("compressedLen"):
         raw = zlib.decompress(raw[:d["compressedLen"]])
     return raw[:d["len"]]
+
+
+def _is_builder_signature(d):
+    """The rawfile IW4x ZoneBuilder signs a file with."""
+    ch = d.get("data", {}).get("@", {})
+    lf = ch.get(("buffer", ()), ch.get(("compressedBuffer", ())))
+    if isinstance(lf, Ref):
+        lf = lf.target
+    return isinstance(lf, Leaf) and lf.raw.startswith(b"FastFile built using the IW4x ZoneBuilder")
 
 
 def _set_rawfile_text(d, data):
