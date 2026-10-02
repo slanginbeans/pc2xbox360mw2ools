@@ -165,6 +165,8 @@ class TreeReader(zone_mod.Reader):
         self.refs = []
         self._cap = NONE
         self._slot = None
+        self._asset_insert = False
+        self._member_slots = []     # slots reserved by struct members (not assets), innermost last
 
     # ---------------------------------------------------------------- values
 
@@ -234,8 +236,18 @@ class TreeReader(zone_mod.Reader):
 
     def load_block(self, inst, mi, mod_pos, combined, kind, loc):
         self._cap = NONE
+        depth = len(self._member_slots)
         super().load_block(inst, mi, mod_pos, combined, kind, loc)
         cap, self._cap = self._cap, NONE
+        if len(self._member_slots) > depth:
+            # This member reserved a pointer slot (XModelLodInfo.modelSurfs): later pointers
+            # to what it holds point at the slot, so the slot must be something they can find.
+            slot = self._member_slots.pop()
+            if cap is not NONE:
+                mark = InsertSlot(cap)
+                if isinstance(cap, dict):
+                    cap["_slot"] = mark
+                self.locs.append((VIRTUAL, slot, 4, mark, 4))
         if cap is NONE:
             return
         if isinstance(cap, Leaf):
@@ -324,6 +336,8 @@ class TreeReader(zone_mod.Reader):
         self._slot = self.block_pos[VIRTUAL]
         self.pop()
         super().insert_pointer()
+        if not self._asset_insert:
+            self._member_slots.append(self._slot)
 
     def load_asset_ptr(self, info, buf, loc):
         val = struct.unpack_from(self.E + "I", buf, loc)[0]
@@ -337,7 +351,9 @@ class TreeReader(zone_mod.Reader):
                 self.alloc(self.align_of(info))
                 slot = None
                 if in_temp and val == INSERT:
+                    self._asset_insert = True
                     self.insert_pointer()
+                    self._asset_insert = False
                     slot = self._slot
                 start = self.pos
                 inst = self.load_struct(info, None, True)
@@ -778,6 +794,11 @@ class TreeWriter(zone_mod.Reader):
         self._slot = self.block_pos[VIRTUAL]
         self.pop()
         super().insert_pointer()
+        # A struct member's slot (XModelLodInfo.modelSurfs); an asset's is registered in
+        # load_asset_ptr.
+        o = self._obj
+        if isinstance(o, dict) and "_slot" in o and id(o["_slot"]) not in self.loc:
+            self.loc[id(o["_slot"])] = (VIRTUAL, self._slot)
 
     def load_asset_ptr(self, info, buf, loc):
         d, self._obj = self._obj, NONE
