@@ -2560,9 +2560,33 @@ def main(argv):
     ap.add_argument("--fix-off", action="append", default=[], metavar="FIX",
                     choices=[k for k, _, _ in FIXES],
                     help="switch a fix off (repeatable): " + ", ".join(k for k, _, _ in FIXES))
+    ap.add_argument("--profile", nargs="?", const=30, type=int, metavar="N",
+                    help="time the conversion: print the N functions taking the most time "
+                         "(default 30) and save the full profile next to the output as .prof")
     a = ap.parse_args(argv)
-    port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams, game_iwds=game_iwd_files(a.game),
-         texture_budget=a.texture_budget, card_pak=a.card_pak, fixes=fix_set(off=a.fix_off))
+
+    def run():
+        port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams, game_iwds=game_iwd_files(a.game),
+             texture_budget=a.texture_budget, card_pak=a.card_pak, fixes=fix_set(off=a.fix_off))
+
+    if a.profile is None:
+        run()
+        return
+    import cProfile
+    import pstats
+    prof = cProfile.Profile()
+    try:
+        prof.runcall(run)
+    finally:
+        out = os.path.splitext(a.out_ff)[0] + ".prof"
+        prof.dump_stats(out)
+        st = pstats.Stats(prof)
+        st.strip_dirs()
+        print("\n===== most time including what they call =====")
+        st.sort_stats("cumulative").print_stats(a.profile)
+        print("===== most time in the function itself =====")
+        st.sort_stats("tottime").print_stats(a.profile)
+        print("full profile: %s (open with python -m pstats)" % out)
 
 
 if __name__ == "__main__":

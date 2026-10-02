@@ -75,6 +75,10 @@ stock `ui_mp.ff`). Not tried on a console yet.
 
 From a command prompt: `python port.py <pc map.ff> <out.ff> --iwd <map.iwd> --ref360
 code_post_gfx_mp.ff mp_favela.ff [more stock maps] [--teams ALLIES AXIS]`.
+Add `--profile` to see where the time goes: when it's done it prints the 30 functions that
+took the longest (`--profile 50` for more) and saves the full timings as `<out>.prof` next to
+the output (`python -m pstats <out>.prof` to look through them). The conversion runs slower
+while it's being timed; the file it writes is the same.
 
 What it converts so far: the map itself (geometry, collision, lighting, pictures, reflection
 probes, map entities, scripts) and the two teams. Custom models, sounds and effects the PC map
