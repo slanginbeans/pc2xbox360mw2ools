@@ -9,6 +9,10 @@ One page opens with a tab per tool:
 All of them use the folder this runs in: your .ff files go there, and so do their output
 folders (mw2tex_out, mw2ff_out, mw2port_out). Nothing is sent anywhere: the pages talk only to
 this program on your own PC.
+
+With --tray (how mw2tools.bat starts it, with pythonw: no window) it shows an icon by the
+clock instead (left click: open the page; right click: Open, Show log, Quit) and writes what it
+would have printed to mw2tools.log.
 """
 import json
 import os
@@ -20,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 TOOLS = os.path.dirname(HERE)
 PORT = 8350
+LOG = "mw2tools.log"
 
 # (tab title, module, folder, what it's for)
 APPS = [
@@ -91,9 +96,35 @@ let t=0;try{t=+localStorage.getItem("mw2tools_tab")||0}catch(e){}show(Math.min(t
 """
 
 
+def busy():
+    """What would be cut short by stopping now (a map conversion), or None."""
+    port = sys.modules.get("mw2port_gui")
+    if port is not None and port.job.get("running"):
+        return "a map conversion (%s) is still running" % port.job.get("map")
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
+    server_ref = None       # the page's server, for /quit
+
     def log_message(self, *args):
         pass
+
+    def do_POST(self):
+        # Another mw2tools starting (after an update) asks this one to make way for it.
+        if self.path != "/quit":
+            self.send_response(404)
+            self.end_headers()
+            return
+        why = busy()
+        body = json.dumps({"busy": why}).encode()
+        self.send_response(409 if why else 200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        if not why:
+            threading.Thread(target=Handler.server_ref.shutdown, daemon=True).start()
 
     def do_GET(self):
         if self.path.split("?")[0] not in ("/", "/index.html"):
@@ -111,7 +142,65 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def _running_copy():
+    """The address of an mw2tools already running on this PC, or None."""
+    import urllib.request
+    for port in range(PORT, PORT + 20):
+        url = "http://127.0.0.1:%d/" % port
+        try:
+            with urllib.request.urlopen(url, timeout=1) as r:
+                if b"<title>mw2tools</title>" in r.read(4096):
+                    return url
+        except Exception:  # noqa: BLE001 - nothing there (or something else)
+            continue
+    return None
+
+
+def _make_way(url, say):
+    """An mw2tools is already running: ask it to stop, so this (perhaps just updated) copy takes
+    over. Returns False when it can't stop now (a conversion is running) or won't (an older
+    copy without /quit) and this one should step aside."""
+    import time
+    import urllib.error
+    import urllib.request
+    try:
+        urllib.request.urlopen(urllib.request.Request(url + "quit", data=b"", method="POST"), timeout=5).read()
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            say("mw2tools is already running and %s, so it keeps going. Opening it; start "
+                "mw2tools again when it's done to use any update." % json.loads(e.read())["busy"])
+        return False
+    except Exception:  # noqa: BLE001 - it went away by itself
+        return True
+    for _ in range(50):
+        if _running_copy() != url:
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def main():
+    tray = "--tray" in sys.argv and os.name == "nt"
+    if tray:
+        # pythonw: no console, so problems go in a box (and, once it's open, the log).
+        import tray as tray_mod
+
+        def say(text):
+            print(text)
+            tray_mod.message_box(text)
+    else:
+        def say(text):
+            print(text)
+
+    other = _running_copy()
+    if other and not _make_way(other, say):
+        if "--no-browser" not in sys.argv:
+            webbrowser.open(other)
+        return
+    if tray:
+        # Opened after any copy that was running has stopped: it wrote to the same file.
+        sys.stdout = sys.stderr = open(LOG, "w", buffering=1, encoding="utf-8", errors="replace")
+
     for app in APPS:
         info = start(*app)
         running.append(info)
@@ -125,10 +214,43 @@ def main():
             port += 1
     else:
         sys.exit("couldn't find a free port for mw2tools")
+    Handler.server_ref = server
     url = "http://127.0.0.1:%d/" % port
     print("mw2tools running at %s" % url)
     print("Your files: %s" % os.getcwd())
-    print("Leave this window open while you use it. Press Ctrl+C here to stop.")
+
+    icon = None
+    if tray:
+        def open_page():
+            webbrowser.open(url)
+
+        def show_log():
+            os.startfile(os.path.abspath(LOG))
+
+        def quit_tools():
+            why = busy()
+            if why and tray_mod.message_box(
+                    "%s. Quitting stops it. Quit anyway?" % (why[0].upper() + why[1:]), "mw2tools",
+                    tray_mod.MB_YESNO | tray_mod.MB_ICONWARNING) != tray_mod.IDYES:
+                return
+            server.shutdown()
+
+        icon = tray_mod.Tray("mw2tools", open_page, [("Open mw2tools", open_page), ("Show log", show_log),
+                                                      None, ("Quit mw2tools", quit_tools)])
+        try:
+            icon.start()
+        except Exception as e:  # noqa: BLE001 - without the icon it couldn't be found or stopped
+            say("mw2tools couldn't put its icon by the clock (%s: %s), so it stops: without the "
+                "icon you couldn't close it.\n\nTo use it in a window instead, put an empty file "
+                "named keep_window.txt in %s and start mw2tools.bat again. Send this message to "
+                "Claude." % (type(e).__name__, e, os.getcwd()))
+            server.server_close()
+            return
+        icon.notify("mw2tools is running", "It's in the icons by the clock (behind the ^ arrow). "
+                    "Click the icon to open it, right-click it to quit.")
+        print("Running with an icon by the clock: right-click it to quit.")
+    else:
+        print("Leave this window open while you use it. Press Ctrl+C here to stop.")
     if "--no-browser" not in sys.argv:
         webbrowser.open(url)
     try:
@@ -136,11 +258,27 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        server.server_close()
+        if icon is not None:
+            icon.stop()
         tex = sys.modules.get("mw2tex_gui")
         if tex is not None and hasattr(tex, "WORK_DIR"):
             import shutil
             shutil.rmtree(tex.WORK_DIR, ignore_errors=True)
+        print("mw2tools stopped.")
 
 
 if __name__ == "__main__":
-    main()
+    if "--tray" in sys.argv and os.name == "nt":
+        try:
+            main()
+        except BaseException as e:  # noqa: BLE001 - no console: say it in a box
+            if not isinstance(e, (SystemExit, KeyboardInterrupt)) or (isinstance(e, SystemExit) and e.code):
+                import traceback
+                traceback.print_exc()
+                import tray
+                tray.message_box("mw2tools stopped with an error:\n\n%s\n\nThe details are in %s. "
+                                 "Send them to Claude." % (e, os.path.abspath(LOG)),
+                                 "mw2tools", tray.MB_ICONERROR)
+    else:
+        main()
