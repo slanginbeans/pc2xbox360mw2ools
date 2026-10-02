@@ -50,8 +50,9 @@ RESIDENT = ("code_post_gfx_mp", "common_mp")
 # The pictures a ported map carries sit in the file's physical memory block (stock maps keep
 # most of theirs in the console's image files: 9 to 26 MB). The console ran out of memory with
 # 201 MB of them (mp_backlot) and loads 90 MB (mp_waw_castle). Pictures above this budget (MB
-# of physical memory) lose their top mip levels, the largest first. 0 keeps them all.
-TEXTURE_BUDGET_MB = 80
+# of physical memory) lose their top mip levels, the largest first. 0 keeps them all. At 80
+# mp_backlot froze on the loading screen; every test at 40 loaded.
+TEXTURE_BUDGET_MB = 40
 # The 360 tiles pictures and pads the small mip levels: the physical block comes to about this
 # much more than the plain sum of the levels (mp_backlot: 90 MB counted, 115 MB in the block).
 TILING_PAD = 1.28
@@ -618,9 +619,14 @@ class Porter:
         # files (common_mp, ...) whenever a map loads, so a ported map can name them too.
         self.named = set()
         self.common_materials = {}      # common_mp's materials: render state templates only
+        self.stock_fx = {}              # effect name -> a stock map's effect (stock_effects)
+        self.stock_fx_used = []
         for name, root in x_refs:
             idx = asset_index(root)
             base = os.path.splitext(os.path.basename(name))[0]
+            if base not in RESIDENT:
+                for k, v in effect_index(root).items():
+                    self.stock_fx.setdefault(k, v)
             for k, v in idx.items():
                 if k[1].startswith(b","):
                     self.named.add((k[0], k[1][1:]))
@@ -988,6 +994,7 @@ class Porter:
                         if isinstance(x, Ref) and id(x.target) in slots and x.rel == 4:
                             x.target, x.rel, x.t = slots[id(x.target)], 0, None
         ents[:] = [e for e in ents if e[0] not in ("pixelshader", "vertexshader", "vertexdecl", "xmodelsurfs")]
+        self.stock_effects(ents)
         # Materials and pictures a left-out asset brought in first are only pointed at from
         # then on: the writer puts each where the first remaining pointer to it is.
         reached = set(id(o) for o in iter_objects(ents))
@@ -1056,9 +1063,59 @@ class Porter:
                 continue
             self.warn("shader set %s isn't in the stock files given, so %s is used"
                       % (a.decode(), b.decode()))
+        self.rename_clashes()
         ss = self.root.get("script_strings")
         self.root["platform"] = "xbox"
         return self.root
+
+    def stock_effects(self, ents):
+        """Effects a stock 360 file given has under the same name come from there (with their
+        materials) instead of being converted: converted ones can draw far stronger than on
+        the PC (mp_backlot's dust_wind_* filled the map with a yellow haze). Other assets and
+        the map's scripts name effects rather than point at them, so the stock one goes in under
+        the name and the converted one is renamed out of the way (it stays: the map's other
+        assets can point at materials it brings)."""
+        new, names = [], []
+        for e in ents:
+            if e[0] != "fx" or not isinstance(e[1], dict):
+                continue
+            name = _name(e[1])
+            src = self.stock_fx.get(name)
+            if src is None:
+                continue
+            e[1]["@"][("name", ())] = Str(b"~pc/" + name)
+            fx = self.copy_in(src)
+            self.done.add(id(fx))
+            new.append(tree.AssetEntry([e[0], fx]))
+            self.stock_fx_used.append(fx)
+            names.append(name.decode("latin-1"))
+        # First in the list: the shader sets they bring are the stock ones the map's own
+        # materials of those sets point at, and have to be written before them.
+        ents[:0] = new
+        if names:
+            self.log("  %d effect%s from the stock 360 files: %s" % (
+                len(names), "s" if len(names) > 1 else "", ", ".join(names)))
+
+    def rename_clashes(self):
+        """The map's own materials and pictures named as one a stock effect brings get a name
+        of their own: the game keeps one asset per name, and the stock effect has to get its
+        own (the converted ones drew the haze)."""
+        ours = set()
+        names = set()
+        for fx in self.stock_fx_used:
+            for o in iter_objects(fx):
+                ours.add(id(o))
+                # (",name": a reference to one the game has loaded, not an asset of its own)
+                if isinstance(o, dict) and o.get("_asset") in ("Material", "GfxImage") and \
+                        not (_name(o) or b",").startswith(b","):
+                    names.add((o["_asset"], _name(o)))
+        count = 0
+        for o in iter_objects(self.root["assets"]):
+            if isinstance(o, dict) and id(o) not in ours and o.get("_asset") in ("Material", "GfxImage") \
+                    and (o["_asset"], _name(o)) in names:
+                _set_name(o, b"~pc/" + _name(o))
+                count += 1
+        return count
 
     # ------------------------------------------------------------ hooks
 
@@ -1922,6 +1979,13 @@ def _name(d):
     return c.b if isinstance(c, Str) else None
 
 
+def _set_name(d, b):
+    ch = d.get("@", {})
+    if ("name", ()) not in ch and isinstance(d.get("info"), dict):
+        ch = d["info"]["@"]
+    ch[("name", ())] = Str(b)
+
+
 def _rawfile_text(d):
     import zlib
     ch = d["data"]["@"]
@@ -2038,15 +2102,65 @@ def game_iwd_files(folder):
     return sorted(found, key=lambda p: os.path.relpath(p, folder).lower())
 
 
+def effect_index(root):
+    """{name: effect} of a file's own effects (listed in its asset list)."""
+    out = {}
+    for e in root["assets"]:
+        if e[0] == "fx" and isinstance(e[1], dict):
+            n = _name(e[1])
+            if n and not n.startswith(b","):
+                out.setdefault(n, e[1])
+    return out
+
+
+def effect_donors(root, ref_roots, candidates, log=print, most=2):
+    """Stock 360 maps (of candidates) to read as well for the map's effects that the stock
+    files already read don't have: at most `most`, those carrying the most of them."""
+    have = set()
+    for r in ref_roots:
+        have.update(effect_index(r))
+    want = set(_name(e[1]) for e in root["assets"] if e[0] == "fx" and isinstance(e[1], dict)) - have
+    want.discard(None)
+    if not want or not candidates:
+        return []
+    hits = {}
+    for p in candidates:
+        try:
+            ff, zone = mw2ff.read_fastfile(p)
+        except Exception:
+            continue
+        hits[p] = set(n for n in want if b"\0" + n + b"\0" in zone)
+    out = []
+    while len(out) < most:
+        best = max(hits, key=lambda p: (len(hits[p] & want), p not in out), default=None)
+        if best is None or best in out or not hits[best] & want:
+            break
+        out.append(best)
+        want -= hits[best]
+    return out
+
+
 def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None,
-         game_iwds=(), texture_budget=0, card_pak=False):
+         game_iwds=(), texture_budget=0, card_pak=False, fx_paths=()):
     """loaded: {path: tree} of stock files already read (load_stock), to reuse.
-    game_iwds: the PC game's .iwd files, for pictures the map's own .iwd doesn't have."""
+    game_iwds: the PC game's .iwd files, for pictures the map's own .iwd doesn't have.
+    fx_paths: stock 360 maps to take the map's effects from (those carrying the most of them
+    are read too)."""
     ff, zone, root = load_tree(pc_path)
     if ff.platform != "pc":
         raise PortError("%s is not a PC fastfile" % pc_path)
     refs = []
     loaded = {} if loaded is None else loaded
+    ref_paths = list(ref_paths)
+    if fx_paths:
+        for p in ref_paths:
+            if p not in loaded:
+                log("reading stock 360 file %s" % os.path.basename(p))
+                loaded[p] = load_stock(p)
+        extra = effect_donors(root, [loaded[p] for p in ref_paths if os.path.splitext(
+            os.path.basename(p))[0].lower() not in RESIDENT],
+                              [p for p in fx_paths if p not in ref_paths], log)
+        ref_paths += extra
     for p in ref_paths:
         if p not in loaded:
             log("reading stock 360 file %s" % os.path.basename(p))
@@ -2132,7 +2246,7 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
                     % (name, e, head.hex(" ")))
     out = os.path.join(out_dir, name + ".ff")
     port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded, game_iwds=game_iwds,
-         texture_budget=texture_budget, card_pak=bool(card_ui))
+         texture_budget=texture_budget, card_pak=bool(card_ui), fx_paths=maps)
     written.append(out)
     if card_ui:
         # card_ui: a ui_mp.ff (mw2tex's built one, or the stock one) to fill the slots from.
