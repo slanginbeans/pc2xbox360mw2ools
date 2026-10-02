@@ -806,7 +806,7 @@ class Porter:
             else:
                 new[kx] = v
         new["@"] = self.conv_children(ch, tp, tx)
-        for k in ("_asset", "_slot", "_template", "_forward"):
+        for k in ("_asset", "_slot", "_template", "_forward", "_invisible"):
             if k in d:
                 new[k] = d[k]
         d.clear()
@@ -1043,7 +1043,7 @@ class Porter:
                                                ", ..." if len(self.magenta_materials) > 5 else ""))
         if self.invisible_materials:
             n = len(self.invisible_materials)
-            self.warn("%d material%s with a tool shader set draw%s nothing (%s%s)"
+            self.warn("%d material%s with a tool or distance-fade shader set draw%s nothing (%s%s)"
                       % (n, "s" if n > 1 else "", "" if n > 1 else "s",
                          ", ".join(self.invisible_materials[:5]),
                          ", ..." if n > 5 else ""))
@@ -1235,8 +1235,11 @@ class Porter:
 
     @staticmethod
     def is_tools_techset(name):
-        """wc_tools, mc_tools: Radiant's tool shaders, which draw nothing in game."""
-        return name.split(b"_")[1:2] == [b"tools"]
+        """wc_tools, mc_tools: Radiant's tool shaders, which draw nothing in game. Also the
+        distance-falloff ones (wc_unlit_distfalloff_replace: HDR portals in doorways and
+        windows), which fade out with distance and are next to invisible; the 360 files have
+        none, and the plain unlit set used instead drew them as a solid yellow haze."""
+        return name.split(b"_")[1:2] == [b"tools"] or b"_distfalloff" in name
 
     def invisible_techset(self, name):
         """A stock alpha tested shader set of the same kind (wc_/mc_) with a color picture and
