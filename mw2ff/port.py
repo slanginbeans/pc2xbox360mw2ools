@@ -1304,8 +1304,54 @@ class Porter:
     def in_iwd(self, name):
         return name.decode().lower() in self.map_pictures
 
+    def pre_water_t(self, d, tp, tx):
+        """The PC keeps a water surface's starting waves as one array of complex numbers (H0);
+        the 360 keeps the real and imaginary parts as two arrays (H0X, H0Y). The game reads
+        them every frame: left empty, the console turned off as backlot's water came into view."""
+        ch = d.setdefault("@", {})
+        h0 = ch.pop(("H0", ()), None)
+        if isinstance(h0, Ref):
+            h0 = h0.target
+        d.pop("H0", None)
+        d["H0X"] = d["H0Y"] = None
+        if isinstance(h0, Leaf):
+            n = h0.n
+            vals = struct.unpack("<%df" % (2 * n), h0.raw[:8 * n])
+            ft = self.pc.type_by_name("float")
+            for k, part in (("H0X", vals[0::2]), ("H0Y", vals[1::2])):
+                ch[(k, ())] = Leaf(ft, n, struct.pack("<%df" % n, *part), "<")
+                d[k] = "follow"
+        return None
+
+    def water_image(self, d, name):
+        """A copy of a stock water picture (the game draws the waves into it at run time; the
+        PC file has no pixels for it) under name, or None."""
+        best = None
+        for (typ, n), v in self.library.items():
+            if typ != "GfxImage" or v.get("category") != 5 or v.get("pixels") != "follow":
+                continue
+            if best is None or (v.get("width"), v.get("height")) == (d.get("width"), d.get("height")):
+                best = v
+        if best is None:
+            return None
+        new = self.copy_in(best)
+        new["@"] = dict(new["@"])
+        new["@"][("name", ())] = Str(name)
+        lf = new["@"].get(("pixels", ()))
+        if isinstance(lf, Leaf):
+            new["@"][("pixels", ())] = Leaf(lf.t, lf.n, lf.raw, lf.E)
+        return new
+
     def pre_GfxImage(self, d, tp, tx):
         name = asset_name(d)
+        if d.get("category") == 5 and not name.startswith(b","):
+            # Water (IMG_CATEGORY_WATER): a stand-in picture of another size would have the
+            # game write the waves past its end.
+            new = self.water_image(d, name)
+            if new is None:
+                raise PortError("water picture %s: no stock 360 water picture in the stock files "
+                                "given to copy (mp_favela has some)" % name.decode())
+            return self._replace(d, new)
         if name.startswith(b","):
             # The PC file only names it (the PC game has it loaded already). Name it on the 360
             # too when the 360 has it loaded; else it becomes a picture of the map's own.
