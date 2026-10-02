@@ -60,6 +60,16 @@ Your work folder needs these stock 360 files from the console (copy them over FT
 5. Copy both files to `_codxe\zone\` on the console, start a private match and type
    `map <map>` in the console.
 
+Tick several maps to convert them one after another in one go.
+
+**Titles and emblems.** In a match the game draws them from the map's own copy, so converted maps carry
+the stock ones. With **Take titles and emblems from imagefile8.pak** ticked, a converted map points them
+at fixed places in `imagefile8.pak` (written next to it, filled from `ui_mp.ff`: mw2tex's built one in
+`mw2tex_out` when it's there). After you change titles or emblems in mw2tex, its Build writes a new
+`imagefile8.pak`: copy that and `ui_mp.ff` to the console, and the maps show them without being converted
+or copied again. **Patch stock maps** does the same for every stock `mp_*.ff` in the work folder (only
+their picture table changes; the copies go in `mw2port_out\stock`). Not tried on a console yet.
+
 From a command prompt: `python port.py <pc map.ff> <out.ff> --iwd <map.iwd> --ref360
 code_post_gfx_mp.ff mp_favela.ff [more stock maps] [--teams ALLIES AXIS]`.
 

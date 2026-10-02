@@ -154,6 +154,10 @@ To undo, delete the file from `_codxe\zone\`.
 - **Emblems and titles in matches.** Menus use `ui_mp.ff`; in a match the game uses the copy inside each map
   file. So copy every map's `mp_*.ff` into your work folder once, and Build (or the `maps` command) updates them
   all. Maps you leave out keep the stock pictures. Animated titles and emblems are copied into the maps whole, with the map's own material set to play them (not yet tried on a console).
+  Maps switched to `imagefile8.pak` (converted ones, or stock ones patched on the mw2port page) are left
+  alone: Build writes `imagefile8.pak` from the built `ui_mp.ff` instead, with every title and emblem at a
+  fixed place, so only `ui_mp.ff` and `imagefile8.pak` need copying. From a command prompt:
+  `python mw2tex.py cardpak ui_mp.ff OUTDIR` and `python mw2tex.py cardpatch OUTDIR mp_*.ff`.
 - **Pak textures.** Camos on guns and map textures live in `imagefile*.pak`. Changed ones go in a new
   `imagefile7.pak`, which codxe loads from `_codxe\zone\`. Build adds to an existing `imagefile7.pak` in
   `mw2tex_out` rather than replacing it, so it can grow over time. Delete it and rebuild if it gets big.

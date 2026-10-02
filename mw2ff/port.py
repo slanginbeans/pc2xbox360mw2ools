@@ -1820,6 +1820,30 @@ class Porter:
         self.warn("no stock map given carries the calling card titles and emblems; they show as "
                   "missing in matches")
 
+    def cards_to_pak(self):
+        """Point the copied titles and emblems at their fixed slots in imagefile8.pak (mw2tex's
+        cardslots.json), so changing titles and emblems later only means writing that pak anew
+        (mw2tex Build does), never this map. Returns how many pictures use it."""
+        import mw2tex
+        by = {(s["name"], s["level"]): s for s in mw2tex.load_card_slots()}
+        count = 0
+        for o in iter_objects(self.root["assets"]):
+            if not (isinstance(o, dict) and o.get("_asset") == "GfxImage" and "_pak" in o):
+                continue
+            name = (asset_name(o) or b"").decode("latin-1").lower()
+            if not mw2tex.is_card(name):
+                continue
+            hit = False
+            o["_pak"] = list(o["_pak"])     # its own list: the stock tree's stays as it was
+            for k, st in enumerate(o.get("streams") or []):
+                s = by.get((name, k))
+                if s and st["width"] and (s["width"], s["height"]) == (st["width"], st["height"]):
+                    o["_pak"][k] = (mw2tex.CARD_PAK, s["start"], s["end"])
+                    hit = True
+            count += hit
+        self.log("  titles and emblems: %d come from imagefile%d.pak" % (count, mw2tex.CARD_PAK))
+        return count
+
     def _pick(self, src, names):
         """Pick src's asset list entries named (type, name), with every entry they point into."""
         ents = src["assets"]
@@ -2010,7 +2034,7 @@ def game_iwd_files(folder):
 
 
 def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None,
-         game_iwds=(), texture_budget=0):
+         game_iwds=(), texture_budget=0, card_pak=False):
     """loaded: {path: tree} of stock files already read (load_stock), to reuse.
     game_iwds: the PC game's .iwd files, for pictures the map's own .iwd doesn't have."""
     ff, zone, root = load_tree(pc_path)
@@ -2033,6 +2057,8 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     porter.convert()
     if porter.map_name:
         porter.add_teams(refs, map_teams(pc_path, teams))
+        if card_pak:
+            porter.cards_to_pak()
     xs = schema_mod.load("xbox")
     w = tree.TreeWriter(root, xs, keep_fixes=False)
     w.map_rel = lambda r: map_rel(r, porter.P, porter.X)
@@ -2044,7 +2070,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
 
 
 def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
-             texture_budget=TEXTURE_BUDGET_MB):
+             texture_budget=TEXTURE_BUDGET_MB, card_ui=None):
     """Convert a PC map (its .ff, and _load.ff / .iwd / .arena next to it when there) into
     out_dir, picking what it needs from the stock 360 files given: code_post_gfx_mp.ff, a
     stock map (render settings, shaders) and the stock maps that carry the map's teams.
@@ -2101,8 +2127,12 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
                     % (name, e, head.hex(" ")))
     out = os.path.join(out_dir, name + ".ff")
     port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded, game_iwds=game_iwds,
-         texture_budget=texture_budget)
+         texture_budget=texture_budget, card_pak=bool(card_ui))
     written.append(out)
+    if card_ui:
+        # card_ui: a ui_mp.ff (mw2tex's built one, or the stock one) to fill the slots from.
+        import mw2tex
+        written.append(mw2tex.write_card_pak(card_ui, out_dir, log=log))
     return written
 
 
@@ -2194,11 +2224,13 @@ def main(argv):
     ap.add_argument("--ref360", nargs="*", default=[])
     ap.add_argument("--texture-budget", type=int, default=TEXTURE_BUDGET_MB, metavar="MB",
                     help="picture memory to stay within, in MB (0: no limit; default %(default)s)")
+    ap.add_argument("--card-pak", action="store_true",
+                    help="titles and emblems from fixed slots in imagefile8.pak (see mw2tex cardpak)")
     ap.add_argument("--teams", nargs=2, metavar=("ALLIES", "AXIS"),
                     help="teams to use (default: from the map's .arena next to the .ff)")
     a = ap.parse_args(argv)
     port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams, game_iwds=game_iwd_files(a.game),
-         texture_budget=a.texture_budget)
+         texture_budget=a.texture_budget, card_pak=a.card_pak)
 
 
 if __name__ == "__main__":
