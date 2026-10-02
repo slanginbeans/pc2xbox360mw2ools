@@ -2257,10 +2257,25 @@ def _arena_teams(text, map_name):
 
 # ================================================================ command line
 
+@contextlib.contextmanager
+def no_gc():
+    """Python's cycle collector paused: reading a file makes millions of objects that all stay,
+    and the collector would keep looking through them all for nothing (about half the time)."""
+    import gc
+    was = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was:
+            gc.enable()
+
+
 def load_tree(path):
     ff, zone = mw2ff.read_fastfile(path)
     sch = mw2ff.schema_for(ff.platform)
-    root, r = tree.read_tree(zone, sch)
+    with no_gc():
+        root, r = tree.read_tree(zone, sch)
     return ff, zone, root
 
 
@@ -2278,23 +2293,182 @@ def map_teams(pc_path, teams=None):
     return "us_army", "opforce_composite"
 
 
-def load_stock(path):
+def load_stock(path, log=None):
     """A stock 360 file's tree, with each picture whose pixels are in the disc's
-    imagefile*.pak files marked with its container entries ("_pak")."""
-    import mw2tex
+    imagefile*.pak files marked with its container entries ("_pak").
+    Read from the cache next to the file (mw2port_cache) when it has the file as it is now."""
+    root = stock_cache_load(path)
+    if root is not None:
+        if log:
+            log("  (ready from last time, in %s)" % STOCK_CACHE_DIR)
+        return root
     ff, zone = mw2ff.read_fastfile(path)
     # The always-loaded files (common_mp) are only looked things up in: animation data, which
     # can't be read back out of the tree, may be left rough there.
     resident = os.path.splitext(os.path.basename(path))[0].lower() == "common_mp"
-    root, r = tree.read_tree(zone, mw2ff.schema_for(ff.platform), lenient=resident)
+    with no_gc():
+        root, r = tree.read_tree(zone, mw2ff.schema_for(ff.platform), lenient=resident)
     with contextlib.redirect_stdout(io.StringIO()):
-        f = mw2tex.FastFile(path)
-    paks = {i["offset"]: k for k, i in enumerate(x for x in f.images if x["pak"])}
+        images = ff.images
+    paks = {i["offset"]: k for k, i in enumerate(x for x in images if x["pak"])}
     for info, inst, start, end in r.assets:
         if info.name == "GfxImage" and start in paks:
             k = paks[start]
-            r.reg[id(inst)][1]["_pak"] = [tuple(t) for t in f.table[k * LEVELS:(k + 1) * LEVELS]]
+            r.reg[id(inst)][1]["_pak"] = [tuple(t) for t in ff.table[k * LEVELS:(k + 1) * LEVELS]]
+    stock_cache_save(path, root, log)
     return root
+
+
+# ------------------------------------------------------------ stock file cache
+# Reading a stock file into a tree takes most of a conversion, and stock files don't change,
+# so each tree is kept (pickled) in mw2port_cache next to the file, as it is before a
+# conversion changes it. A cached tree is used only for the same file (size and time) read
+# by the same code and definitions; anything wrong with it and the file is read again.
+
+STOCK_CACHE_DIR = "mw2port_cache"
+_cache_tag = None
+
+
+def _stock_cache_tag():
+    """Changes whenever the code or definitions that read a stock file change."""
+    global _cache_tag
+    if _cache_tag is None:
+        import hashlib
+        import inspect
+        import mw2tex
+        here = os.path.dirname(os.path.abspath(__file__))
+        h = hashlib.sha1(b"%d.%d" % sys.version_info[:2])
+        files = [os.path.join(here, n) for n in ("mw2ff.py", "tree.py", "zone.py", "cdefs.py",
+                                                 "schema.py", "codec.py")] + [mw2tex.__file__]
+        for d in ("defs", "defs_pc"):
+            for top, dirs, names in os.walk(os.path.join(here, d)):
+                dirs.sort()
+                files += [os.path.join(top, n) for n in sorted(names)]
+        for f in files:
+            with open(f, "rb") as fh:
+                h.update(fh.read())
+        h.update(inspect.getsource(load_stock).encode())
+        _cache_tag = h.hexdigest()[:16]
+    return _cache_tag
+
+
+def _stock_cache_path(path):
+    st = os.stat(path)
+    base = os.path.basename(path).lower()
+    return os.path.join(os.path.dirname(os.path.abspath(path)), STOCK_CACHE_DIR, "%s.%s.%x.%x.pickle" % (
+        base, _stock_cache_tag(), st.st_size, st.st_mtime_ns))
+
+
+def _schema_types(sch):
+    """Every type of a schema, in a fixed order (their place in it stands for them in a cache)."""
+    out, seen = [], set()
+    stack = list(reversed(list(sch.defs.types.values())))
+    while stack:
+        t = stack.pop()
+        if id(t) in seen:
+            continue
+        seen.add(id(t))
+        out.append(t)
+        if isinstance(t, Compound):
+            stack.extend(reversed([m.type for m in t.members]))
+    return out
+
+
+_PICKLED = (dict, list, tuple, str, bytes, int, float, bool, type(None), tree.PtrList, tree.Tail,
+            tree.AssetEntry, Str, Leaf, Ref, tree.InsertSlot)
+
+
+def _dump_tree(root, fh):
+    import cdefs
+    import copyreg
+    import pickle
+    types = _schema_types(mw2ff.schema_for("xbox"))
+    index = {id(t): i for i, t in enumerate(types)}
+
+    class P(pickle.Pickler):
+        def persistent_id(self, o):
+            if isinstance(o, cdefs.Type):
+                return index[id(o)]     # a type outside the schema can't be cached: KeyError
+            if type(o) not in _PICKLED and not (o in _PICKLED if isinstance(o, type) else
+                                                o in (copyreg.__newobj__, copyreg._reconstructor)):
+                raise TypeError("can't cache a %s" % getattr(o, "__name__", type(o).__name__))
+            return None
+
+    fh.write(b"mw2port tree\n")
+    pickle.dump([(t.kind, t.name, t.size) for t in types], fh, protocol=pickle.HIGHEST_PROTOCOL)
+    P(fh, protocol=pickle.HIGHEST_PROTOCOL).dump(root)
+
+
+def _load_tree(fh):
+    import pickle
+    if fh.readline() != b"mw2port tree\n":
+        raise ValueError("not a cached tree")
+    types = _schema_types(mw2ff.schema_for("xbox"))
+    if pickle.load(fh) != [(t.kind, t.name, t.size) for t in types]:
+        raise ValueError("cached with other definitions")
+
+    class U(pickle.Unpickler):
+        def persistent_load(self, i):
+            return types[i]
+
+    return U(fh).load()
+
+
+def stock_cache_load(path):
+    """The cached tree of a stock file, or None."""
+    try:
+        cache = _stock_cache_path(path)
+        if not os.path.exists(cache):
+            return None
+        with open(cache, "rb") as fh, no_gc():
+            return _load_tree(fh)
+    except Exception:  # noqa: BLE001 - a bad cache only means reading the file again
+        return None
+
+
+def stock_cache_save(path, root, log=None):
+    """Keeps a stock file's tree for next time (and drops older ones of that file). Never
+    fails: a tree that can't be cached is read from the file again next time."""
+    import threading
+    try:
+        cache = _stock_cache_path(path)
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        tmp = cache + ".tmp"
+        err = []
+
+        def dump():
+            try:
+                with open(tmp, "wb") as fh, no_gc():
+                    _dump_tree(root, fh)
+            except BaseException as e:  # noqa: BLE001 - reported below
+                err.append(e)
+
+        # Pickling follows the tree's nesting: give it room (its own thread, a big stack).
+        limit, old = sys.getrecursionlimit(), threading.stack_size()
+        try:
+            threading.stack_size(512 << 20)
+            sys.setrecursionlimit(max(limit, 500000))
+            t = threading.Thread(target=dump)
+            t.start()
+            t.join()
+        finally:
+            threading.stack_size(old)
+            sys.setrecursionlimit(limit)
+        if err:
+            raise err[0]
+        os.replace(tmp, cache)
+        name = os.path.basename(path).lower() + "."
+        for n in os.listdir(os.path.dirname(cache)):
+            if n.startswith(name) and n.endswith(".pickle") and n != os.path.basename(cache):
+                os.remove(os.path.join(os.path.dirname(cache), n))
+    except Exception as e:  # noqa: BLE001
+        try:
+            os.remove(tmp)
+        except Exception:  # noqa: BLE001
+            pass
+        if log:
+            log("  note: couldn't keep %s ready for next time (%s: %s); it's read again then"
+                % (os.path.basename(path), type(e).__name__, e))
 
 
 def picture_index(iwds):
@@ -2380,7 +2554,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         for p in ref_paths:
             if p not in loaded:
                 log("reading stock 360 file %s" % os.path.basename(p))
-                loaded[p] = load_stock(p)
+                loaded[p] = load_stock(p, log)
         extra = effect_donors(root, [loaded[p] for p in ref_paths if os.path.splitext(
             os.path.basename(p))[0].lower() not in RESIDENT],
                               [p for p in fx_paths if p not in ref_paths], log)
@@ -2388,7 +2562,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     for p in ref_paths:
         if p not in loaded:
             log("reading stock 360 file %s" % os.path.basename(p))
-            loaded[p] = load_stock(p)
+            loaded[p] = load_stock(p, log)
         refs.append((p, loaded[p]))
     if not iwd_path:
         iwd_path = []
@@ -2437,7 +2611,7 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
     os.makedirs(out_dir, exist_ok=True)
     loaded = {}
     log("reading stock 360 file code_post_gfx_mp.ff")
-    loaded[cpg] = load_stock(cpg)
+    loaded[cpg] = load_stock(cpg, log)
     # The game always has common_mp loaded too: its materials (heat distortion, ...) are the
     # render state templates for a ported map's own materials of those shader sets.
     common = stock.get("common_mp.ff")
