@@ -100,6 +100,16 @@ FIXES = [
      "switch distance becomes 0, so the next level shows from up close. Off by default. For "
      "testing whether LOD0 is what the 360 fails to draw (mp_backlot's cover vanishes within its "
      "LOD0 range, 250-900 units, and shows further away)."),
+    ("stock_models", "Stock 360 models where available (test)",
+     "Static models a stock 360 file also has (mp_backlot: about 98 kinds, every flickering cover "
+     "type among them) are drawn with Infinity Ward's own 360 copy instead of the converted one. "
+     "Off by default. If they still flicker, the models are fine and the map's visibility data "
+     "is at fault; if not, the converted models are."),
+    ("one_room", "Room visibility off (test)",
+     "The map is treated as one room: every room's culling tree becomes a single node listing "
+     "every surface and static model, and the portals between rooms go. Off by default. If the "
+     "flicker stops, the rooms and portals (which no stock map we have could be compared with) "
+     "are at fault."),
     ("hide_tool_surfaces", "Hide tool surfaces",
      "Radiant tool shaders (clip, caulk, ...) get a see-through stand-in so they draw nothing."),
     ("portal_multiply", "HDR portals as multiply",
@@ -107,7 +117,8 @@ FIXES = [
      "multiply shader that leaves the picture as it is. Off: they are hidden like tool surfaces."),
 ]
 # Off unless switched on: stock_effects (mp_backlot never loaded with it).
-DEFAULT_OFF = {"stock_effects", "hide_foliage", "draw_distance_cap", "skip_lod0"}
+DEFAULT_OFF = {"stock_effects", "hide_foliage", "draw_distance_cap", "skip_lod0", "stock_models",
+               "one_room"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
@@ -693,12 +704,17 @@ class Porter:
         self.common_materials = {}      # common_mp's materials: render state templates only
         self.stock_fx = {}              # effect name -> a stock map's effect (stock_effects)
         self.stock_fx_used = []
+        self.stock_models = {}          # model name -> (a stock map's model, its file) (stock_models)
+        self.model_swap = {}            # id() of a converted model -> the stock model's list entry
         for name, root in x_refs:
             idx = asset_index(root)
             base = os.path.splitext(os.path.basename(name))[0]
             if base not in RESIDENT:
                 for k, v in effect_index(root).items():
                     self.stock_fx.setdefault(k, (v, root))
+                for k, v in idx.items():
+                    if k[0] == "XModel" and not k[1].startswith(b","):
+                        self.stock_models.setdefault(k[1], (v, root))
             for k, v in idx.items():
                 if k[1].startswith(b","):
                     self.named.add((k[0], k[1][1:]))
@@ -1079,6 +1095,8 @@ class Porter:
                             x.target, x.rel, x.t = slots[id(x.target)], 0, None
         ents[:] = [e for e in ents if e[0] not in ("pixelshader", "vertexshader", "vertexdecl", "xmodelsurfs")]
         self.stock_effects(ents)
+        if self.fixes["stock_models"]:
+            self.stock_model_swap(ents)
         # Materials and pictures a left-out asset brought in first are only pointed at from
         # then on: the writer puts each where the first remaining pointer to it is.
         reached = set(id(o) for o in iter_objects(ents))
@@ -1180,6 +1198,90 @@ class Porter:
         if new != text:
             _set_rawfile_text(d, new.encode("latin-1"))
 
+    def stock_model_swap(self, ents):
+        """Test switch stock_models: static models a stock 360 file also has are drawn with the
+        stock copy. The stock model goes in first in the asset list; each placed copy
+        (GfxStaticModelDrawInst) points at it (pre_GfxStaticModelDrawInst). The converted model
+        stays, renamed and listed on its own, as other assets can point into it (its materials);
+        a model anything but placed copies holds is left as it is."""
+        top = set(id(e[1]) for e in ents if isinstance(e[1], dict))
+        holders = {}
+        for o in iter_objects(ents):
+            if not isinstance(o, dict):
+                continue
+            for c in o.get("@", {}).values():
+                for x in (c if isinstance(c, list) else [c]):
+                    t = x if isinstance(x, dict) else deref(x) if isinstance(x, Ref) else None
+                    if isinstance(t, dict) and t.get("_asset") == "XModel":
+                        holders.setdefault(id(t), set()).add("placement" in o)
+        front, moved, names = [], [], []
+        for o in list(iter_objects(ents)):
+            if not (isinstance(o, dict) and o.get("_asset") == "XModel") or id(o) in self.done:
+                continue
+            name = _name(o)
+            if not name or name.startswith(b",") or name not in self.stock_models:
+                continue
+            if holders.get(id(o), {False}) != {True}:
+                continue        # held by something other than placed copies (or nothing)
+            src, root = self.stock_models[name]
+            m = self.copy_in(src)
+            self.remap_bones(m, root["script_strings"])
+            self.done.add(id(m))
+            entry = tree.AssetEntry(["xmodel", m])
+            front.append(entry)
+            self.model_swap[id(o)] = entry
+            o["@"][("name", ())] = Str(b"~pc/" + name)
+            if id(o) not in top:
+                moved.append(tree.AssetEntry(["xmodel", o]))
+            names.append(name.decode("latin-1"))
+        ents[:0] = front + moved
+        self.log("  test: %d kinds of static model drawn with the stock 360 copy" % len(names))
+
+    def one_room(self, world):
+        """Test switch one_room: every room's culling tree becomes one node listing every surface
+        (all of sortedSurfIndex) and static model, and the portals go, so whichever room the
+        camera is in, everything in view is drawn."""
+        def tgt(c):
+            return c.target if isinstance(c, Ref) else c
+        dpvs = world.get("dpvs") or {}
+        trees = tgt(world.get("@", {}).get(("aabbTrees", ())))
+        cells = tgt(world.get("@", {}).get(("cells", ())))
+        counts = tgt(world.get("@", {}).get(("aabbTreeCounts", ())))
+        if not isinstance(trees, list) or not isinstance(cells, list) or not isinstance(counts, Leaf):
+            self.warn("room visibility couldn't be switched off (data not found)")
+            return
+        nsurf, nsm = dpvs.get("staticSurfaceCount", 0), dpvs.get("smodelCount", 0)
+        if nsurf > 0xFFFF or nsm > 0xFFFF:
+            self.warn("room visibility couldn't be switched off (too many surfaces or models)")
+            return
+        idx_t = None
+        for ct in trees:
+            for nd in tgt(ct.get("@", {}).get(("aabbTree", ()))) or []:
+                c = tgt(nd.get("@", {}).get(("smodelIndexes", ())))
+                if isinstance(c, Leaf):
+                    idx_t, E = c.t, c.E
+                    break
+            if idx_t:
+                break
+        if idx_t is None and nsm:
+            self.warn("room visibility couldn't be switched off (no model list to copy the type of)")
+            return
+        for ct in trees:
+            node = {"bounds": {k: dict(v) for k, v in world["bounds"].items()}, "childCount": 0,
+                    "surfaceCount": nsurf, "startSurfIndex": 0, "smodelIndexCount": nsm,
+                    "smodelIndexes": "follow" if nsm else None, "childrenOffset": 0, "@": {}}
+            if nsm:
+                node["@"][("smodelIndexes", ())] = Leaf(idx_t, nsm, struct.pack(E + "%dH" % nsm, *range(nsm)), E)
+            ct.setdefault("@", {})[("aabbTree", ())] = [node]
+            ct["aabbTree"] = "follow"
+        counts.raw = struct.pack(counts.E + "%di" % counts.n, *[1] * counts.n)
+        for c in cells:
+            c["portalCount"] = 0
+            c["portals"] = None
+            c.get("@", {}).pop(("portals", ()), None)
+        self.log("  test: room visibility off (%d rooms each list all %d surfaces and %d static models)"
+                 % (len(cells), nsurf, nsm))
+
     def stock_effects(self, ents):
         """Effects a stock 360 file given has under the same name come from there (with their
         materials) instead of being converted: converted ones can draw far stronger than on
@@ -1276,6 +1378,8 @@ class Porter:
             self.fill_surface_bounds(d)
         if self.fixes["tree_model_bounds"]:
             self.grow_tree_bounds(d)
+        if self.fixes["one_room"]:
+            self.one_room(d)
         ch = d["@"]
         for key, c in list(ch.items()):
             t = deref(c) if isinstance(c, Ref) else None
@@ -1654,6 +1758,15 @@ class Porter:
         a float (worked out from stock maps, whose clip map holds the same models with plain
         axes: exact for 19,530 of 19,533 axes). Left zero, every static model drew nowhere
         while its collision stayed."""
+        if self.model_swap:
+            c = d.get("@", {}).get(("model", ()))
+            m = c if isinstance(c, dict) else deref(c) if isinstance(c, Ref) else None
+            entry = self.model_swap.get(id(m)) if isinstance(m, dict) else None
+            if entry is not None:
+                r = tree.Ref(0)
+                r.target, r.rel = entry, 4      # the stock model, through its asset list entry
+                d["@"][("model", ())] = r
+                d["model"] = "0x00000000"
         pl = d.pop("placement", None)
         if not isinstance(pl, dict):
             return None
