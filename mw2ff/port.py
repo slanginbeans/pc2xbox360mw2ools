@@ -1205,6 +1205,14 @@ class Porter:
         gets the plain lit shader."""
         if name in self.techset_swaps:
             return self.techset_swaps[name]
+        if b"_distfalloff" in name and self.have_techset(b"wc_unlit_multiply_lin"):
+            # HDR portals (wc_unlit_distfalloff_replace, a plain white picture, in doorways and
+            # windows) are next to invisible. The 360 files have no such set. Drawn opaque
+            # (wc_unlit_replace_lin) or alpha tested they still wrote depth: invisible walls
+            # that hid the models behind them, popping as the view turned. Multiplied by their
+            # white picture they change nothing on screen and write no depth.
+            self.techset_swaps[name] = b"wc_unlit_multiply_lin"
+            return self.techset_swaps[name]
         best = self.invisible_techset(name) if self.is_tools_techset(name) else None
         if best is not None:
             self.techset_swaps[name] = best
@@ -1235,11 +1243,8 @@ class Porter:
 
     @staticmethod
     def is_tools_techset(name):
-        """wc_tools, mc_tools: Radiant's tool shaders, which draw nothing in game. Also the
-        distance-falloff ones (wc_unlit_distfalloff_replace: HDR portals in doorways and
-        windows), which fade out with distance and are next to invisible; the 360 files have
-        none, and the plain unlit set used instead drew them as a solid yellow haze."""
-        return name.split(b"_")[1:2] == [b"tools"] or b"_distfalloff" in name
+        """wc_tools, mc_tools: Radiant's tool shaders, which draw nothing in game."""
+        return name.split(b"_")[1:2] == [b"tools"]
 
     def invisible_techset(self, name):
         """A stock alpha tested shader set of the same kind (wc_/mc_) with a color picture and
