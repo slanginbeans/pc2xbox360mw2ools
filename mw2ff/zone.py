@@ -46,8 +46,8 @@ PC_ASSET_TYPES = [
     "addon_map_ents",
 ]
 PC_ASSET_STRUCTS = {
-    0: "AssetPhysPreset", 1: "AssetPhysCollMap", 2: "AssetXAnim", 4: "AssetXModel", 5: "AssetMaterial",
-    6: "AssetPixelShader", 7: "AssetVertexShader", 8: "AssetVertexDecl", 9: "AssetTechniqueSet",
+    0: "AssetPhysPreset", 1: "AssetPhysCollMap", 2: "AssetXAnim", 3: "AssetXModelSurfs", 4: "AssetXModel",
+    5: "AssetMaterial", 6: "AssetPixelShader", 7: "AssetVertexShader", 8: "AssetVertexDecl", 9: "AssetTechniqueSet",
     10: "AssetImage", 11: "AssetSound", 12: "AssetSoundCurve", 13: "AssetLoadedSound", 14: "AssetClipMapMp",
     15: "AssetClipMapMp", 16: "AssetComWorld", 17: "AssetGameWorldSp", 18: "AssetGameWorldMp",
     19: "AssetMapEnts", 20: "AssetFxWorld", 21: "AssetGfxWorld", 22: "AssetLightDef", 24: "AssetFont",
@@ -278,6 +278,10 @@ class Reader:
             return self.vars[ref[1]].index
         tname, names = ref
         inst = self.vars.get(tname)
+        if tname == "XModelLodInfo" and self.cur_asset is not None and self.cur_asset[1] == 3:
+            # A model surfaces asset listed on its own (not reached through a model's LOD
+            # entry) carries the surface count itself; an earlier model's LOD entry is stale.
+            inst = self.vars.get("XModelSurfs", inst)
         if inst is None:
             raise ZoneError("expression needs %s but none is loaded" % tname)
         chain = []

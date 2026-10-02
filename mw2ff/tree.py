@@ -518,6 +518,11 @@ class TreeWriter(zone_mod.Reader):
                 return a if id(a) not in self.loc and ("_slot" not in a or a.get("_forward")) else None
         if id(r.target) in self.loc or r.rel:
             return None
+        if isinstance(r.target, InsertSlot):
+            # A member pointing at another asset's slot (a model's surfaces): that asset, if
+            # nothing but pointers hold it ("_forward": its first pointer takes it).
+            a = r.target.asset
+            return a if isinstance(a, dict) and a.get("_forward") and id(a) not in self.loc else None
         return r.target
 
     def _patch(self, buf, loc, val):
@@ -527,12 +532,14 @@ class TreeWriter(zone_mod.Reader):
             struct.pack_into(self.E + "I", self.zone, zp, val)
 
     def reuse(self, inst, mi, mod_pos, combined, kind, loc, val):
-        if isinstance(self._obj, Ref) and not self.is_asset(mi) and not mi.is_string:
-            t = self._forward(self._obj)
+        if isinstance(self._obj, Ref) and not mi.is_string:
+            t = self._forward(self._obj, asset=self.is_asset(mi))
             if t is not None:
-                self._patch(inst.buf, loc, FOLLOWING)
+                in_temp = mi.block is not None and mi.block.kind == "temp"
+                val = INSERT if in_temp and isinstance(t, dict) and "_slot" in t else FOLLOWING
+                self._patch(inst.buf, loc, val)
                 self._obj = t
-                return self.alloc_member(inst, mi, mod_pos, combined, kind, loc, FOLLOWING)
+                return self.alloc_member(inst, mi, mod_pos, combined, kind, loc, val)
         return super().reuse(inst, mi, mod_pos, combined, kind, loc, val)
 
     def alias(self, buf, loc, val):

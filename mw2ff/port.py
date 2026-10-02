@@ -695,6 +695,12 @@ class Porter:
         if tx.name in BYTE_UNIONS:
             self.report.add((tx.name, "union", "bytes"))
             return out
+        if tx.name == "FxGlassGeometryData":
+            # What a file holds here is a glass piece's vertices (two 16-bit numbers) and fan
+            # indexes (16-bit numbers); the hole and crack headers only exist at run time.
+            self.report.add((tx.name, "union", "words of 2"))
+            out["union"] = _swap_words(h, 2).hex()
+            return out
         if um:
             names = um
         else:
@@ -891,6 +897,24 @@ class Porter:
         self.map_name = re.sub(rb"^maps/mp/|\.d3dbsp$", b"", _name(gfx) or b"")
         self.world_checksum = next((e[1].get("checksum", 0) for e in ents
                                     if e[0] == "gfx_map" and isinstance(e[1], dict)), 0)
+        # Some PC files (a whole zone saved out: mp_raid) list the pieces of a model or shader set
+        # as assets of their own. Stock 360 files never do: the PC shaders go (the shader sets
+        # that used them are swapped for stock ones) and model surfaces are written where the
+        # model that uses them points at them, as the orphans below are.
+        gone = set(id(e[1]) for e in ents if e[0] in ("pixelshader", "vertexshader", "vertexdecl")
+                   and isinstance(e[1], dict))
+        # Pointers to a model surfaces asset's entry in the list become pointers to its own slot.
+        slots = {}
+        for e in ents:
+            if e[0] == "xmodelsurfs" and isinstance(e[1], dict):
+                slots[id(e)] = e[1].setdefault("_slot", tree.InsertSlot(e[1]))
+        for o in iter_objects(ents):
+            if isinstance(o, dict):
+                for c in o.get("@", {}).values():
+                    for x in (c if isinstance(c, list) else [c]):
+                        if isinstance(x, Ref) and id(x.target) in slots and x.rel == 4:
+                            x.target, x.rel, x.t = slots[id(x.target)], 0, None
+        ents[:] = [e for e in ents if e[0] not in ("pixelshader", "vertexshader", "vertexdecl", "xmodelsurfs")]
         # Materials and pictures a left-out asset brought in first are only pointed at from
         # then on: the writer puts each where the first remaining pointer to it is.
         reached = set(id(o) for o in iter_objects(ents))
@@ -902,7 +926,7 @@ class Porter:
                 for x in (c if isinstance(c, list) else [c]):
                     if isinstance(x, Ref) and isinstance(x.target, tree.InsertSlot):
                         a = x.target.asset
-                        if isinstance(a, dict) and id(a) not in reached:
+                        if isinstance(a, dict) and id(a) not in reached and id(a) not in gone:
                             orphans[id(a)] = a
         inner = set()
         for a in orphans.values():
