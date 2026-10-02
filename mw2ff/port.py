@@ -87,6 +87,14 @@ FIXES = [
     ("map_fog", "Map fog",
      "Keep the map's distance fog (setExpFog in its scripts; mp_backlot's is yellow). Off: the "
      "calls are commented out."),
+    ("hide_foliage", "Hide foliage (test)",
+     "Static models named foliage_* (grass clumps, shrubs, palms: 2,122 of mp_backlot's 3,619) get a "
+     "draw distance of 1 unit, so they never show. Off by default. For testing whether the 360 "
+     "drops models because too many are in view at once (mp_backlot: about 2,670 in range from a "
+     "typical point, stock mp_rust 1,430-1,900)."),
+    ("draw_distance_cap", "Cap model draw distance (test)",
+     "Every static model's draw distance is capped at %d units (mp_backlot: about 960 models in "
+     "range from a typical point instead of 2,670). Off by default; for the same test." % 1200),
     ("hide_tool_surfaces", "Hide tool surfaces",
      "Radiant tool shaders (clip, caulk, ...) get a see-through stand-in so they draw nothing."),
     ("portal_multiply", "HDR portals as multiply",
@@ -94,7 +102,8 @@ FIXES = [
      "multiply shader that leaves the picture as it is. Off: they are hidden like tool surfaces."),
 ]
 # Off unless switched on: stock_effects (mp_backlot never loaded with it).
-DEFAULT_OFF = {"stock_effects"}
+DEFAULT_OFF = {"stock_effects", "hide_foliage", "draw_distance_cap"}
+DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
 
@@ -646,6 +655,7 @@ class Porter:
         self.root = pc_root
         self.log = log
         self.fixes = fix_set(fixes)
+        self.test_counts = {}           # static models hide_foliage / draw_distance_cap changed
         self.texture_budget = texture_budget    # MB; 0: no limit
         self.mip_drop = {}                      # picture name -> top mip levels left out
         self.P = schema_mod.load("pc")
@@ -1133,6 +1143,11 @@ class Porter:
             self.warn("shader set %s isn't in the stock files given, so %s is used"
                       % (a.decode(), b.decode()))
         self.rename_clashes()
+        if self.test_counts.get("foliage"):
+            self.log("  test: %d foliage models hidden" % self.test_counts["foliage"])
+        if self.test_counts.get("capped"):
+            self.log("  test: %d static models' draw distance capped at %d" % (self.test_counts["capped"],
+                                                                              DRAW_DISTANCE_CAP))
         ss = self.root.get("script_strings")
         self.root["platform"] = "xbox"
         return self.root
@@ -1640,6 +1655,15 @@ class Porter:
             packed.append(v)
         packed.append(struct.unpack("<I", struct.pack("<f", pl["scale"]))[0])
         d["packedAxis"] = packed
+        if self.fixes["hide_foliage"] or self.fixes["draw_distance_cap"]:
+            m = deref(d.get("@", {}).get(("model", ())))
+            name = (_name(m) or b"").lstrip(b",") if isinstance(m, dict) else b""
+            if self.fixes["hide_foliage"] and name.startswith(b"foliage"):
+                d["cullDist"] = 1
+                self.test_counts["foliage"] = self.test_counts.get("foliage", 0) + 1
+            elif self.fixes["draw_distance_cap"] and not 0 < d.get("cullDist", 0) <= DRAW_DISTANCE_CAP:
+                d["cullDist"] = DRAW_DISTANCE_CAP
+                self.test_counts["capped"] = self.test_counts.get("capped", 0) + 1
         return None
 
     def pre_water_t(self, d, tp, tx):
@@ -2658,9 +2682,12 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     log("converting %s" % os.path.basename(pc_path))
     porter = Porter(root, refs, iwd, log, [zipfile.ZipFile(p) for p in game_iwds], texture_budget,
                     fixes)
-    off = [k for k, v in fixes.items() if not v]
+    off = [k for k, v in fixes.items() if not v and DEFAULT_FIXES[k]]
+    on = [k for k, v in fixes.items() if v and not DEFAULT_FIXES[k]]
     if off:
         log("  fixes switched off: %s" % ", ".join(off))
+    if on:
+        log("  switched on (off by default): %s" % ", ".join(on))
     porter.convert()
     if porter.map_name:
         porter.add_teams(refs, map_teams(pc_path, teams))
