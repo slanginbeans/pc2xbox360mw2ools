@@ -85,3 +85,8 @@ block normal  XFILE_BLOCK_INDEX;
 #include "XAssets/VehicleDef.txt"
 #include "XAssets/AddonMapEnts.txt"
 
+
+// Some PC files (not stock ones) list model surfaces as their own asset (type 3), as the 360 does.
+asset XModelSurfs AssetXModelSurfs;
+use XModelSurfs;
+set block XFILE_BLOCK_TEMP;
