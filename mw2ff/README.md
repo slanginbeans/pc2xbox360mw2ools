@@ -60,12 +60,43 @@ Your work folder needs these stock 360 files from the console (copy them over FT
 5. Copy both files to `_codxe\zone\` on the console, start a private match and type
    `map <map>` in the console.
 
+Tick several maps to convert them one after another in one go.
+
+**Titles and emblems.** In a match the game draws them from the map's own copy, so converted maps carry
+the stock ones. With **Take titles and emblems from imagefile8.pak** ticked, a converted map points them
+at fixed places in `imagefile8.pak` (written next to it, filled from `ui_mp.ff`: mw2tex's built one in
+`mw2tex_out` when it's there). After you change titles or emblems in mw2tex, its Build writes a new
+`imagefile8.pak`: copy that and `ui_mp.ff` to the console, and the maps show them without being converted
+or copied again. **Patch stock maps** does the same for every stock `mp_*.ff` in the work folder (only
+their picture table changes; the copies go in `mw2port_out\stock`). Not tried on a console yet.
+
 From a command prompt: `python port.py <pc map.ff> <out.ff> --iwd <map.iwd> --ref360
 code_post_gfx_mp.ff mp_favela.ff [more stock maps] [--teams ALLIES AXIS]`.
 
 What it converts so far: the map itself (geometry, collision, lighting, pictures, reflection
 probes, map entities, scripts) and the two teams. Custom models, sounds and effects the PC map
-brings with it aren't converted yet.
+brings with it aren't converted yet. Pictures over 40 MB lose their top mip levels so the map
+fits in memory (`--texture-budget` from a command prompt).
+
+### Fixes and test variants
+
+Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
+Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
+with `--fix-off NAME` (repeatable). All are on by default:
+
+| Fix | What it does |
+|---|---|
+| `texture_budget` | Pictures over the budget lose their top mip levels (out of memory / loading-screen freeze without it) |
+| `stock_effects` | Effects a stock 360 map also has come from it (the yellow dust haze); maps have failed to load with it (MT_GetSize ... script usage) |
+| `surface_bounds` | Fills in the 360-only culling radius / texture density of every world surface |
+| `model_lods` | Model detail levels' partBits and surfs written as stock files have them (0 and empty) |
+| `stock_material_state` | A material a stock file also has takes that material's culling and draw order |
+| `hide_tool_surfaces` | Radiant tool shaders (clip, caulk, ...) draw nothing |
+| `portal_multiply` | HDR portal sheets drawn with a multiply shader (off: hidden like tool surfaces) |
+
+**Also build test variants** converts the map once more for every fix that is on, with just that
+fix off, into `mw2port_out\<map>\variants\no_<fix>`. Copy them to the console one after another
+to find which fix is behind a problem (a few minutes per variant).
 
 ## Commands
 

@@ -1,0 +1,3812 @@
+[
+{
+"name": "cardicon_8_bit_price",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 12,
+"end": 16407
+},
+{
+"name": "cardicon_8ball",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 16407,
+"end": 32802
+},
+{
+"name": "cardicon_abduction",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 32802,
+"end": 49197
+},
+{
+"name": "cardicon_abrams",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 49197,
+"end": 65592
+},
+{
+"name": "cardicon_ac130_angelflare",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 65592,
+"end": 81987
+},
+{
+"name": "cardicon_aircraft_01",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 81987,
+"end": 98382
+},
+{
+"name": "cardicon_animal",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 98382,
+"end": 114777
+},
+{
+"name": "cardicon_assad",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 6,
+"mips": 1,
+"start": 114777,
+"end": 131172
+},
+{
+"name": "cardicon_award_jets",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 131172,
+"end": 147567
+},
+{
+"name": "cardicon_b2",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 147567,
+"end": 163962
+},
+{
+"name": "cardicon_ball_baseball_1",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 163962,
+"end": 180357
+},
+{
+"name": "cardicon_ball_volleyball_1",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 180357,
+"end": 196752
+},
+{
+"name": "cardicon_bear",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 196752,
+"end": 213147
+},
+{
+"name": "cardicon_binoculars_1",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 213147,
+"end": 229542
+},
+{
+"name": "cardicon_biohazard",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 229542,
+"end": 245937
+},
+{
+"name": "cardicon_birdbrain",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 245937,
+"end": 262332
+},
+{
+"name": "cardicon_booniehat",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 262332,
+"end": 278727
+},
+{
+"name": "cardicon_boot",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 278727,
+"end": 295122
+},
+{
+"name": "cardicon_boots_01",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 295122,
+"end": 311517
+},
+{
+"name": "cardicon_boots_02",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 311517,
+"end": 327912
+},
+{
+"name": "cardicon_brassknuckles",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 327912,
+"end": 344307
+},
+{
+"name": "cardicon_brit_beret",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 344307,
+"end": 360702
+},
+{
+"name": "cardicon_bulb",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 360702,
+"end": 377097
+},
+{
+"name": "cardicon_bullet_case",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 377097,
+"end": 393492
+},
+{
+"name": "cardicon_bullets_50cal",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 393492,
+"end": 409887
+},
+{
+"name": "cardicon_burgertown",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 409887,
+"end": 426282
+},
+{
+"name": "cardicon_car",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 426282,
+"end": 442677
+},
+{
+"name": "cardicon_chicken",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 442677,
+"end": 459072
+},
+{
+"name": "cardicon_circuit",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 459072,
+"end": 475467
+},
+{
+"name": "cardicon_claw",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 475467,
+"end": 491862
+},
+{
+"name": "cardicon_cod4",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 491862,
+"end": 508257
+},
+{
+"name": "cardicon_comic_price",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 508257,
+"end": 524652
+},
+{
+"name": "cardicon_comic_shepherd",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 524652,
+"end": 541047
+},
+{
+"name": "cardicon_compass",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 541047,
+"end": 557442
+},
+{
+"name": "cardicon_default",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 6,
+"mips": 1,
+"start": 557442,
+"end": 573837
+},
+{
+"name": "cardicon_devilfinger",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 573837,
+"end": 590232
+},
+{
+"name": "cardicon_doubletap",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 590232,
+"end": 606627
+},
+{
+"name": "cardicon_eagle",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 606627,
+"end": 623022
+},
+{
+"name": "cardicon_electro",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 18,
+"mips": 1,
+"start": 623022,
+"end": 631225
+},
+{
+"name": "cardicon_expert_aa12",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 631225,
+"end": 647620
+},
+{
+"name": "cardicon_expert_ak47",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 647620,
+"end": 664015
+},
+{
+"name": "cardicon_expert_aug",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 664015,
+"end": 680410
+},
+{
+"name": "cardicon_expert_barrett",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 680410,
+"end": 696805
+},
+{
+"name": "cardicon_expert_beretta",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 696805,
+"end": 713200
+},
+{
+"name": "cardicon_expert_beretta393",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 713200,
+"end": 729595
+},
+{
+"name": "cardicon_expert_cheytac",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 729595,
+"end": 745990
+},
+{
+"name": "cardicon_expert_coltanaconda",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 745990,
+"end": 762385
+},
+{
+"name": "cardicon_expert_deserteagle",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 762385,
+"end": 778780
+},
+{
+"name": "cardicon_expert_fal",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 778780,
+"end": 795175
+},
+{
+"name": "cardicon_expert_famas",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 795175,
+"end": 811570
+},
+{
+"name": "cardicon_expert_fn2000",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 811570,
+"end": 827965
+},
+{
+"name": "cardicon_expert_glock",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 827965,
+"end": 844360
+},
+{
+"name": "cardicon_expert_kriss",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 844360,
+"end": 860755
+},
+{
+"name": "cardicon_expert_m1014",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 860755,
+"end": 877150
+},
+{
+"name": "cardicon_expert_m16",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 877150,
+"end": 893545
+},
+{
+"name": "cardicon_expert_m21",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 893545,
+"end": 909940
+},
+{
+"name": "cardicon_expert_m240",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 909940,
+"end": 926335
+},
+{
+"name": "cardicon_expert_m4",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 926335,
+"end": 942730
+},
+{
+"name": "cardicon_expert_masada",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 942730,
+"end": 959125
+},
+{
+"name": "cardicon_expert_mg4",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 959125,
+"end": 975520
+},
+{
+"name": "cardicon_expert_model1887",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 975520,
+"end": 991915
+},
+{
+"name": "cardicon_expert_mp5k",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 991915,
+"end": 1008310
+},
+{
+"name": "cardicon_expert_p90",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1008310,
+"end": 1024705
+},
+{
+"name": "cardicon_expert_pp2000",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1024705,
+"end": 1041100
+},
+{
+"name": "cardicon_expert_ranger",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1041100,
+"end": 1057495
+},
+{
+"name": "cardicon_expert_rpd",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1057495,
+"end": 1073890
+},
+{
+"name": "cardicon_expert_sa80",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1073890,
+"end": 1090285
+},
+{
+"name": "cardicon_expert_scar",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1090285,
+"end": 1106680
+},
+{
+"name": "cardicon_expert_spas12",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1106680,
+"end": 1123075
+},
+{
+"name": "cardicon_expert_striker",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1123075,
+"end": 1139470
+},
+{
+"name": "cardicon_expert_tavor",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1139470,
+"end": 1155865
+},
+{
+"name": "cardicon_expert_tmp",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1155865,
+"end": 1172260
+},
+{
+"name": "cardicon_expert_ump45",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1172260,
+"end": 1188655
+},
+{
+"name": "cardicon_expert_usp",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1188655,
+"end": 1205050
+},
+{
+"name": "cardicon_expert_uzi",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1205050,
+"end": 1221445
+},
+{
+"name": "cardicon_expert_wa2000",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1221445,
+"end": 1237840
+},
+{
+"name": "cardicon_f15",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1237840,
+"end": 1254235
+},
+{
+"name": "cardicon_fmj",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1254235,
+"end": 1270630
+},
+{
+"name": "cardicon_gasmask",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1270630,
+"end": 1287025
+},
+{
+"name": "cardicon_gears",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1287025,
+"end": 1303420
+},
+{
+"name": "cardicon_ghillie",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 1303420,
+"end": 1319815
+},
+{
+"name": "cardicon_ghost",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1319815,
+"end": 1336210
+},
+{
+"name": "cardicon_ghost_bust",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1336210,
+"end": 1352605
+},
+{
+"name": "cardicon_ghost_mic",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1352605,
+"end": 1369000
+},
+{
+"name": "cardicon_girlskull",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1369000,
+"end": 1385395
+},
+{
+"name": "cardicon_gloss_grenade",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 1385395,
+"end": 1401790
+},
+{
+"name": "cardicon_gold",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1401790,
+"end": 1418185
+},
+{
+"name": "cardicon_grigsby",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1418185,
+"end": 1434580
+},
+{
+"name": "cardicon_gumby",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1434580,
+"end": 1450975
+},
+{
+"name": "cardicon_harrier",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1450975,
+"end": 1467370
+},
+{
+"name": "cardicon_hat_n_knife",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1467370,
+"end": 1483765
+},
+{
+"name": "cardicon_hazard",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1483765,
+"end": 1500160
+},
+{
+"name": "cardicon_headshot",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 6,
+"mips": 1,
+"start": 1500160,
+"end": 1516555
+},
+{
+"name": "cardicon_heartbeatsensor",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1516555,
+"end": 1532950
+},
+{
+"name": "cardicon_helmet_army",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1532950,
+"end": 1549345
+},
+{
+"name": "cardicon_helmet_brit_ww2",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1549345,
+"end": 1565740
+},
+{
+"name": "cardicon_helmet_medic",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1565740,
+"end": 1582135
+},
+{
+"name": "cardicon_helmet_pilot",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1582135,
+"end": 1598530
+},
+{
+"name": "cardicon_helmet_ranger",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1598530,
+"end": 1614925
+},
+{
+"name": "cardicon_helmet_samurai",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1614925,
+"end": 1631320
+},
+{
+"name": "cardicon_hipflask",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1631320,
+"end": 1647715
+},
+{
+"name": "cardicon_honeybadger01",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1647715,
+"end": 1664110
+},
+{
+"name": "cardicon_humantrophy",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1664110,
+"end": 1680505
+},
+{
+"name": "cardicon_hummer",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1680505,
+"end": 1696900
+},
+{
+"name": "cardicon_hyena",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1696900,
+"end": 1713295
+},
+{
+"name": "cardicon_illuminati",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1713295,
+"end": 1729690
+},
+{
+"name": "cardicon_iss",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1729690,
+"end": 1746085
+},
+{
+"name": "cardicon_joystick",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1746085,
+"end": 1762480
+},
+{
+"name": "cardicon_juggernaut_1",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 1762480,
+"end": 1778875
+},
+{
+"name": "cardicon_juggernaut_2",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 1778875,
+"end": 1795270
+},
+{
+"name": "cardicon_kinggorilla",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 1795270,
+"end": 1811665
+},
+{
+"name": "cardicon_launcher",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1811665,
+"end": 1828060
+},
+{
+"name": "cardicon_league_grenade",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1828060,
+"end": 1844455
+},
+{
+"name": "cardicon_loadedfinger",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1844455,
+"end": 1860850
+},
+{
+"name": "cardicon_makarov",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1860850,
+"end": 1877245
+},
+{
+"name": "cardicon_marksman_aa12",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1877245,
+"end": 1893640
+},
+{
+"name": "cardicon_marksman_ak47",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1893640,
+"end": 1910035
+},
+{
+"name": "cardicon_marksman_aug",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1910035,
+"end": 1926430
+},
+{
+"name": "cardicon_marksman_barrett",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1926430,
+"end": 1942825
+},
+{
+"name": "cardicon_marksman_beretta",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1942825,
+"end": 1959220
+},
+{
+"name": "cardicon_marksman_beretta393",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1959220,
+"end": 1975615
+},
+{
+"name": "cardicon_marksman_cheytac",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1975615,
+"end": 1992010
+},
+{
+"name": "cardicon_marksman_coltanaconda",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 1992010,
+"end": 2008405
+},
+{
+"name": "cardicon_marksman_deserteagle",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2008405,
+"end": 2024800
+},
+{
+"name": "cardicon_marksman_fal",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2024800,
+"end": 2041195
+},
+{
+"name": "cardicon_marksman_famas",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2041195,
+"end": 2057590
+},
+{
+"name": "cardicon_marksman_fn2000",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2057590,
+"end": 2073985
+},
+{
+"name": "cardicon_marksman_glock",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2073985,
+"end": 2090380
+},
+{
+"name": "cardicon_marksman_kriss",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2090380,
+"end": 2106775
+},
+{
+"name": "cardicon_marksman_m1014",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2106775,
+"end": 2123170
+},
+{
+"name": "cardicon_marksman_m16",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2123170,
+"end": 2139565
+},
+{
+"name": "cardicon_marksman_m21",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2139565,
+"end": 2155960
+},
+{
+"name": "cardicon_marksman_m240",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2155960,
+"end": 2172355
+},
+{
+"name": "cardicon_marksman_m4",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2172355,
+"end": 2188750
+},
+{
+"name": "cardicon_marksman_masada",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2188750,
+"end": 2205145
+},
+{
+"name": "cardicon_marksman_mg4",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2205145,
+"end": 2221540
+},
+{
+"name": "cardicon_marksman_model1887",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2221540,
+"end": 2237935
+},
+{
+"name": "cardicon_marksman_mp5k",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2237935,
+"end": 2254330
+},
+{
+"name": "cardicon_marksman_p90",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2254330,
+"end": 2270725
+},
+{
+"name": "cardicon_marksman_pp2000",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2270725,
+"end": 2287120
+},
+{
+"name": "cardicon_marksman_ranger",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2287120,
+"end": 2303515
+},
+{
+"name": "cardicon_marksman_rpd",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2303515,
+"end": 2319910
+},
+{
+"name": "cardicon_marksman_sa80",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2319910,
+"end": 2336305
+},
+{
+"name": "cardicon_marksman_scar",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2336305,
+"end": 2352700
+},
+{
+"name": "cardicon_marksman_spas12",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2352700,
+"end": 2369095
+},
+{
+"name": "cardicon_marksman_striker",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2369095,
+"end": 2385490
+},
+{
+"name": "cardicon_marksman_tavor",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2385490,
+"end": 2401885
+},
+{
+"name": "cardicon_marksman_tmp",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2401885,
+"end": 2418280
+},
+{
+"name": "cardicon_marksman_ump45",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2418280,
+"end": 2434675
+},
+{
+"name": "cardicon_marksman_usp",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2434675,
+"end": 2451070
+},
+{
+"name": "cardicon_marksman_uzi",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2451070,
+"end": 2467465
+},
+{
+"name": "cardicon_marksman_wa2000",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2467465,
+"end": 2483860
+},
+{
+"name": "cardicon_mexican_blue",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2483860,
+"end": 2500255
+},
+{
+"name": "cardicon_mexican_red",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2500255,
+"end": 2516650
+},
+{
+"name": "cardicon_mig",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2516650,
+"end": 2533045
+},
+{
+"name": "cardicon_minigun",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2533045,
+"end": 2549440
+},
+{
+"name": "cardicon_missile_1",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 2549440,
+"end": 2565835
+},
+{
+"name": "cardicon_moon",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2565835,
+"end": 2582230
+},
+{
+"name": "cardicon_motorcycle",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2582230,
+"end": 2598625
+},
+{
+"name": "cardicon_nightvision_1",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 2598625,
+"end": 2615020
+},
+{
+"name": "cardicon_nightvision_2",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 2615020,
+"end": 2631415
+},
+{
+"name": "cardicon_noseart1",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2631415,
+"end": 2647810
+},
+{
+"name": "cardicon_nvg_star",
+"level": 0,
+"width": 512,
+"height": 256,
+"format": 19,
+"mips": 1,
+"start": 2647810,
+"end": 2778903
+},
+{
+"name": "cardicon_pacifier_blue",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2778903,
+"end": 2795298
+},
+{
+"name": "cardicon_pacifier_pink",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2795298,
+"end": 2811693
+},
+{
+"name": "cardicon_paratrooper",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2811693,
+"end": 2828088
+},
+{
+"name": "cardicon_patch",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2828088,
+"end": 2844483
+},
+{
+"name": "cardicon_pavelow",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2844483,
+"end": 2860878
+},
+{
+"name": "cardicon_pirate_1",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 2860878,
+"end": 2877273
+},
+{
+"name": "cardicon_pirateflag_1",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 2877273,
+"end": 2893668
+},
+{
+"name": "cardicon_porterjustice",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 2893668,
+"end": 2910063
+},
+{
+"name": "cardicon_prestige10anim",
+"level": 0,
+"width": 512,
+"height": 256,
+"format": 19,
+"mips": 1,
+"start": 2910063,
+"end": 3041156
+},
+{
+"name": "cardicon_prestige10anim_02",
+"level": 0,
+"width": 512,
+"height": 256,
+"format": 19,
+"mips": 1,
+"start": 3041156,
+"end": 3172249
+},
+{
+"name": "cardicon_price_ww2",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 3172249,
+"end": 3188644
+},
+{
+"name": "cardicon_pricearctic",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 3188644,
+"end": 3205039
+},
+{
+"name": "cardicon_pricewoodland",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 3205039,
+"end": 3221434
+},
+{
+"name": "cardicon_pushindaisies",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3221434,
+"end": 3237829
+},
+{
+"name": "cardicon_radiation",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3237829,
+"end": 3254224
+},
+{
+"name": "cardicon_red_devil",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3254224,
+"end": 3270619
+},
+{
+"name": "cardicon_redhand",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3270619,
+"end": 3287014
+},
+{
+"name": "cardicon_redhead",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3287014,
+"end": 3303409
+},
+{
+"name": "cardicon_rhino",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3303409,
+"end": 3319804
+},
+{
+"name": "cardicon_riot_shield",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3319804,
+"end": 3336199
+},
+{
+"name": "cardicon_russian_beret",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3336199,
+"end": 3352594
+},
+{
+"name": "cardicon_sami",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3352594,
+"end": 3368989
+},
+{
+"name": "cardicon_seasnipers",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3368989,
+"end": 3385384
+},
+{
+"name": "cardicon_shotgun_shells",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 3385384,
+"end": 3401779
+},
+{
+"name": "cardicon_shuriken",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3401779,
+"end": 3418174
+},
+{
+"name": "cardicon_simplegun",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 18,
+"mips": 1,
+"start": 3418174,
+"end": 3426377
+},
+{
+"name": "cardicon_skull",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3426377,
+"end": 3442772
+},
+{
+"name": "cardicon_skull_black",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 18,
+"mips": 1,
+"start": 3442772,
+"end": 3450975
+},
+{
+"name": "cardicon_skullaward",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3450975,
+"end": 3467370
+},
+{
+"name": "cardicon_skullnbones",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 18,
+"mips": 1,
+"start": 3467370,
+"end": 3475573
+},
+{
+"name": "cardicon_snakeeyes",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3475573,
+"end": 3491968
+},
+{
+"name": "cardicon_sniper",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3491968,
+"end": 3508363
+},
+{
+"name": "cardicon_sniperscope",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3508363,
+"end": 3524758
+},
+{
+"name": "cardicon_snowmobile",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3524758,
+"end": 3541153
+},
+{
+"name": "cardicon_soap_bar",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3541153,
+"end": 3557548
+},
+{
+"name": "cardicon_stop",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3557548,
+"end": 3573943
+},
+{
+"name": "cardicon_stryker",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3573943,
+"end": 3590338
+},
+{
+"name": "cardicon_sugarglider",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3590338,
+"end": 3606733
+},
+{
+"name": "cardicon_tank_01",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3606733,
+"end": 3623128
+},
+{
+"name": "cardicon_taskforcearmy01",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 3623128,
+"end": 3639523
+},
+{
+"name": "cardicon_tf141",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3639523,
+"end": 3655918
+},
+{
+"name": "cardicon_thebomb",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3655918,
+"end": 3672313
+},
+{
+"name": "cardicon_thecow",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3672313,
+"end": 3688708
+},
+{
+"name": "cardicon_throwing_knife_soda",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3688708,
+"end": 3705103
+},
+{
+"name": "cardicon_tictacboom",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3705103,
+"end": 3721498
+},
+{
+"name": "cardicon_tiger",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3721498,
+"end": 3737893
+},
+{
+"name": "cardicon_tire",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3737893,
+"end": 3754288
+},
+{
+"name": "cardicon_toon_price_1",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3754288,
+"end": 3770683
+},
+{
+"name": "cardicon_treasurechest_1",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3770683,
+"end": 3787078
+},
+{
+"name": "cardicon_treasuremap_1",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3787078,
+"end": 3803473
+},
+{
+"name": "cardicon_tsunami",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3803473,
+"end": 3819868
+},
+{
+"name": "cardicon_umbracatervae",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3819868,
+"end": 3836263
+},
+{
+"name": "cardicon_vest_1",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3836263,
+"end": 3852658
+},
+{
+"name": "cardicon_veteran",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3852658,
+"end": 3869053
+},
+{
+"name": "cardicon_warpig",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3869053,
+"end": 3885448
+},
+{
+"name": "cardicon_weed",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 19,
+"mips": 1,
+"start": 3885448,
+"end": 3901843
+},
+{
+"name": "cardicon_xray",
+"level": 0,
+"width": 64,
+"height": 64,
+"format": 20,
+"mips": 1,
+"start": 3901843,
+"end": 3918238
+},
+{
+"name": "cardtitle_4thofjuly_1",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 3918238,
+"end": 3951017
+},
+{
+"name": "cardtitle_abstract3",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 3951017,
+"end": 3983796
+},
+{
+"name": "cardtitle_ac130_1",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 3983796,
+"end": 4016575
+},
+{
+"name": "cardtitle_aircraft_carriers",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4016575,
+"end": 4049354
+},
+{
+"name": "cardtitle_angry_dragon",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4049354,
+"end": 4082133
+},
+{
+"name": "cardtitle_apocalypse",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4082133,
+"end": 4114912
+},
+{
+"name": "cardtitle_assault_expert",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4114912,
+"end": 4147691
+},
+{
+"name": "cardtitle_assault_marksman",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4147691,
+"end": 4180470
+},
+{
+"name": "cardtitle_assault_master",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4180470,
+"end": 4213249
+},
+{
+"name": "cardtitle_assault_sharpshooter",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4213249,
+"end": 4246028
+},
+{
+"name": "cardtitle_assault_veteran",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4246028,
+"end": 4278807
+},
+{
+"name": "cardtitle_at4_rocket",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4278807,
+"end": 4311586
+},
+{
+"name": "cardtitle_bandaid",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4311586,
+"end": 4344365
+},
+{
+"name": "cardtitle_benjamins",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4344365,
+"end": 4377144
+},
+{
+"name": "cardtitle_blackcat",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4377144,
+"end": 4409923
+},
+{
+"name": "cardtitle_blimp_1",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4409923,
+"end": 4442702
+},
+{
+"name": "cardtitle_bloodsplat",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 4442702,
+"end": 4475481
+},
+{
+"name": "cardtitle_bloodysword",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4475481,
+"end": 4508260
+},
+{
+"name": "cardtitle_bomber_pinup_girl",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4508260,
+"end": 4541039
+},
+{
+"name": "cardtitle_bombs2",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4541039,
+"end": 4573818
+},
+{
+"name": "cardtitle_buckshot",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4573818,
+"end": 4606597
+},
+{
+"name": "cardtitle_buggy",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 4606597,
+"end": 4639376
+},
+{
+"name": "cardtitle_bullet",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4639376,
+"end": 4672155
+},
+{
+"name": "cardtitle_butterfly_1",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4672155,
+"end": 4704934
+},
+{
+"name": "cardtitle_butterfly_2",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4704934,
+"end": 4737713
+},
+{
+"name": "cardtitle_camo_arctic",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 18,
+"mips": 1,
+"start": 4737713,
+"end": 4754108
+},
+{
+"name": "cardtitle_camo_bluetiger",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 4754108,
+"end": 4786887
+},
+{
+"name": "cardtitle_camo_digital",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 18,
+"mips": 1,
+"start": 4786887,
+"end": 4803282
+},
+{
+"name": "cardtitle_camo_fall",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 4803282,
+"end": 4836061
+},
+{
+"name": "cardtitle_camo_redtiger",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 4836061,
+"end": 4868840
+},
+{
+"name": "cardtitle_camo_urban",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 4868840,
+"end": 4901619
+},
+{
+"name": "cardtitle_camo_woodland",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 4901619,
+"end": 4934398
+},
+{
+"name": "cardtitle_cemetary",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4934398,
+"end": 4967177
+},
+{
+"name": "cardtitle_cheese",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4967177,
+"end": 4999956
+},
+{
+"name": "cardtitle_chicken",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 4999956,
+"end": 5032735
+},
+{
+"name": "cardtitle_cobra",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 5032735,
+"end": 5065514
+},
+{
+"name": "cardtitle_cowboy",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5065514,
+"end": 5098293
+},
+{
+"name": "cardtitle_cripple",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5098293,
+"end": 5131072
+},
+{
+"name": "cardtitle_cutegirl_v1_1",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5131072,
+"end": 5163851
+},
+{
+"name": "cardtitle_cutegirl_v1_2",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 5163851,
+"end": 5196630
+},
+{
+"name": "cardtitle_cutegirl_v1_3",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 5196630,
+"end": 5229409
+},
+{
+"name": "cardtitle_cutegirl_v2_1",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5229409,
+"end": 5262188
+},
+{
+"name": "cardtitle_cutegirl_v2_2",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5262188,
+"end": 5294967
+},
+{
+"name": "cardtitle_cutegirl_v2_3",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5294967,
+"end": 5327746
+},
+{
+"name": "cardtitle_dragon_kick",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5327746,
+"end": 5360525
+},
+{
+"name": "cardtitle_drifting",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5360525,
+"end": 5393304
+},
+{
+"name": "cardtitle_dynamite",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5393304,
+"end": 5426083
+},
+{
+"name": "cardtitle_endofline_red",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5426083,
+"end": 5458862
+},
+{
+"name": "cardtitle_explosion",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5458862,
+"end": 5491641
+},
+{
+"name": "cardtitle_eyeball_3",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5491641,
+"end": 5524420
+},
+{
+"name": "cardtitle_flag_australia",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5524420,
+"end": 5557199
+},
+{
+"name": "cardtitle_flag_austria",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5557199,
+"end": 5589978
+},
+{
+"name": "cardtitle_flag_belgium",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5589978,
+"end": 5622757
+},
+{
+"name": "cardtitle_flag_brazil",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5622757,
+"end": 5655536
+},
+{
+"name": "cardtitle_flag_canada",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5655536,
+"end": 5688315
+},
+{
+"name": "cardtitle_flag_china",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5688315,
+"end": 5721094
+},
+{
+"name": "cardtitle_flag_czech",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5721094,
+"end": 5753873
+},
+{
+"name": "cardtitle_flag_denmark",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5753873,
+"end": 5786652
+},
+{
+"name": "cardtitle_flag_elsalvador",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5786652,
+"end": 5819431
+},
+{
+"name": "cardtitle_flag_finland",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5819431,
+"end": 5852210
+},
+{
+"name": "cardtitle_flag_france",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5852210,
+"end": 5884989
+},
+{
+"name": "cardtitle_flag_germany",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5884989,
+"end": 5917768
+},
+{
+"name": "cardtitle_flag_greece",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5917768,
+"end": 5950547
+},
+{
+"name": "cardtitle_flag_hongkong",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5950547,
+"end": 5983326
+},
+{
+"name": "cardtitle_flag_india",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 5983326,
+"end": 6016105
+},
+{
+"name": "cardtitle_flag_iran",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6016105,
+"end": 6048884
+},
+{
+"name": "cardtitle_flag_ireland",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6048884,
+"end": 6081663
+},
+{
+"name": "cardtitle_flag_italy",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6081663,
+"end": 6114442
+},
+{
+"name": "cardtitle_flag_japan",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6114442,
+"end": 6147221
+},
+{
+"name": "cardtitle_flag_luxemburg",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6147221,
+"end": 6180000
+},
+{
+"name": "cardtitle_flag_mexico",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6180000,
+"end": 6212779
+},
+{
+"name": "cardtitle_flag_netherlands",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6212779,
+"end": 6245558
+},
+{
+"name": "cardtitle_flag_newzealand",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6245558,
+"end": 6278337
+},
+{
+"name": "cardtitle_flag_norway",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6278337,
+"end": 6311116
+},
+{
+"name": "cardtitle_flag_philippines",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6311116,
+"end": 6343895
+},
+{
+"name": "cardtitle_flag_poland",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6343895,
+"end": 6376674
+},
+{
+"name": "cardtitle_flag_portugal",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6376674,
+"end": 6409453
+},
+{
+"name": "cardtitle_flag_russia",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6409453,
+"end": 6442232
+},
+{
+"name": "cardtitle_flag_saudiarabia",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6442232,
+"end": 6475011
+},
+{
+"name": "cardtitle_flag_singapore",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6475011,
+"end": 6507790
+},
+{
+"name": "cardtitle_flag_southafrica",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6507790,
+"end": 6540569
+},
+{
+"name": "cardtitle_flag_southkorea",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6540569,
+"end": 6573348
+},
+{
+"name": "cardtitle_flag_spain",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6573348,
+"end": 6606127
+},
+{
+"name": "cardtitle_flag_sweden",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6606127,
+"end": 6638906
+},
+{
+"name": "cardtitle_flag_swiss",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6638906,
+"end": 6671685
+},
+{
+"name": "cardtitle_flag_taiwan",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6671685,
+"end": 6704464
+},
+{
+"name": "cardtitle_flag_turkey",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6704464,
+"end": 6737243
+},
+{
+"name": "cardtitle_flag_uk",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6737243,
+"end": 6770022
+},
+{
+"name": "cardtitle_flag_united_arab_emirates",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6770022,
+"end": 6802801
+},
+{
+"name": "cardtitle_flag_unitedstates",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6802801,
+"end": 6835580
+},
+{
+"name": "cardtitle_flames_1",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 6835580,
+"end": 6868359
+},
+{
+"name": "cardtitle_flower_3",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6868359,
+"end": 6901138
+},
+{
+"name": "cardtitle_gears_03",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6901138,
+"end": 6933917
+},
+{
+"name": "cardtitle_general",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6933917,
+"end": 6966696
+},
+{
+"name": "cardtitle_ghillie",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6966696,
+"end": 6999475
+},
+{
+"name": "cardtitle_glass_hispeed",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 6999475,
+"end": 7032254
+},
+{
+"name": "cardtitle_graff",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7032254,
+"end": 7065033
+},
+{
+"name": "cardtitle_graffiti_1",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7065033,
+"end": 7097812
+},
+{
+"name": "cardtitle_graffiti_2",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7097812,
+"end": 7130591
+},
+{
+"name": "cardtitle_harrier",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7130591,
+"end": 7163370
+},
+{
+"name": "cardtitle_hazard_3",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7163370,
+"end": 7196149
+},
+{
+"name": "cardtitle_heartbeatsensor",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7196149,
+"end": 7228928
+},
+{
+"name": "cardtitle_helicopters_1",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7228928,
+"end": 7261707
+},
+{
+"name": "cardtitle_hello_sticker",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7261707,
+"end": 7294486
+},
+{
+"name": "cardtitle_horsemen",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7294486,
+"end": 7327265
+},
+{
+"name": "cardtitle_horsemen_death",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7327265,
+"end": 7360044
+},
+{
+"name": "cardtitle_horsemen_famine",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7360044,
+"end": 7392823
+},
+{
+"name": "cardtitle_horsemen_war",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7392823,
+"end": 7425602
+},
+{
+"name": "cardtitle_hotdog_high",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7425602,
+"end": 7458381
+},
+{
+"name": "cardtitle_iss01",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7458381,
+"end": 7491160
+},
+{
+"name": "cardtitle_jason_nvg",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 7491160,
+"end": 7523939
+},
+{
+"name": "cardtitle_joint",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7523939,
+"end": 7556718
+},
+{
+"name": "cardtitle_kingsnake",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7556718,
+"end": 7589497
+},
+{
+"name": "cardtitle_lingerie_1",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7589497,
+"end": 7622276
+},
+{
+"name": "cardtitle_lingerie_2",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7622276,
+"end": 7655055
+},
+{
+"name": "cardtitle_machinegun",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7655055,
+"end": 7687834
+},
+{
+"name": "cardtitle_magic",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7687834,
+"end": 7720613
+},
+{
+"name": "cardtitle_make_it_rain",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7720613,
+"end": 7753392
+},
+{
+"name": "cardtitle_mig15",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7753392,
+"end": 7786171
+},
+{
+"name": "cardtitle_moab",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7786171,
+"end": 7818950
+},
+{
+"name": "cardtitle_mw2_black",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 6,
+"mips": 1,
+"start": 7818950,
+"end": 7884502
+},
+{
+"name": "cardtitle_night_vision_hi",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7884502,
+"end": 7917281
+},
+{
+"name": "cardtitle_operations",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7917281,
+"end": 7950060
+},
+{
+"name": "cardtitle_pavelow",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7950060,
+"end": 7982839
+},
+{
+"name": "cardtitle_pavelow_side",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 7982839,
+"end": 8015618
+},
+{
+"name": "cardtitle_pinkscar",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8015618,
+"end": 8048397
+},
+{
+"name": "cardtitle_pushindaisies",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 8048397,
+"end": 8081176
+},
+{
+"name": "cardtitle_rainbows_3",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8081176,
+"end": 8113955
+},
+{
+"name": "cardtitle_rice_rocket",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8113955,
+"end": 8146734
+},
+{
+"name": "cardtitle_roll_hard_six",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8146734,
+"end": 8179513
+},
+{
+"name": "cardtitle_rpg",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8179513,
+"end": 8212292
+},
+{
+"name": "cardtitle_samurai_lv3",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8212292,
+"end": 8245071
+},
+{
+"name": "cardtitle_satellite",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8245071,
+"end": 8277850
+},
+{
+"name": "cardtitle_schooled",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8277850,
+"end": 8310629
+},
+{
+"name": "cardtitle_shark",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8310629,
+"end": 8343408
+},
+{
+"name": "cardtitle_silencer",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8343408,
+"end": 8376187
+},
+{
+"name": "cardtitle_skateboard",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8376187,
+"end": 8408966
+},
+{
+"name": "cardtitle_smoke_em",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8408966,
+"end": 8441745
+},
+{
+"name": "cardtitle_sniper_1",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8441745,
+"end": 8474524
+},
+{
+"name": "cardtitle_sniper_2",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8474524,
+"end": 8507303
+},
+{
+"name": "cardtitle_sniper_3",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8507303,
+"end": 8540082
+},
+{
+"name": "cardtitle_sniper_4",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8540082,
+"end": 8572861
+},
+{
+"name": "cardtitle_snowmobile",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8572861,
+"end": 8605640
+},
+{
+"name": "cardtitle_snubnose",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8605640,
+"end": 8638419
+},
+{
+"name": "cardtitle_spankpaddle",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8638419,
+"end": 8671198
+},
+{
+"name": "cardtitle_spider",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8671198,
+"end": 8703977
+},
+{
+"name": "cardtitle_spy_1",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8703977,
+"end": 8736756
+},
+{
+"name": "cardtitle_stpatricks_3",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8736756,
+"end": 8769535
+},
+{
+"name": "cardtitle_straight_blast",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8769535,
+"end": 8802314
+},
+{
+"name": "cardtitle_sunbather",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 8802314,
+"end": 8835093
+},
+{
+"name": "cardtitle_swordmaster_1",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 8835093,
+"end": 8867872
+},
+{
+"name": "cardtitle_swordmaster_2",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 18,
+"mips": 1,
+"start": 8867872,
+"end": 8884267
+},
+{
+"name": "cardtitle_swordmaster_3",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8884267,
+"end": 8917046
+},
+{
+"name": "cardtitle_tank",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8917046,
+"end": 8949825
+},
+{
+"name": "cardtitle_thebomb",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8949825,
+"end": 8982604
+},
+{
+"name": "cardtitle_tiger",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 8982604,
+"end": 9015383
+},
+{
+"name": "cardtitle_tomahawk",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 19,
+"mips": 1,
+"start": 9015383,
+"end": 9048162
+},
+{
+"name": "cardtitle_tsunami",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 9048162,
+"end": 9080941
+},
+{
+"name": "cardtitle_weed_3",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 9080941,
+"end": 9113720
+},
+{
+"name": "cardtitle_zero",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 9113720,
+"end": 9146499
+},
+{
+"name": "cardtitle_zombie_3",
+"level": 0,
+"width": 240,
+"height": 48,
+"format": 20,
+"mips": 1,
+"start": 9146499,
+"end": 9179278
+}
+]

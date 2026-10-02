@@ -84,6 +84,7 @@ How it works (checked against airport.ff, imagefile3.pak, common_mp.ff and ui_mp
 """
 import csv
 import glob
+import json
 import os
 import re
 import struct
@@ -1185,8 +1186,8 @@ def sync_maps(stock_path, built_path, map_paths, out_dir, log=print):
         count = 0
         for image in changed:
             target = ff.find(image["name"])
-            if not target or not _supported(target):
-                continue
+            if not target or not _supported(target) or uses_card_pak(ff, target):
+                continue    # (a map using imagefile8.pak gets its titles and emblems from there)
             blobs, note = _copy_blobs(built, image, target, out_dir, ff)
             if blobs is None:
                 notes[image["name"]] = note
@@ -1218,6 +1219,170 @@ def sync_maps(stock_path, built_path, map_paths, out_dir, log=print):
     for name, note in sorted(notes.items()):
         log("  %s in matches: %s" % (name, note))
     return written
+
+
+# ---------------------------------------------------------------- fixed title/emblem slots (imagefile8.pak)
+
+# Maps draw titles and emblems from their own copy, streamed from the paks. A map whose copy points
+# at fixed places in imagefile8.pak never has to change again when titles and emblems do: only that
+# pak is written anew (from the built ui_mp.ff). Chunks are stored zlib (level 0), so a chunk's
+# length depends only on the picture's size and format, never on what it shows.
+CARD_PAK = 8
+CARD_SLOTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cardslots.json")
+PAK_HEADER = b"IWffu100\0\0\x01\x0d"
+
+
+def is_card(name):
+    return name.lower().startswith(("cardicon_", "cardtitle_"))
+
+
+def card_level_blobs(target, picture):
+    """Tiled pixel data for each level of pak texture TARGET (format, levels) from a Pillow picture,
+    laid out as _copy_blobs does: resized to the largest level, mips made, each level tiled."""
+    from PIL import Image
+    fmt = target["format"]
+    largest = max(target["levels"], key=lambda l: l["width"] * l["height"])
+    width, height = largest["width"], largest["height"]
+    needed = 1 if largest["mips"] == 1 else _mip_count(width, height)
+    picture = picture.convert("RGBA")
+    if picture.size != (width, height):
+        picture = picture.resize((width, height), Image.LANCZOS)
+    mips = []
+    for mip in range(needed):
+        w, h = max(width >> mip, 1), max(height >> mip, 1)
+        level = picture if mip == 0 else picture.resize((w, h), Image.BOX)
+        mips.append(_encode(level.tobytes(), w, h, fmt))
+    blobs = []
+    for tl in target["levels"]:
+        first = _log2ceil(width // tl["width"])
+        top = top_mip_only(target, tl)
+        blobs.append((tl, tile(mips[first:first + 1] if top else mips[first:], tl["width"], tl["height"], fmt,
+                               single=tl["mips"] == 1 or top)))
+    return blobs
+
+
+def _slot_target(entries):
+    return {"format": entries[0]["format"], "pak": True,
+            "levels": [{"level": e["level"], "width": e["width"], "height": e["height"], "mips": e["mips"]}
+                       for e in entries]}
+
+
+def card_slots(map_ff):
+    """The slot of every title/emblem pak level in MAP_FF (a stock map): [{name, level, width,
+    height, format, mips, start, end}] in a fixed order, start/end inside imagefile8.pak."""
+    from PIL import Image
+    slots, pos = [], len(PAK_HEADER)
+    for image in sorted((i for i in map_ff.images if i["pak"] and is_card(i["name"]) and _supported(i)),
+                        key=lambda i: i["name"].lower()):
+        blank = Image.new("RGBA", (1, 1))
+        for tl, blob in card_level_blobs(image, blank):
+            n = len(zlib.compress(blob, 0))
+            slots.append({"name": image["name"].lower(), "level": tl["level"], "width": tl["width"],
+                          "height": tl["height"], "format": image["format"], "mips": tl["mips"],
+                          "start": pos, "end": pos + n})
+            pos += n
+    return slots
+
+
+def load_card_slots(path=CARD_SLOTS):
+    with open(path) as fh:
+        return json.load(fh)
+
+
+def _card_picture(ui, name):
+    """The picture title/emblem NAME shows in UI (a built or stock ui_mp.ff), as stored (gray/alpha
+    packed ones stay packed, as the maps keep them); an animation's first frame. None if absent."""
+    image = ui.find(name)
+    if image is None or image["pak"]:
+        return None
+    picture = decode_texture(ui, image, max_side=4096, unpack=False)
+    if picture is None:
+        return None
+    o = material_of_image(ui, image)
+    if o is not None and (ui.zone[o + 6] > 1 or ui.zone[o + 7] > 1):
+        rows, columns = ui.zone[o + 6], ui.zone[o + 7]
+        picture = picture.crop((0, 0, picture.size[0] // columns, picture.size[1] // rows))
+    return picture
+
+
+def write_card_pak(ui_path, out_dir, slots=None, log=print):
+    """Writes OUTDIR/imagefile8.pak: every slot filled from UI_PATH's picture of that title or
+    emblem. Returns its path."""
+    from PIL import Image
+    slots = load_card_slots() if slots is None else slots
+    ui = FastFile(ui_path)
+    groups = {}
+    for s in slots:
+        groups.setdefault(s["name"], []).append(s)
+    pak = bytearray(PAK_HEADER)
+    missing = []
+    for s in slots:
+        if s["level"] != groups[s["name"]][0]["level"]:
+            continue
+        entries = groups[s["name"]]
+        picture = _card_picture(ui, s["name"])
+        if picture is None:
+            missing.append(s["name"])
+            picture = Image.new("RGBA", (1, 1))
+        for (tl, blob), e in zip(card_level_blobs(_slot_target(entries), picture), entries):
+            chunk = zlib.compress(blob, 0)
+            if len(pak) != e["start"] or len(chunk) != e["end"] - e["start"]:
+                raise ValueError("%s level %d doesn't fit its slot" % (e["name"], e["level"]))
+            pak += chunk
+    path = os.path.join(out_dir, "imagefile%d.pak" % CARD_PAK)
+    os.makedirs(out_dir, exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(bytes(pak))
+    log("imagefile%d.pak: %d titles and emblems from %s%s" % (
+        CARD_PAK, len(groups) - len(missing), os.path.basename(ui_path),
+        " (%d not in it, left blank)" % len(missing) if missing else ""))
+    return path
+
+
+def point_cards_at_pak(ff, slots=None):
+    """Points every title/emblem pak level of map FF whose size matches its slot at imagefile8.pak.
+    Only the pak table changes. Returns how many pictures now use it."""
+    slots = load_card_slots() if slots is None else slots
+    by = {(s["name"], s["level"]): s for s in slots}
+    count = 0
+    for image in ff.images:
+        if not (image["pak"] and is_card(image["name"])):
+            continue
+        hit = False
+        for lv in image["levels"]:
+            s = by.get((image["name"].lower(), lv["level"]))
+            if s and (s["width"], s["height"], s["mips"], s["format"]) == (lv["width"], lv["height"], lv["mips"],
+                                                                         image["format"]):
+                ff.table[lv["entry"]] = [CARD_PAK, s["start"], s["end"]]
+                hit = True
+        count += hit
+    return count
+
+
+def uses_card_pak(ff, image):
+    return image["pak"] and bool(image["levels"]) and all(
+        ff.table[lv["entry"]][0] == CARD_PAK for lv in image["levels"])
+
+
+def cmd_cardpak(ui_path, out_dir):
+    write_card_pak(ui_path, out_dir)
+
+
+def cmd_cardpatch(out_dir, *map_paths):
+    slots = load_card_slots()
+    for path in map_paths:
+        ff = FastFile(path)
+        n = point_cards_at_pak(ff, slots)
+        os.makedirs(out_dir, exist_ok=True)
+        ff.save(os.path.join(out_dir, os.path.basename(path)))
+        print("%s: %d titles and emblems now come from imagefile%d.pak" % (os.path.basename(path), n, CARD_PAK))
+
+
+def cmd_cardslots(map_path, out_path=CARD_SLOTS):
+    slots = card_slots(FastFile(map_path))
+    with open(out_path, "w") as fh:
+        json.dump(slots, fh, indent=0)
+    print("%d slots, imagefile%d.pak is %d bytes" % (len(slots), CARD_PAK, slots[-1]["end"] if slots else 0))
 
 
 def cmd_maps(stock_path, out_dir, *map_paths):
@@ -1294,6 +1459,12 @@ def main():
         cmd_maps(*args[1:])
     elif len(args) == 5 and args[0] == "put":
         cmd_put(*args[1:])
+    elif len(args) == 3 and args[0] == "cardpak":
+        cmd_cardpak(*args[1:])
+    elif len(args) >= 3 and args[0] == "cardpatch":
+        cmd_cardpatch(*args[1:])
+    elif len(args) in (2, 3) and args[0] == "cardslots":
+        cmd_cardslots(*args[1:])
     else:
         print(__doc__)
         sys.exit(1)

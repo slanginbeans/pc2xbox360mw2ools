@@ -553,6 +553,11 @@ def rebuild_maps(log):
         if base.lower().startswith("mp_") or base.lower() == mw2zone_gui.OUT_NAME or not os.path.exists(stock):
             continue
         written += mw2tex.sync_maps(stock, source, maps, OUT_DIR, log.append)
+    ui = os.path.join(OUT_DIR, "ui_mp.ff")
+    if os.path.exists(ui) and os.path.exists(mw2tex.CARD_SLOTS):
+        # Maps switched to the fixed slots (converted ones, or stock ones patched on the converter
+        # page) take their titles and emblems from here: only this file changes for them.
+        written.append(mw2tex.write_card_pak(ui, OUT_DIR, log=log.append))
     return written
 
 

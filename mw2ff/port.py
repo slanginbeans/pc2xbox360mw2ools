@@ -50,12 +50,54 @@ RESIDENT = ("code_post_gfx_mp", "common_mp")
 # The pictures a ported map carries sit in the file's physical memory block (stock maps keep
 # most of theirs in the console's image files: 9 to 26 MB). The console ran out of memory with
 # 201 MB of them (mp_backlot) and loads 90 MB (mp_waw_castle). Pictures above this budget (MB
-# of physical memory) lose their top mip levels, the largest first. 0 keeps them all.
-TEXTURE_BUDGET_MB = 80
+# of physical memory) lose their top mip levels, the largest first. 0 keeps them all. At 80
+# mp_backlot froze on the loading screen; every test at 40 loaded.
+TEXTURE_BUDGET_MB = 40
 # The 360 tiles pictures and pads the small mip levels: the physical block comes to about this
 # much more than the plain sum of the levels (mp_backlot: 90 MB counted, 115 MB in the block).
 TILING_PAD = 1.28
 LEVELS = 4      # pak table entries per picture
+# Fixes that can be switched off, to find out on the console which one helps or hurts:
+# (name, short label, what it does). All on by default.
+FIXES = [
+    ("texture_budget", "Picture budget",
+     "Pictures over the budget (40 MB) lose their top mip levels, so big maps fit in memory "
+     "(mp_backlot ran out of memory without it, and froze on the loading screen at 80 MB)."),
+    ("stock_effects", "Stock 360 effects",
+     "Effects a stock 360 map also has (dust, car glass, fires) come from it instead of being "
+     "converted: the converted dust drew a yellow haze. mp_backlot failed to load with it "
+     "(MT_GetSize: max allocation exceeded ... for script usage)."),
+    ("surface_bounds", "Surface culling radius",
+     "Fill in the 360-only number every world surface carries (its culling radius and texture "
+     "density), worked out from stock mp_rust. Converted maps used to leave it 0."),
+    ("model_lods", "Model detail levels as stock",
+     "Each model detail level's partBits and surfs written as stock 360 files have them (0 and "
+     "empty) instead of the PC's values."),
+    ("stock_material_state", "Render state from same-named stock materials",
+     "A material a stock 360 file also has (same name, same shader set) takes that material's "
+     "culling and draw order, instead of another material's with the same shader set."),
+    ("hide_tool_surfaces", "Hide tool surfaces",
+     "Radiant tool shaders (clip, caulk, ...) get a see-through stand-in so they draw nothing."),
+    ("portal_multiply", "HDR portals as multiply",
+     "The white HDR portal sheets in doorways and windows (wc_unlit_distfalloff_*) use a "
+     "multiply shader that leaves the picture as it is. Off: they are hidden like tool surfaces."),
+]
+DEFAULT_FIXES = {k: True for k, _, _ in FIXES}
+
+
+def fix_set(fixes=None, off=()):
+    """All fixes on, as given in fixes ({name: bool}), with those named in off switched off."""
+    out = dict(DEFAULT_FIXES)
+    for k, v in (fixes or {}).items():
+        if k not in out:
+            raise PortError("unknown fix %r (known: %s)" % (k, ", ".join(out)))
+        out[k] = bool(v)
+    for k in off:
+        if k not in out:
+            raise PortError("unknown fix %r (known: %s)" % (k, ", ".join(out)))
+        out[k] = False
+    return out
+COLOR_MAP, COLOR_MAP1 = 0xA0AB1041, 0xB60D1850     # texture table name hashes
 
 # Per team (mp/factionTable.csv + the character scripts in common_mp): the models and
 # icons a map carries for it. The 360 keeps these in each map's own file.
@@ -585,9 +627,11 @@ def encode_dxt3a(lum, width, height):
 # ================================================================ converter
 
 class Porter:
-    def __init__(self, pc_root, x_refs, iwd=None, log=print, game_iwds=(), texture_budget=0):
+    def __init__(self, pc_root, x_refs, iwd=None, log=print, game_iwds=(), texture_budget=0,
+                 fixes=None):
         self.root = pc_root
         self.log = log
+        self.fixes = fix_set(fixes)
         self.texture_budget = texture_budget    # MB; 0: no limit
         self.mip_drop = {}                      # picture name -> top mip levels left out
         self.P = schema_mod.load("pc")
@@ -618,9 +662,14 @@ class Porter:
         # files (common_mp, ...) whenever a map loads, so a ported map can name them too.
         self.named = set()
         self.common_materials = {}      # common_mp's materials: render state templates only
+        self.stock_fx = {}              # effect name -> a stock map's effect (stock_effects)
+        self.stock_fx_used = []
         for name, root in x_refs:
             idx = asset_index(root)
             base = os.path.splitext(os.path.basename(name))[0]
+            if base not in RESIDENT:
+                for k, v in effect_index(root).items():
+                    self.stock_fx.setdefault(k, (v, root))
             for k, v in idx.items():
                 if k[1].startswith(b","):
                     self.named.add((k[0], k[1][1:]))
@@ -988,6 +1037,7 @@ class Porter:
                         if isinstance(x, Ref) and id(x.target) in slots and x.rel == 4:
                             x.target, x.rel, x.t = slots[id(x.target)], 0, None
         ents[:] = [e for e in ents if e[0] not in ("pixelshader", "vertexshader", "vertexdecl", "xmodelsurfs")]
+        self.stock_effects(ents)
         # Materials and pictures a left-out asset brought in first are only pointed at from
         # then on: the writer puts each where the first remaining pointer to it is.
         reached = set(id(o) for o in iter_objects(ents))
@@ -1056,9 +1106,62 @@ class Porter:
                 continue
             self.warn("shader set %s isn't in the stock files given, so %s is used"
                       % (a.decode(), b.decode()))
+        self.rename_clashes()
         ss = self.root.get("script_strings")
         self.root["platform"] = "xbox"
         return self.root
+
+    def stock_effects(self, ents):
+        """Effects a stock 360 file given has under the same name come from there (with their
+        materials) instead of being converted: converted ones can draw far stronger than on
+        the PC (mp_backlot's dust_wind_* filled the map with a yellow haze). Other assets and
+        the map's scripts name effects rather than point at them, so the stock one goes in under
+        the name and the converted one is renamed out of the way (it stays: the map's other
+        assets can point at materials it brings)."""
+        if not self.fixes["stock_effects"]:
+            return
+        new, names = [], []
+        for e in ents:
+            if e[0] != "fx" or not isinstance(e[1], dict):
+                continue
+            name = _name(e[1])
+            if name not in self.stock_fx:
+                continue
+            src, src_root = self.stock_fx[name]
+            e[1]["@"][("name", ())] = Str(b"~pc/" + name)
+            fx = self.copy_in(src)
+            self.remap_bones(fx, src_root["script_strings"])
+            self.done.add(id(fx))
+            new.append(tree.AssetEntry([e[0], fx]))
+            self.stock_fx_used.append(fx)
+            names.append(name.decode("latin-1"))
+        # First in the list: the shader sets they bring are the stock ones the map's own
+        # materials of those sets point at, and have to be written before them.
+        ents[:0] = new
+        if names:
+            self.log("  %d effect%s from the stock 360 files: %s" % (
+                len(names), "s" if len(names) > 1 else "", ", ".join(names)))
+
+    def rename_clashes(self):
+        """The map's own materials and pictures named as one a stock effect brings get a name
+        of their own: the game keeps one asset per name, and the stock effect has to get its
+        own (the converted ones drew the haze)."""
+        ours = set()
+        names = set()
+        for fx in self.stock_fx_used:
+            for o in iter_objects(fx):
+                ours.add(id(o))
+                # (",name": a reference to one the game has loaded, not an asset of its own)
+                if isinstance(o, dict) and o.get("_asset") in ("Material", "GfxImage") and \
+                        not (_name(o) or b",").startswith(b","):
+                    names.add((o["_asset"], _name(o)))
+        count = 0
+        for o in iter_objects(self.root["assets"]):
+            if isinstance(o, dict) and id(o) not in ours and o.get("_asset") in ("Material", "GfxImage") \
+                    and (o["_asset"], _name(o)) in names:
+                _set_name(o, b"~pc/" + _name(o))
+                count += 1
+        return count
 
     # ------------------------------------------------------------ hooks
 
@@ -1100,6 +1203,8 @@ class Porter:
                 self.moved_images.append(c)
 
     def post_GfxWorld(self, d, tx):
+        if self.fixes["surface_bounds"]:
+            self.fill_surface_bounds(d)
         ch = d["@"]
         for key, c in list(ch.items()):
             t = deref(c) if isinstance(c, Ref) else None
@@ -1109,6 +1214,92 @@ class Porter:
                 self.moved_images = [m for m in self.moved_images if m is not t]
         if self.moved_images:
             raise PortError("a picture from the lightmap override is still needed elsewhere")
+
+    def fill_surface_bounds(self, world):
+        """GfxSurfaceBounds has two more words on the 360 (the PC has none of it): the first
+        is radius << 16 | colorMap density << 8 | colorMap1 density. Radius: the distance from
+        the bounds' middle to the surface's farthest vertex, rounded up (65535 at most). Density:
+        26 x picture width / (world units per texture repeat), the second for a blend
+        material's second color map, 0 without one. Worked out from stock mp_rust (radius exact
+        on 4803 of 5332 surfaces, 1 more than stock on the rest). Left 0, the game
+        took every surface for a point at its middle."""
+        def leaf(c):
+            if isinstance(c, Ref) and c.rel == 0:
+                c = c.target
+            return c if isinstance(c, Leaf) else None
+        draw, dpvs = world.get("draw"), world.get("dpvs")
+        if not (isinstance(draw, dict) and isinstance(dpvs, dict)):
+            return
+        vd = draw.get("vd")
+        verts = leaf(vd.get("@", {}).get(("vertices", ()))) if isinstance(vd, dict) else None
+        idx = leaf(draw.get("@", {}).get(("indices", ())))
+        surfs = dpvs.get("@", {}).get(("surfaces", ()))
+        surfs = surfs.target if isinstance(surfs, Ref) else surfs
+        bounds = leaf(dpvs.get("@", {}).get(("surfacesBounds", ())))
+        if verts is None or idx is None or not isinstance(surfs, list) or bounds is None:
+            self.warn("the world's surfaces get no culling radius (data not found)")
+            return
+        V, ve = verts.raw, verts.E
+        I = struct.unpack(idx.E + "%dH" % idx.n, idx.raw)
+        size = bounds.t.size
+        out = bytearray(bounds.raw)
+        widths = {}
+
+        def width(mat, hash_):
+            mat = deref(mat) if isinstance(mat, Ref) else mat
+            if not isinstance(mat, dict):
+                return 0
+            key = (id(mat), hash_)
+            if key not in widths:
+                w = 0
+                tt = mat.get("@", {}).get(("textureTable", ()))
+                for t in (tt if isinstance(tt, list) else []):
+                    if isinstance(t, dict) and t.get("nameHash") == hash_ and isinstance(t.get("u"), dict):
+                        img = deref(t["u"].get("@", {}).get(("image", ())))
+                        if isinstance(img, dict):
+                            w = img.get("width") or 0
+                            st = img.get("streams")
+                            if isinstance(st, list):
+                                w = max([w] + [x.get("width") or 0 for x in st if isinstance(x, dict)])
+                            # A picture the game has loaded (",name"): its size isn't here.
+                            if w <= 1:
+                                w = 512
+                widths[key] = w
+            return widths[key]
+
+        for k, s in enumerate(surfs[:bounds.n]):
+            if not isinstance(s, dict) or not isinstance(s.get("tris"), dict):
+                continue
+            t = s["tris"]
+            mid = struct.unpack_from(bounds.E + "3f", out, k * size)
+            base, fv = t["baseIndex"], t["firstVertex"]
+            tri = I[base:base + 3 * t["triCount"]]
+            r2 = 0.0
+            world_area = uv_area = 0.0
+            for j in range(0, len(tri) - 2, 3):
+                p, uv = [], []
+                for v in tri[j:j + 3]:
+                    o = (fv + v) * 44
+                    x = struct.unpack_from(ve + "3f", V, o)
+                    p.append(x)
+                    uv.append(struct.unpack_from(ve + "2f", V, o + 20))
+                    r2 = max(r2, sum((x[q] - mid[q]) ** 2 for q in range(3)))
+                a = [p[1][q] - p[0][q] for q in range(3)]
+                b = [p[2][q] - p[0][q] for q in range(3)]
+                cr = (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+                world_area += math.sqrt(sum(c * c for c in cr))
+                uv_area += abs((uv[1][0] - uv[0][0]) * (uv[2][1] - uv[0][1])
+                               - (uv[1][1] - uv[0][1]) * (uv[2][0] - uv[0][0]))
+            radius = min(65535, math.ceil(math.sqrt(r2)))
+            dens = []
+            for h in (COLOR_MAP, COLOR_MAP1):
+                w = width(s.get("@", {}).get(("material", ())), h)
+                if not w or not world_area or not uv_area or not all(map(math.isfinite, (world_area, uv_area))):
+                    dens.append(0)
+                    continue
+                dens.append(max(1, min(255, round(26 * w / math.sqrt(world_area / uv_area)))))
+            struct.pack_into(bounds.E + "I", out, k * size + 24, radius << 16 | dens[0] << 8 | dens[1])
+        bounds.raw = bytes(out)
 
     def post_FxGlassSystem(self, d, tx):
         """firstFreePiece is really a 16-bit number (then padding): 0xFFFF, "no free piece",
@@ -1166,6 +1357,16 @@ class Porter:
         d["himipRadii"] = "follow" if n else None
         if n:
             d["@"][("himipRadii", ())] = Leaf(m.type, n, struct.pack(">%dH" % n, *[HIMIP_RADIUS] * n), ">")
+        # Each detail level's partBits and surfs: stock 360 models always hold 0 and null here
+        # (the game fills them in when it loads the model); the PC file has them set.
+        for li in (d.get("lodInfo") or []) if self.fixes["model_lods"] else []:
+            if not isinstance(li, dict):
+                continue
+            li["partBits"] = [0] * len(li.get("partBits") or [0] * 6)
+            c = li.get("@", {}).get(("surfs", ()))
+            if c is None or isinstance(c, Ref):
+                li.get("@", {}).pop(("surfs", ()), None)
+                li["surfs"] = None
 
     def _replace(self, d, new):
         slot = d.get("_slot")
@@ -1205,7 +1406,17 @@ class Porter:
         gets the plain lit shader."""
         if name in self.techset_swaps:
             return self.techset_swaps[name]
-        best = self.invisible_techset(name) if self.is_tools_techset(name) else None
+        if b"_distfalloff" in name and self.fixes["portal_multiply"] and \
+                self.have_techset(b"wc_unlit_multiply_lin"):
+            # HDR portals (wc_unlit_distfalloff_replace, a plain white picture, in doorways and
+            # windows) are next to invisible. The 360 files have no such set. Drawn opaque
+            # (wc_unlit_replace_lin) or alpha tested they still wrote depth: invisible walls
+            # that hid the models behind them, popping as the view turned. Multiplied by their
+            # white picture they change nothing on screen and write no depth.
+            self.techset_swaps[name] = b"wc_unlit_multiply_lin"
+            return self.techset_swaps[name]
+        best = self.invisible_techset(name) if self.is_tools_techset(name) and \
+            self.fixes["hide_tool_surfaces"] else None
         if best is not None:
             self.techset_swaps[name] = best
             return best
@@ -1233,13 +1444,11 @@ class Porter:
             self.techset_swaps[name] = best
         return best
 
-    @staticmethod
-    def is_tools_techset(name):
-        """wc_tools, mc_tools: Radiant's tool shaders, which draw nothing in game. Also the
-        distance-falloff ones (wc_unlit_distfalloff_replace: HDR portals in doorways and
-        windows), which fade out with distance and are next to invisible; the 360 files have
-        none, and the plain unlit set used instead drew them as a solid yellow haze."""
-        return name.split(b"_")[1:2] == [b"tools"] or b"_distfalloff" in name
+    def is_tools_techset(self, name):
+        """wc_tools, mc_tools: Radiant's tool shaders, which draw nothing in game (and the HDR
+        portal sets when they aren't drawn as multiply)."""
+        return name.split(b"_")[1:2] == [b"tools"] or (
+            b"_distfalloff" in name and not self.fixes["portal_multiply"])
 
     def invisible_techset(self, name):
         """A stock alpha tested shader set of the same kind (wc_/mc_) with a color picture and
@@ -1438,6 +1647,13 @@ class Porter:
         if tsname and tsname.startswith(b","):     # already converted to a reference
             tsname = tsname[1:]
         tpl = self.material_templates.get(tsname)
+        # A stock material of the same name and shader set: its own render state (culling,
+        # draw order), not that of another material that happens to share the shader set.
+        same = self.library.get(("Material", name)) or self.common_materials.get(("Material", name))
+        if isinstance(same, dict) and tsname and self.fixes["stock_material_state"]:
+            sts = deref(same.get("@", {}).get(("techniqueSet", ())))
+            if isinstance(sts, dict) and (asset_name(sts) or b"").lstrip(b",") == tsname:
+                tpl = same
         if tpl is None and tsname:
             # No stock file given has this shader set: use the closest one that is there.
             near = self.nearest_techset(tsname)
@@ -1769,9 +1985,12 @@ class Porter:
                           "these stock 360 maps: %s)" % (want or "(none)", side, pick[2], want,
                                                          ", ".join(_team_maps(arena, want)) or "?"))
             used.append(pick)
+        self.pick_card_pictures(x_refs)
         for n, r, team in used:
             self._pick_team(r, team)
         for n, r, team in used:
+            self._copy_picked(r)
+        for n, r in x_refs:         # titles and emblems from a map no team came from
             self._copy_picked(r)
         # The 360 only knows the teams of its own maps (mp/basemaps.arena); set them in the
         # map's script so the game uses the assets copied in.
@@ -1794,6 +2013,55 @@ class Porter:
         need = TEAM_ASSETS[team]
         names = set(("xmodel", m.encode()) for m in need["models"]) | \
             set(("material", m.encode()) for m in need["materials"])
+        self._pick(src, names)
+
+    def pick_card_pictures(self, x_refs):
+        """Pick the calling card titles and emblems (cardtitle_*, cardicon_* materials) a stock
+        map carries: in a match the game draws them from the map's own copy, not ui_mp's. They
+        come as stock maps have them, their pixels streamed from the console's imagefile*.pak, so
+        they cost the map next to no memory, and mw2tex's Build updates them in converted maps
+        as it does in stock ones (custom titles and emblems, without converting again)."""
+        have = set((e[0], _name(e[1])) for e in self.root["assets"] if isinstance(e[1], dict))
+        for n, r in x_refs:
+            base = os.path.splitext(os.path.basename(n))[0].lower()
+            if not base.startswith("mp_") or base.endswith("_load"):
+                continue
+            names = set(("material", _name(e[1])) for e in r["assets"]
+                        if e[0] == "material" and isinstance(e[1], dict)
+                        and (_name(e[1]) or b"").startswith((b"cardtitle_", b"cardicon_"))) - have
+            if names:
+                self._pick(r, names)
+                self.log("  titles and emblems: %d from %s" % (len(names), os.path.basename(n)))
+                return
+        self.warn("no stock map given carries the calling card titles and emblems; they show as "
+                  "missing in matches")
+
+    def cards_to_pak(self):
+        """Point the copied titles and emblems at their fixed slots in imagefile8.pak (mw2tex's
+        cardslots.json), so changing titles and emblems later only means writing that pak anew
+        (mw2tex Build does), never this map. Returns how many pictures use it."""
+        import mw2tex
+        by = {(s["name"], s["level"]): s for s in mw2tex.load_card_slots()}
+        count = 0
+        for o in iter_objects(self.root["assets"]):
+            if not (isinstance(o, dict) and o.get("_asset") == "GfxImage" and "_pak" in o):
+                continue
+            name = (asset_name(o) or b"").decode("latin-1").lower()
+            if not mw2tex.is_card(name):
+                continue
+            hit = False
+            o["_pak"] = list(o["_pak"])     # its own list: the stock tree's stays as it was
+            for k, st in enumerate(o.get("streams") or []):
+                s = by.get((name, k))
+                if s and st["width"] and (s["width"], s["height"]) == (st["width"], st["height"]):
+                    o["_pak"][k] = (mw2tex.CARD_PAK, s["start"], s["end"])
+                    hit = True
+            count += hit
+        self.log("  titles and emblems: %d come from imagefile%d.pak" % (count, mw2tex.CARD_PAK))
+        return count
+
+    def _pick(self, src, names):
+        """Pick src's asset list entries named (type, name), with every entry they point into."""
         ents = src["assets"]
         pos = {id(e): i for i, e in enumerate(ents)}
         owner = {}
@@ -1831,12 +2099,18 @@ class Porter:
         ents = src["assets"]
         new = [ents[i] for i in sorted(sel)]
         self.localize(new)
-        # Bone names are indexes into the file's script string list: move them to ours.
+        self.remap_bones(new, src["script_strings"])
+        self.root["assets"][:0] = new
+
+    def remap_bones(self, new, theirs):
+        """Bone names are indexes into the file's script string list (theirs: the stock file's):
+        move them to ours. Left as they were, they named whatever string had that number
+        here, or one past the end of the list (the game then failed with "MT_GetSize: max
+        allocation exceeded ... for script usage")."""
         ss = self.root.get("script_strings")
         if ss is None:
             ss = self.root["script_strings"] = [None]
         where = {(s.b if isinstance(s, Str) else None): k for k, s in enumerate(ss)}
-        theirs = src["script_strings"]
         for o in iter_objects(new):
             if isinstance(o, dict) and o.get("_asset") == "XModel":
                 lf = o.get("@", {}).get(("boneNames", ()))
@@ -1853,7 +2127,6 @@ class Porter:
                         ss.append(Str(b))
                     out.append(where[b])
                 lf.raw = struct.pack(lf.E + "%dH" % lf.n, *out)
-        self.root["assets"][:0] = new
 
 
 def _name(d):
@@ -1863,6 +2136,13 @@ def _name(d):
     if isinstance(c, Ref) and isinstance(c.target, Str) and c.rel == 0:
         c = c.target
     return c.b if isinstance(c, Str) else None
+
+
+def _set_name(d, b):
+    ch = d.get("@", {})
+    if ("name", ()) not in ch and isinstance(d.get("info"), dict):
+        ch = d["info"]["@"]
+    ch[("name", ())] = Str(b)
 
 
 def _rawfile_text(d):
@@ -1981,15 +2261,68 @@ def game_iwd_files(folder):
     return sorted(found, key=lambda p: os.path.relpath(p, folder).lower())
 
 
+def effect_index(root):
+    """{name: effect} of a file's own effects (listed in its asset list)."""
+    out = {}
+    for e in root["assets"]:
+        if e[0] == "fx" and isinstance(e[1], dict):
+            n = _name(e[1])
+            if n and not n.startswith(b","):
+                out.setdefault(n, e[1])
+    return out
+
+
+def effect_donors(root, ref_roots, candidates, log=print, most=2):
+    """Stock 360 maps (of candidates) to read as well for the map's effects that the stock
+    files already read don't have: at most `most`, those carrying the most of them."""
+    have = set()
+    for r in ref_roots:
+        have.update(effect_index(r))
+    want = set(_name(e[1]) for e in root["assets"] if e[0] == "fx" and isinstance(e[1], dict)) - have
+    want.discard(None)
+    if not want or not candidates:
+        return []
+    hits = {}
+    for p in candidates:
+        try:
+            ff, zone = mw2ff.read_fastfile(p)
+        except Exception:
+            continue
+        hits[p] = set(n for n in want if b"\0" + n + b"\0" in zone)
+    out = []
+    while len(out) < most:
+        best = max(hits, key=lambda p: (len(hits[p] & want), p not in out), default=None)
+        if best is None or best in out or not hits[best] & want:
+            break
+        out.append(best)
+        want -= hits[best]
+    return out
+
+
 def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None,
-         game_iwds=(), texture_budget=0):
+         game_iwds=(), texture_budget=0, card_pak=False, fx_paths=(), fixes=None):
     """loaded: {path: tree} of stock files already read (load_stock), to reuse.
-    game_iwds: the PC game's .iwd files, for pictures the map's own .iwd doesn't have."""
+    game_iwds: the PC game's .iwd files, for pictures the map's own .iwd doesn't have.
+    fx_paths: stock 360 maps to take the map's effects from (those carrying the most of them
+    are read too). fixes: {name: bool} of FIXES (default all on)."""
+    fixes = fix_set(fixes)
+    if not fixes["texture_budget"]:
+        texture_budget = 0
     ff, zone, root = load_tree(pc_path)
     if ff.platform != "pc":
         raise PortError("%s is not a PC fastfile" % pc_path)
     refs = []
     loaded = {} if loaded is None else loaded
+    ref_paths = list(ref_paths)
+    if fx_paths and fixes["stock_effects"]:
+        for p in ref_paths:
+            if p not in loaded:
+                log("reading stock 360 file %s" % os.path.basename(p))
+                loaded[p] = load_stock(p)
+        extra = effect_donors(root, [loaded[p] for p in ref_paths if os.path.splitext(
+            os.path.basename(p))[0].lower() not in RESIDENT],
+                              [p for p in fx_paths if p not in ref_paths], log)
+        ref_paths += extra
     for p in ref_paths:
         if p not in loaded:
             log("reading stock 360 file %s" % os.path.basename(p))
@@ -2001,10 +2334,16 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         iwd_path = [iwd_path]
     iwd = [zipfile.ZipFile(p) for p in iwd_path]
     log("converting %s" % os.path.basename(pc_path))
-    porter = Porter(root, refs, iwd, log, [zipfile.ZipFile(p) for p in game_iwds], texture_budget)
+    porter = Porter(root, refs, iwd, log, [zipfile.ZipFile(p) for p in game_iwds], texture_budget,
+                    fixes)
+    off = [k for k, v in fixes.items() if not v]
+    if off:
+        log("  fixes switched off: %s" % ", ".join(off))
     porter.convert()
     if porter.map_name:
         porter.add_teams(refs, map_teams(pc_path, teams))
+        if card_pak:
+            porter.cards_to_pak()
     xs = schema_mod.load("xbox")
     w = tree.TreeWriter(root, xs, keep_fixes=False)
     w.map_rel = lambda r: map_rel(r, porter.P, porter.X)
@@ -2016,7 +2355,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
 
 
 def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
-             texture_budget=TEXTURE_BUDGET_MB):
+             texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None):
     """Convert a PC map (its .ff, and _load.ff / .iwd / .arena next to it when there) into
     out_dir, picking what it needs from the stock 360 files given: code_post_gfx_mp.ff, a
     stock map (render settings, shaders) and the stock maps that carry the map's teams.
@@ -2062,7 +2401,7 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
             out = os.path.join(out_dir, name + "_load.ff")
             try:
                 port(base + "_load.ff", out, iwd, [cpg, template, load_ref], log, loaded=loaded,
-                     game_iwds=game_iwds)
+                     game_iwds=game_iwds, fixes=fixes)
                 written.append(out)
             except (ValueError, PortError, mw2ff.zone_mod.ZoneError) as e:
                 # The map works without it: the game shows a plain loading screen.
@@ -2073,9 +2412,57 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
                     % (name, e, head.hex(" ")))
     out = os.path.join(out_dir, name + ".ff")
     port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded, game_iwds=game_iwds,
-         texture_budget=texture_budget)
+         texture_budget=texture_budget, card_pak=bool(card_ui), fx_paths=maps, fixes=fixes)
     written.append(out)
+    if card_ui:
+        # card_ui: a ui_mp.ff (mw2tex's built one, or the stock one) to fill the slots from.
+        import mw2tex
+        written.append(mw2tex.write_card_pak(card_ui, out_dir, log=log))
     return written
+
+
+def port_map_variants(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
+                      texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None):
+    """The map as port_map makes it with the fixes given, plus one test variant per fix that
+    is on, with just that fix switched off: out_dir/variants/no_<fix>/. One batch of files to
+    try on the console, to find which fix helps or hurts. Returns the paths written; a
+    variant that fails to convert doesn't stop the others."""
+    fixes = fix_set(fixes)
+    written = port_map(pc_path, out_dir, stock_paths, teams, log, game_iwds, texture_budget,
+                       card_ui, fixes)
+    labels = {k: label for k, label, _ in FIXES}
+    for k in [k for k, v in fixes.items() if v]:
+        log("")
+        log("===== test variant: %s switched off =====" % labels[k])
+        vdir = os.path.join(out_dir, "variants", "no_" + k)
+        try:
+            # Titles and emblems: the pak written next to the main file serves every variant.
+            files = [f for f in port_map(pc_path, vdir, stock_paths, teams, log, game_iwds,
+                                         texture_budget, None, dict(fixes, **{k: False}))
+                     if not f.endswith(".pak")]
+        except (PortError, mw2ff.zone_mod.ZoneError, ValueError) as e:
+            log("  variant no_%s stopped: %s" % (k, e))
+            continue
+        if all(_same_file(f, os.path.join(out_dir, os.path.basename(f))) for f in files):
+            # The fix changes nothing in this map: no point trying the variant.
+            for f in files:
+                os.remove(f)
+            try:
+                os.rmdir(vdir)
+            except OSError:
+                pass
+            log("  no_%s: the same as the main file (this fix changes nothing in this map), "
+                "so it's left out" % k)
+            continue
+        written += files
+    return written
+
+
+def _same_file(a, b):
+    if not (os.path.exists(a) and os.path.exists(b)) or os.path.getsize(a) != os.path.getsize(b):
+        return False
+    with open(a, "rb") as fa, open(b, "rb") as fb:
+        return fa.read() == fb.read()
 
 
 def reserve_callback_block(zone, porter):
@@ -2166,11 +2553,16 @@ def main(argv):
     ap.add_argument("--ref360", nargs="*", default=[])
     ap.add_argument("--texture-budget", type=int, default=TEXTURE_BUDGET_MB, metavar="MB",
                     help="picture memory to stay within, in MB (0: no limit; default %(default)s)")
+    ap.add_argument("--card-pak", action="store_true",
+                    help="titles and emblems from fixed slots in imagefile8.pak (see mw2tex cardpak)")
     ap.add_argument("--teams", nargs=2, metavar=("ALLIES", "AXIS"),
                     help="teams to use (default: from the map's .arena next to the .ff)")
+    ap.add_argument("--fix-off", action="append", default=[], metavar="FIX",
+                    choices=[k for k, _, _ in FIXES],
+                    help="switch a fix off (repeatable): " + ", ".join(k for k, _, _ in FIXES))
     a = ap.parse_args(argv)
     port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams, game_iwds=game_iwd_files(a.game),
-         texture_budget=a.texture_budget)
+         texture_budget=a.texture_budget, card_pak=a.card_pak, fixes=fix_set(off=a.fix_off))
 
 
 if __name__ == "__main__":
