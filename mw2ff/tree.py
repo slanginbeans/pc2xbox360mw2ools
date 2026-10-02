@@ -157,8 +157,9 @@ def _set_nav(d, name, idx, value):
 # ================================================================ reading
 
 class TreeReader(zone_mod.Reader):
-    def __init__(self, zone, sch=None):
+    def __init__(self, zone, sch=None, lenient=False):
         super().__init__(zone, sch)
+        self.lenient = lenient    # keep going past what can be read but not written back
         self.codec = codec_mod.Codec(self.s)
         self.reg = {}        # id(inst) -> (inst, dict)
         self.locs = []       # (block, offset, size, object, element type or size)
@@ -200,7 +201,12 @@ class TreeReader(zone_mod.Reader):
             return
         if at_start:
             if isinstance(inst.buf, zone_mod.ZBA) and not len(inst.buf):
-                raise ZoneError("%s: unions streamed member by member aren't supported yet" % inst.info.name)
+                if not self.lenient:
+                    raise ZoneError("%s: unions streamed member by member aren't supported yet" % inst.info.name)
+                # Only for files that are looked things up in, never written (an animation's
+                # translation data): the walk stays in step, the union itself isn't kept.
+                self.reg[id(inst)] = (inst, {})
+                return
             raw = bytes(inst.buf[inst.off:])
             d = self._decode(inst.info.ctype, raw)
             self.locs.append((inst.where[0], inst.where[1], len(raw), d, inst.info.ctype))
@@ -442,8 +448,8 @@ class TreeReader(zone_mod.Reader):
                 i -= 1
 
 
-def read_tree(zone, sch):
-    r = TreeReader(zone, sch)
+def read_tree(zone, sch, lenient=False):
+    r = TreeReader(zone, sch, lenient)
     r.walk()
     if r.pos != len(zone):
         raise ZoneError("walk stopped at %d of %d bytes" % (r.pos, len(zone)))

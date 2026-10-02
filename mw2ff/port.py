@@ -606,12 +606,19 @@ class Porter:
         # Assets stock maps only name (",name"): the game has them loaded from its always-loaded
         # files (common_mp, ...) whenever a map loads, so a ported map can name them too.
         self.named = set()
+        self.common_materials = {}      # common_mp's materials: render state templates only
         for name, root in x_refs:
             idx = asset_index(root)
             base = os.path.splitext(os.path.basename(name))[0]
             for k, v in idx.items():
                 if k[1].startswith(b","):
                     self.named.add((k[0], k[1][1:]))
+                    continue
+                if base == "common_mp":
+                    # Not used by name: only what a map's own materials (heat distortion, ...)
+                    # need a stock material of the same shader set for.
+                    if k[0] == "Material":
+                        self.common_materials.setdefault(k, v)
                     continue
                 if base in RESIDENT:
                     self.resident.setdefault(k, v)
@@ -630,7 +637,8 @@ class Porter:
                 self.lightmap_templates.setdefault(n.rsplit(b"_", 1)[-1], v)
         # Stock 360 materials by the techset they use (render state templates).
         self.material_templates = {}
-        for (typ, n), v in list(self.library.items()) + list(self.resident.items()):
+        for (typ, n), v in (list(self.library.items()) + list(self.resident.items())
+                            + list(self.common_materials.items())):
             if typ != "Material":
                 continue
             ts = deref(v.get("@", {}).get(("techniqueSet", ())))
@@ -1755,7 +1763,10 @@ def load_stock(path):
     imagefile*.pak files marked with its container entries ("_pak")."""
     import mw2tex
     ff, zone = mw2ff.read_fastfile(path)
-    root, r = tree.read_tree(zone, mw2ff.schema_for(ff.platform))
+    # The always-loaded files (common_mp) are only looked things up in: animation data, which
+    # can't be read back out of the tree, may be left rough there.
+    resident = os.path.splitext(os.path.basename(path))[0].lower() == "common_mp"
+    root, r = tree.read_tree(zone, mw2ff.schema_for(ff.platform), lenient=resident)
     with contextlib.redirect_stdout(io.StringIO()):
         f = mw2tex.FastFile(path)
     paks = {i["offset"]: k for k, i in enumerate(x for x in f.images if x["pak"])}
@@ -1847,10 +1858,16 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=())
     loaded = {}
     log("reading stock 360 file code_post_gfx_mp.ff")
     loaded[cpg] = load_stock(cpg)
+    # The game always has common_mp loaded too: its materials (heat distortion, ...) are the
+    # render state templates for a ported map's own materials of those shader sets.
+    common = stock.get("common_mp.ff")
+    if common is None:
+        log("  note: common_mp.ff isn't next to the stock maps, so the materials only it carries "
+            "(heat distortion, ...) can't be used")
     arena = next((_rawfile_text(e[1]) for e in loaded[cpg]["assets"]
                   if e[0] == "rawfile" and _name(e[1]) == b"mp/basemaps.arena"), b"")
     want = map_teams(pc_path, teams)
-    refs = [cpg, template]
+    refs = [cpg] + ([common] if common else []) + [template]
     for team in want:
         carriers = set(_team_maps(arena, team.lower()))
         donor = next((p for p in maps if os.path.splitext(os.path.basename(p))[0].lower() in carriers), None)
