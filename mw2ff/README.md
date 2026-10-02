@@ -68,7 +68,10 @@ at fixed places in `imagefile8.pak` (written next to it, filled from `ui_mp.ff`:
 `mw2tex_out` when it's there). After you change titles or emblems in mw2tex, its Build writes a new
 `imagefile8.pak`: copy that and `ui_mp.ff` to the console, and the maps show them without being converted
 or copied again. **Patch stock maps** does the same for every stock `mp_*.ff` in the work folder (only
-their picture table changes; the copies go in `mw2port_out\stock`). Not tried on a console yet.
+their picture table changes; the copies go in `mw2port_out\stock`). **Build imagefile8.pak** writes just
+the pak to `mw2port_out`, without converting anything. "Fill imagefile8.pak from" picks the source: your
+titles and emblems (mw2tex's built `ui_mp.ff`, else the stock one) or always the game's default ones (the
+stock `ui_mp.ff`). Not tried on a console yet.
 
 From a command prompt: `python port.py <pc map.ff> <out.ff> --iwd <map.iwd> --ref360
 code_post_gfx_mp.ff mp_favela.ff [more stock maps] [--teams ALLIES AXIS]`.

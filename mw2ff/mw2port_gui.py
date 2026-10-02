@@ -48,7 +48,8 @@ job = {"running": False, "map": None, "log": [], "done": False, "error": None, "
 
 
 def settings():
-    base = {"card_pak": False, "variants": False, "fixes": dict(port_mod.DEFAULT_FIXES)}
+    base = {"card_pak": False, "card_source": "auto", "variants": False,
+            "fixes": dict(port_mod.DEFAULT_FIXES)}
     try:
         with open(SETTINGS) as fh:
             s = dict(base, **json.load(fh))
@@ -64,6 +65,8 @@ def save_settings(req):
     for k in ("card_pak", "variants"):
         if k in req:
             s[k] = bool(req[k])
+    if req.get("card_source") in ("auto", "stock"):
+        s["card_source"] = req["card_source"]
     for k, v in (req.get("fixes") or {}).items():
         if k in s["fixes"]:
             s["fixes"][k] = bool(v)
@@ -73,9 +76,13 @@ def save_settings(req):
 
 
 def card_ui():
-    """The ui_mp.ff the title/emblem slots are filled from: mw2tex's built one (your titles and
-    emblems), else the stock one in the work folder; None if neither is there."""
-    for p in (os.path.join(TEX_OUT, "ui_mp.ff"), os.path.join(FOLDER, "ui_mp.ff")):
+    """The ui_mp.ff the title/emblem slots are filled from: with the "auto" source mw2tex's
+    built one (your titles and emblems), else the stock one in the work folder; with "stock"
+    always the stock one (the game's default titles and emblems). None if it isn't there."""
+    stock = os.path.join(FOLDER, "ui_mp.ff")
+    if settings().get("card_source") == "stock":
+        return stock if os.path.exists(stock) else None
+    for p in (os.path.join(TEX_OUT, "ui_mp.ff"), stock):
         if os.path.exists(p):
             return p
     return None
@@ -249,6 +256,35 @@ def _patch_stock():
         job["done"] = True
 
 
+def _build_card_pak():
+    import mw2tex
+    try:
+        ui = card_ui()
+        if ui is None:
+            raise port_mod.PortError("needs ui_mp.ff (from the console) in the work folder")
+        os.makedirs(OUT_DIR, exist_ok=True)
+        _log("Filling the title and emblem slots from %s..." % os.path.relpath(ui, FOLDER))
+        pak = mw2tex.write_card_pak(ui, OUT_DIR, log=_log)
+        job["files"].append(os.path.relpath(pak, FOLDER))
+        _log("")
+        _log("Done. Copy %s to _codxe\\zone\\ on the console (next to the maps that point at it)."
+             % os.path.relpath(pak, FOLDER))
+    except Exception as e:  # noqa: BLE001
+        job["error"] = "%s: %s" % (type(e).__name__, e) if not isinstance(e, port_mod.PortError) else str(e)
+        _log("Stopped: %s" % job["error"])
+    finally:
+        job["running"] = False
+        job["done"] = True
+
+
+def build_card_pak(req):
+    if job["running"]:
+        raise ValueError("something is already running")
+    job.update(running=True, map="imagefile8.pak", log=[], done=False, error=None, files=[])
+    threading.Thread(target=_build_card_pak, daemon=True).start()
+    return {"ok": True}
+
+
 def patch_stock(req):
     if job["running"]:
         raise ValueError("something is already running")
@@ -326,6 +362,9 @@ def handle(method, path, body):
             if path == "/api/patch":
                 with lock:
                     return 200, patch_stock(req), None
+            if path == "/api/cardpak":
+                with lock:
+                    return 200, build_card_pak(req), None
         return 404, {"error": "not found"}, None
     except (ValueError, OSError) as e:
         return 400, {"error": str(e)}, None
@@ -379,6 +418,12 @@ A team comes from a stock 360 map that has it, so that map's .ff has to be in yo
 titles or emblems in mw2tex, its Build writes a new <code>imagefile8.pak</code>; copy it (and ui_mp.ff) to the console and
 the maps show the new ones without being converted or copied again. Needs <code>ui_mp.ff</code> in the work folder
 (mw2tex's built one in mw2tex_out is used when it's there).</span></span></label>
+<p>Fill <code>imagefile8.pak</code> from: <select id="cardSource">
+<option value="auto">your titles and emblems (mw2tex's built ui_mp.ff), else the default ones</option>
+<option value="stock">the default titles and emblems (the stock ui_mp.ff)</option></select></p>
+<p><button id="cardPakBuild">Build imagefile8.pak</button> <span class="dim">Writes just the pak to <code>mw2port_out</code>,
+without converting a map. Maps converted with the box above ticked (and patched stock maps) take their titles and emblems
+from it.</span></p>
 <p><button id="patch">Patch stock maps</button> <span class="dim">Does the same for every stock <code>mp_*.ff</code> in the work
 folder: the patched copies and <code>imagefile8.pak</code> go in <code>mw2port_out\stock</code>. Only their picture table changes.</span></p>
 <p id="cardInfo" class="dim"></p></section>
@@ -417,14 +462,14 @@ function renderMaps(){if(!S.maps.length){$("#maps").innerHTML=`<p class="warn">N
 function renderFixes(){$("#fixes").innerHTML=S.fixes.map(f=>`<label class="toggle" style="margin:6px 0"><input type="checkbox" class="fix" data-k="${f.id}"${S.settings.fixes[f.id]?" checked":""}><span><b>${esc(f.label)}</b> <code class="dim">${f.id}</code><br><span class="dim">${esc(f.help)}</span></span></label>`).join("");
  document.querySelectorAll(".fix").forEach(c=>c.onchange=async()=>{try{S.settings=await api("/api/settings",{fixes:{[c.dataset.k]:c.checked}})}catch(e){alert(e.message)}});
  $("#variants").checked=!!S.settings.variants}
-function renderCards(){$("#cardPak").checked=!!S.settings.card_pak;
+function renderCards(){$("#cardPak").checked=!!S.settings.card_pak;$("#cardSource").value=S.settings.card_source||"auto";
  $("#cardInfo").innerHTML=S.ui?`Filled from <code>${esc(S.ui)}</code>.`:`<span class="warn">No ui_mp.ff in the work folder or mw2tex_out yet: copy it from the console.</span>`}
 function renderTeams(){const m=S.maps.find(x=>x.path===pick);if(!m){$("#teams").innerHTML=`<span class="dim">Pick a map first.</span>`;return}
  const c=chosen[m.path]||m.teams;
  $("#teams").innerHTML=`<label>Allies</label><select id="allies">${teamOpts(c[0])}</select><label>Axis</label><select id="axis">${teamOpts(c[1])}</select>`;
  const save=()=>chosen[m.path]=[$("#allies").value,$("#axis").value];$("#allies").onchange=save;$("#axis").onchange=save}
 function renderJob(){const j=S.job;const n=ticked.size;$("#convert").textContent=n>1?"Convert "+n+" maps":"Convert";
- $("#convert").disabled=j.running||(!pick&&!n)||S.missing.length>0;$("#patch").disabled=j.running||!S.ui||!S.stock_maps;
+ $("#convert").disabled=j.running||(!pick&&!n)||S.missing.length>0;$("#patch").disabled=j.running||!S.ui||!S.stock_maps;$("#cardPakBuild").disabled=j.running||!S.ui;
  $("#state").textContent=j.running?"Converting "+j.map+"...":(j.error?"Stopped.":(j.done?"Done.":""));
  $("#state").className=j.error?"bad":(j.done&&!j.running?"ok":"dim");
  if(S.log.length){const l=$("#log");const end=l.scrollTop+l.clientHeight>=l.scrollHeight-8;l.textContent=S.log.join("\n");l.className="";if(end)l.scrollTop=l.scrollHeight}
@@ -439,6 +484,8 @@ $("#convert").onclick=async()=>{const list=ticked.size?S.maps.filter(x=>ticked.h
 $("#tickAll").onclick=()=>{S.maps.forEach(m=>ticked.add(m.path));renderMaps();renderJob()};
 $("#tickNone").onclick=()=>{ticked.clear();renderMaps();renderJob()};
 $("#cardPak").onchange=async e=>{try{S.settings=await api("/api/settings",{card_pak:e.target.checked})}catch(err){alert(err.message)}};
+$("#cardSource").onchange=async e=>{try{S.settings=await api("/api/settings",{card_source:e.target.value});load()}catch(err){alert(err.message)}};
+$("#cardPakBuild").onclick=async()=>{try{await api("/api/cardpak",{});load(false)}catch(e){alert(e.message)}};
 $("#variants").onchange=async e=>{try{S.settings=await api("/api/settings",{variants:e.target.checked})}catch(err){alert(err.message)}};
 $("#patch").onclick=async()=>{if(!confirm("Write patched copies of every stock map ("+S.stock_maps+") and imagefile8.pak to mw2port_out\\stock?"))return;
  try{await api("/api/patch",{});load(false)}catch(e){alert(e.message)}};
