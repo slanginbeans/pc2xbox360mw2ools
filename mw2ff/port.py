@@ -95,6 +95,11 @@ FIXES = [
     ("draw_distance_cap", "Cap model draw distance (test)",
      "Every static model's draw distance is capped at %d units (mp_backlot: about 960 models in "
      "range from a typical point instead of 2,670). Off by default; for the same test." % 1200),
+    ("skip_lod0", "Skip closest detail level (test)",
+     "Converted models with more than one detail level never use their closest one (LOD0): its "
+     "switch distance becomes 0, so the next level shows from up close. Off by default. For "
+     "testing whether LOD0 is what the 360 fails to draw (mp_backlot's cover vanishes within its "
+     "LOD0 range, 250-900 units, and shows further away)."),
     ("hide_tool_surfaces", "Hide tool surfaces",
      "Radiant tool shaders (clip, caulk, ...) get a see-through stand-in so they draw nothing."),
     ("portal_multiply", "HDR portals as multiply",
@@ -102,7 +107,7 @@ FIXES = [
      "multiply shader that leaves the picture as it is. Off: they are hidden like tool surfaces."),
 ]
 # Off unless switched on: stock_effects (mp_backlot never loaded with it).
-DEFAULT_OFF = {"stock_effects", "hide_foliage", "draw_distance_cap"}
+DEFAULT_OFF = {"stock_effects", "hide_foliage", "draw_distance_cap", "skip_lod0"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
@@ -1143,6 +1148,8 @@ class Porter:
             self.warn("shader set %s isn't in the stock files given, so %s is used"
                       % (a.decode(), b.decode()))
         self.rename_clashes()
+        if self.test_counts.get("skip_lod0"):
+            self.log("  test: %d models skip their closest detail level" % self.test_counts["skip_lod0"])
         if self.test_counts.get("foliage"):
             self.log("  test: %d foliage models hidden" % self.test_counts["foliage"])
         if self.test_counts.get("capped"):
@@ -1477,6 +1484,10 @@ class Porter:
         d["himipRadii"] = "follow" if n else None
         if n:
             d["@"][("himipRadii", ())] = Leaf(m.type, n, struct.pack(">%dH" % n, *[HIMIP_RADIUS] * n), ">")
+        if self.fixes["skip_lod0"] and (d.get("numLods") or 0) > 1 and d.get("lodInfo"):
+            # The game takes the first detail level whose distance is beyond the camera's.
+            d["lodInfo"][0]["dist"] = 0.0
+            self.test_counts["skip_lod0"] = self.test_counts.get("skip_lod0", 0) + 1
         # Each detail level's partBits and surfs: stock 360 models always hold 0 and null here
         # (the game fills them in when it loads the model); the PC file has them set.
         for li in (d.get("lodInfo") or []) if self.fixes["model_lods"] else []:
