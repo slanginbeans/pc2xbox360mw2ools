@@ -1769,9 +1769,12 @@ class Porter:
                           "these stock 360 maps: %s)" % (want or "(none)", side, pick[2], want,
                                                          ", ".join(_team_maps(arena, want)) or "?"))
             used.append(pick)
+        self.pick_card_pictures(x_refs)
         for n, r, team in used:
             self._pick_team(r, team)
         for n, r, team in used:
+            self._copy_picked(r)
+        for n, r in x_refs:         # titles and emblems from a map no team came from
             self._copy_picked(r)
         # The 360 only knows the teams of its own maps (mp/basemaps.arena); set them in the
         # map's script so the game uses the assets copied in.
@@ -1794,6 +1797,31 @@ class Porter:
         need = TEAM_ASSETS[team]
         names = set(("xmodel", m.encode()) for m in need["models"]) | \
             set(("material", m.encode()) for m in need["materials"])
+        self._pick(src, names)
+
+    def pick_card_pictures(self, x_refs):
+        """Pick the calling card titles and emblems (cardtitle_*, cardicon_* materials) a stock
+        map carries: in a match the game draws them from the map's own copy, not ui_mp's. They
+        come as stock maps have them, their pixels streamed from the console's imagefile*.pak, so
+        they cost the map next to no memory, and mw2tex's Build updates them in converted maps
+        as it does in stock ones (custom titles and emblems, without converting again)."""
+        have = set((e[0], _name(e[1])) for e in self.root["assets"] if isinstance(e[1], dict))
+        for n, r in x_refs:
+            base = os.path.splitext(os.path.basename(n))[0].lower()
+            if not base.startswith("mp_") or base.endswith("_load"):
+                continue
+            names = set(("material", _name(e[1])) for e in r["assets"]
+                        if e[0] == "material" and isinstance(e[1], dict)
+                        and (_name(e[1]) or b"").startswith((b"cardtitle_", b"cardicon_"))) - have
+            if names:
+                self._pick(r, names)
+                self.log("  titles and emblems: %d from %s" % (len(names), os.path.basename(n)))
+                return
+        self.warn("no stock map given carries the calling card titles and emblems; they show as "
+                  "missing in matches")
+
+    def _pick(self, src, names):
+        """Pick src's asset list entries named (type, name), with every entry they point into."""
         ents = src["assets"]
         pos = {id(e): i for i, e in enumerate(ents)}
         owner = {}
