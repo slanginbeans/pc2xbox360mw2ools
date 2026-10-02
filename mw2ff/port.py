@@ -2489,10 +2489,18 @@ def stock_cache_save(path, root, log=None):
                 err.append(e)
 
         # Pickling follows the tree's nesting: give it room (its own thread, a big stack).
+        # Windows takes at most 256 MB; the depth allowed leaves the stack room to spare.
         limit, old = sys.getrecursionlimit(), threading.stack_size()
         try:
-            threading.stack_size(512 << 20)
-            sys.setrecursionlimit(max(limit, 500000))
+            for size, depth in ((256 << 20, 500000), (64 << 20, 120000)):
+                try:
+                    threading.stack_size(size)
+                    break
+                except ValueError:
+                    continue
+            else:
+                raise ValueError("no room for a big stack here")
+            sys.setrecursionlimit(max(limit, depth))
             t = threading.Thread(target=dump)
             t.start()
             t.join()
