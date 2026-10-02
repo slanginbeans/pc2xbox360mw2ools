@@ -106,6 +106,8 @@ with `--fix-off NAME` (repeatable). All are on by default:
 | `model_lods` | Model detail levels' partBits and surfs written as stock files have them (0 and empty) |
 | `stock_material_state` | A material a stock file also has takes that material's culling and draw order |
 | `tree_model_bounds` | Culling tree boxes grow to enclose the static models they list (CoD4 ports list models sticking out of their box, which vanish as you turn) |
+| `map_effects` | Keep the effects the map's createfx script places (off: left out, its ambient sounds stay; for testing, e.g. the dust haze) |
+| `map_fog` | Keep the map's distance fog (off: its `setExpFog` calls are commented out) |
 | `hide_tool_surfaces` | Radiant tool shaders (clip, caulk, ...) draw nothing |
 | `portal_multiply` | HDR portal sheets drawn with a multiply shader (off: hidden like tool surfaces) |
 
