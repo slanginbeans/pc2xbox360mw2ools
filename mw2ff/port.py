@@ -2573,20 +2573,27 @@ def main(argv):
         run()
         return
     import cProfile
-    import pstats
     prof = cProfile.Profile()
     try:
         prof.runcall(run)
     finally:
-        out = os.path.splitext(a.out_ff)[0] + ".prof"
-        prof.dump_stats(out)
-        st = pstats.Stats(prof)
-        st.strip_dirs()
-        print("\n===== most time including what they call =====")
-        st.sort_stats("cumulative").print_stats(a.profile)
-        print("===== most time in the function itself =====")
-        st.sort_stats("tottime").print_stats(a.profile)
-        print("full profile: %s (open with python -m pstats)" % out)
+        print(profile_report(prof, os.path.splitext(a.out_ff)[0] + ".prof", a.profile))
+
+
+def profile_report(prof, path, n=30):
+    """Saves a cProfile.Profile's timings to path and returns the n functions that took the
+    most time, as text: by time including what they call, and by their own time."""
+    import pstats
+    prof.dump_stats(path)
+    text = io.StringIO()
+    st = pstats.Stats(prof, stream=text)
+    st.strip_dirs()
+    text.write("\n===== most time including what they call =====\n")
+    st.sort_stats("cumulative").print_stats(n)
+    text.write("===== most time in the function itself =====\n")
+    st.sort_stats("tottime").print_stats(n)
+    text.write("full profile: %s (open with python -m pstats)\n" % path)
+    return text.getvalue()
 
 
 if __name__ == "__main__":
