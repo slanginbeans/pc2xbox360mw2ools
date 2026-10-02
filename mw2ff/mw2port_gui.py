@@ -55,8 +55,8 @@ def settings():
             s = dict(base, **json.load(fh))
     except (OSError, ValueError):
         s = base
-    # Fixes added since the file was saved start on; ones no longer known are dropped.
-    s["fixes"] = {k: bool(s.get("fixes", {}).get(k, True)) for k in port_mod.DEFAULT_FIXES}
+    # Fixes added since the file was saved start as their default; unknown ones are dropped.
+    s["fixes"] = {k: bool(s.get("fixes", {}).get(k, v)) for k, v in port_mod.DEFAULT_FIXES.items()}
     return s
 
 

@@ -65,8 +65,8 @@ FIXES = [
      "(mp_backlot ran out of memory without it, and froze on the loading screen at 80 MB)."),
     ("stock_effects", "Stock 360 effects",
      "Effects a stock 360 map also has (dust, car glass, fires) come from it instead of being "
-     "converted: the converted dust drew a yellow haze. mp_backlot failed to load with it "
-     "(MT_GetSize: max allocation exceeded ... for script usage)."),
+     "converted: the converted dust drew a yellow haze. Off by default: mp_backlot never loaded "
+     "with it (MT_GetSize: max allocation exceeded ... for script usage)."),
     ("surface_bounds", "Surface culling radius",
      "Fill in the 360-only number every world surface carries (its culling radius and texture "
      "density), worked out from stock mp_rust. Converted maps used to leave it 0."),
@@ -80,17 +80,27 @@ FIXES = [
      "Each culling tree node's box grows to enclose every static model it lists, as in stock 360 "
      "maps (mp_rust: all of them). CoD4 ports (mp_backlot: 471 of 3,619 models, up to 537 units "
      "out) list models that stick out of their node, which the 360 then skips as you turn."),
+    ("map_effects", "Map effects",
+     "Keep the effects the map's createfx script places (mp_backlot: 32, its blowing dust among "
+     "them). Off: they are left out of the script (its ambient sounds stay), to see whether "
+     "they are behind a problem such as the yellow haze."),
+    ("map_fog", "Map fog",
+     "Keep the map's distance fog (setExpFog in its scripts; mp_backlot's is yellow). Off: the "
+     "calls are commented out."),
     ("hide_tool_surfaces", "Hide tool surfaces",
      "Radiant tool shaders (clip, caulk, ...) get a see-through stand-in so they draw nothing."),
     ("portal_multiply", "HDR portals as multiply",
      "The white HDR portal sheets in doorways and windows (wc_unlit_distfalloff_*) use a "
      "multiply shader that leaves the picture as it is. Off: they are hidden like tool surfaces."),
 ]
-DEFAULT_FIXES = {k: True for k, _, _ in FIXES}
+# Off unless switched on: stock_effects (mp_backlot never loaded with it).
+DEFAULT_OFF = {"stock_effects"}
+DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
 
 def fix_set(fixes=None, off=()):
-    """All fixes on, as given in fixes ({name: bool}), with those named in off switched off."""
+    """The default fixes (all on but DEFAULT_OFF), as given in fixes ({name: bool}), with those
+    named in off switched off."""
     out = dict(DEFAULT_FIXES)
     for k, v in (fixes or {}).items():
         if k not in out:
@@ -1019,6 +1029,9 @@ class Porter:
         for e in ents:
             if e[0] == "rawfile" and isinstance(e[1], dict) and _is_builder_signature(e[1]):
                 _set_rawfile_text(e[1], b"")
+            elif e[0] == "rawfile" and isinstance(e[1], dict) and \
+                    (not self.fixes["map_effects"] or not self.fixes["map_fog"]):
+                self.edit_script(e[1])
         gfx = next((e[1] for e in ents if e[0] == "gfx_map" and isinstance(e[1], dict)), {})
         self.map_name = re.sub(rb"^maps/mp/|\.d3dbsp$", b"", _name(gfx) or b"")
         self.world_checksum = next((e[1].get("checksum", 0) for e in ents
@@ -1114,6 +1127,38 @@ class Porter:
         ss = self.root.get("script_strings")
         self.root["platform"] = "xbox"
         return self.root
+
+    def edit_script(self, d):
+        """Test switches that take things out of the map's scripts: the effects its createfx
+        script places (map_effects off) and its distance fog (map_fog off)."""
+        name = (_name(d) or b"").decode("latin-1")
+        if not name.endswith(".gsc"):
+            return
+        text = _rawfile_text(d).decode("latin-1")
+        new = text
+        if not self.fixes["map_effects"] and name.startswith("maps/createfx/"):
+            # "ent = createOneshotEffect( ... );" and the "ent.v[...] = ...;" lines after it.
+            # Sounds (createLoopSound) stay.
+            out, skip, n = [], False, 0
+            for line in new.split("\n"):
+                st = line.strip()
+                if re.match(r"ent\s*=\s*create(OneshotEffect|LoopEffect|Exploder)\b", st):
+                    skip = True
+                    n += 1
+                    continue
+                if skip and (st.startswith("ent.") or st.startswith("ent ") and "=" in st and "create" not in st):
+                    continue
+                skip = False
+                out.append(line)
+            new = "\n".join(out)
+            if n:
+                self.log("  test: %d effects left out of %s" % (n, name))
+        if not self.fixes["map_fog"]:
+            new, n = re.subn(r"(?im)^([ \t]*)(setExpFog\w*[ \t]*\(.*\)[ \t]*;)", r"\1// \2", new)
+            if n:
+                self.log("  test: fog switched off in %s" % name)
+        if new != text:
+            _set_rawfile_text(d, new.encode("latin-1"))
 
     def stock_effects(self, ents):
         """Effects a stock 360 file given has under the same name come from there (with their
@@ -2796,6 +2841,10 @@ def main(argv):
     ap.add_argument("--fix-off", action="append", default=[], metavar="FIX",
                     choices=[k for k, _, _ in FIXES],
                     help="switch a fix off (repeatable): " + ", ".join(k for k, _, _ in FIXES))
+    ap.add_argument("--fix-on", action="append", default=[], metavar="FIX",
+                    choices=[k for k, _, _ in FIXES],
+                    help="switch a fix on that is off by default (repeatable): "
+                    + ", ".join(sorted(DEFAULT_OFF)))
     ap.add_argument("--profile", nargs="?", const=30, type=int, metavar="N",
                     help="time the conversion: print the N functions taking the most time "
                          "(default 30) and save the full profile next to the output as .prof")
@@ -2803,7 +2852,7 @@ def main(argv):
 
     def run():
         port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams, game_iwds=game_iwd_files(a.game),
-             texture_budget=a.texture_budget, card_pak=a.card_pak, fixes=fix_set(off=a.fix_off))
+             texture_budget=a.texture_budget, card_pak=a.card_pak, fixes=fix_set({k: True for k in a.fix_on}, off=a.fix_off))
 
     if a.profile is None:
         run()
