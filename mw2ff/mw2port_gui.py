@@ -75,12 +75,12 @@ def save_settings(req):
     return s
 
 
-def card_ui():
+def card_ui(s=None):
     """The ui_mp.ff the title/emblem slots are filled from: with the "auto" source mw2tex's
     built one (your titles and emblems), else the stock one in the work folder; with "stock"
     always the stock one (the game's default titles and emblems). None if it isn't there."""
     stock = os.path.join(FOLDER, "ui_mp.ff")
-    if settings().get("card_source") == "stock":
+    if (s or settings()).get("card_source") == "stock":
         return stock if os.path.exists(stock) else None
     for p in (os.path.join(TEX_OUT, "ui_mp.ff"), stock):
         if os.path.exists(p):
@@ -169,11 +169,10 @@ def _log(msg):
     job["log"].append(str(msg))
 
 
-def _convert_one(pc_path, teams):
-    """Converts one map; returns (files written, error or None)."""
+def _convert_one(pc_path, teams, s):
+    """Converts one map with settings s; returns (files written, error or None)."""
     name = os.path.splitext(os.path.basename(pc_path))[0]
-    s = settings()
-    ui = card_ui() if s["card_pak"] else None
+    ui = card_ui(s) if s["card_pak"] else None
     make = port_mod.port_map_variants if s["variants"] else port_mod.port_map
     out_dir = os.path.join(OUT_DIR, name)
 
@@ -206,8 +205,10 @@ def _convert_one(pc_path, teams):
         return [], "%s: %s" % (type(e).__name__, e)
 
 
-def _run(items):
-    """Converts the maps one after another; a map that fails doesn't stop the others."""
+def _run(items, s):
+    """Converts the maps one after another, every one with the settings s (as they were when
+    Convert was pressed: ticking boxes during a batch doesn't change it); a map that fails
+    doesn't stop the others."""
     failed = []
     try:
         for i, (m, teams) in enumerate(items):
@@ -217,7 +218,7 @@ def _run(items):
                 _log("===== %s (%d of %d): %s vs %s =====" % (m["name"], i + 1, len(items),
                                                             TEAM_NAMES.get(teams[0], teams[0]),
                                                             TEAM_NAMES.get(teams[1], teams[1])))
-            files, error = _convert_one(m["path"], teams)
+            files, error = _convert_one(m["path"], teams, s)
             job["files"] += files
             if error:
                 failed.append((m["name"], error))
@@ -341,10 +342,10 @@ def convert(req):
     if s["variants"]:
         _log("Also building a test variant per fix that is on (with just that fix off), in "
              "mw2port_out\\<map>\\variants. That takes a few minutes per variant.")
-    if settings()["card_pak"]:
+    if s["card_pak"]:
         _log("Titles and emblems: from imagefile8.pak (filled from %s)." % (
-            os.path.relpath(card_ui(), FOLDER) if card_ui() else "nothing: no ui_mp.ff in the work folder"))
-    threading.Thread(target=_run, args=(items,), daemon=True).start()
+            os.path.relpath(card_ui(s), FOLDER) if card_ui(s) else "nothing: no ui_mp.ff in the work folder"))
+    threading.Thread(target=_run, args=(items, s), daemon=True).start()
     return {"ok": True}
 
 

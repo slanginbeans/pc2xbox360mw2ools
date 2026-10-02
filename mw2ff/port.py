@@ -1026,6 +1026,7 @@ class Porter:
         # IW4x ZoneBuilder signs a file with a rawfile named after the zone: its text stored as
         # is, but marked compressed (compressedLen 42, len 0). The 360 would take it for a
         # zlib stream. Stock files have the same rawfile empty (0, 0, one zero byte).
+        self.tests_found = {"map_effects": 0, "map_fog": 0}
         for e in ents:
             if e[0] == "rawfile" and isinstance(e[1], dict) and _is_builder_signature(e[1]):
                 _set_rawfile_text(e[1], b"")
@@ -1034,6 +1035,14 @@ class Porter:
                 self.edit_script(e[1])
         gfx = next((e[1] for e in ents if e[0] == "gfx_map" and isinstance(e[1], dict)), {})
         self.map_name = re.sub(rb"^maps/mp/|\.d3dbsp$", b"", _name(gfx) or b"")
+        if gfx:
+            # The map itself (not its loading screen file): say when a test switch had nothing
+            # to take out, so every map in a batch shows what the switch did to it.
+            for k, what in (("map_effects", "effects in a createfx script"),
+                            ("map_fog", "setExpFog call in its scripts")):
+                if not self.fixes[k] and not self.tests_found[k]:
+                    self.log("  test: %s is off, but this map has no %s: nothing to take out"
+                             % (k, what))
         self.world_checksum = next((e[1].get("checksum", 0) for e in ents
                                     if e[0] == "gfx_map" and isinstance(e[1], dict)), 0)
         # Some PC files (a whole zone saved out: mp_raid) list the pieces of a model or shader set
@@ -1136,25 +1145,14 @@ class Porter:
             return
         text = _rawfile_text(d).decode("latin-1")
         new = text
-        if not self.fixes["map_effects"] and name.startswith("maps/createfx/"):
-            # "ent = createOneshotEffect( ... );" and the "ent.v[...] = ...;" lines after it.
-            # Sounds (createLoopSound) stay.
-            out, skip, n = [], False, 0
-            for line in new.split("\n"):
-                st = line.strip()
-                if re.match(r"ent\s*=\s*create(OneshotEffect|LoopEffect|Exploder)\b", st):
-                    skip = True
-                    n += 1
-                    continue
-                if skip and (st.startswith("ent.") or st.startswith("ent ") and "=" in st and "create" not in st):
-                    continue
-                skip = False
-                out.append(line)
-            new = "\n".join(out)
+        if not self.fixes["map_effects"] and "createfx/" in name:
+            new, n = strip_effects(new)
+            self.tests_found["map_effects"] += n
             if n:
                 self.log("  test: %d effects left out of %s" % (n, name))
         if not self.fixes["map_fog"]:
-            new, n = re.subn(r"(?im)^([ \t]*)(setExpFog\w*[ \t]*\(.*\)[ \t]*;)", r"\1// \2", new)
+            new, n = strip_fog(new)
+            self.tests_found["map_fog"] += n
             if n:
                 self.log("  test: fog switched off in %s" % name)
         if new != text:
@@ -2262,6 +2260,41 @@ def _rawfile_text(d):
     if d.get("compressedLen"):
         raw = zlib.decompress(raw[:d["compressedLen"]])
     return raw[:d["len"]]
+
+
+# createfx lines that place an effect: "ent = createOneshotEffect( ... );", also called by
+# its script's name (maps\mp\_utility::createOneshotEffect), as most MW2 and CoD4 maps do.
+_PLACE_FX = re.compile(r"ent\s*=\s*(?:[\w\\/]+::)?create(?:OneshotEffect|LoopEffect|Exploder)\b")
+# A setExpFog call at the start of a line, its arguments over one line or several.
+_FOG = re.compile(r'(?m)^([ \t]*)(setExpFog\w*[ \t]*\((?:[^;"]|"[^"]*")*?\)[ \t]*;)')
+
+
+def strip_effects(text):
+    """A createfx script without the effects it places: each "ent = create...Effect(...)" or
+    createExploder line and the "ent.v[...] = ...;" lines after it. Sounds
+    (createLoopSound, createIntervalSound) stay. Returns (text, effects taken out)."""
+    out, skip, n = [], False, 0
+    for line in text.split("\n"):
+        st = line.strip()
+        if _PLACE_FX.match(st):
+            skip = True
+            n += 1
+            continue
+        if skip and (st.startswith("ent.") or st.startswith("ent ") and "=" in st and "create" not in st):
+            continue
+        skip = False
+        out.append(line)
+    return "\n".join(out), n
+
+
+def strip_fog(text):
+    """A script with its setExpFog calls commented out, line by line (a call can span several).
+    Returns (text, calls commented out)."""
+    def comment(m):
+        lines = m.group(2).split("\n")
+        return m.group(1) + "// " + lines[0] + "".join(
+            "\n" + re.sub(r"^([ \t]*)", r"\1// ", x) for x in lines[1:])
+    return _FOG.subn(comment, text)
 
 
 def _is_builder_signature(d):
