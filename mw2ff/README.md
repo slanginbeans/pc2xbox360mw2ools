@@ -105,7 +105,7 @@ console as converted maps, the writer is at fault; if it plays like the stock ma
 
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
 Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
-with `--fix-off NAME` (repeatable). All are on by default except `stock_effects` and the test switches `hide_foliage`, `draw_distance_cap`, `skip_lod0`, `stock_models` and `one_room` (`--fix-on NAME`):
+with `--fix-off NAME` (repeatable). All are on by default except `stock_effects` and the test switches `hide_foliage`, `draw_distance_cap`, `skip_lod0`, `stock_models`, `one_room` and `plain_pictures` (`--fix-on NAME`):
 
 | Fix | What it does |
 |---|---|
@@ -122,6 +122,7 @@ with `--fix-off NAME` (repeatable). All are on by default except `stock_effects`
 | `skip_lod0` | Test, off by default: models with several detail levels never use the closest one (LOD0), to test whether LOD0 is what the 360 fails to draw |
 | `stock_models` | Test, off by default: static models a stock 360 file also has are drawn with the stock copy (do the converted models cause a problem?) |
 | `one_room` | Test, off by default: the map is treated as one room (each room's culling tree lists everything, no portals) |
+| `plain_pictures` | Test, off by default: the map's own 2D pictures become plain 16x16 ones (white / flat normal / black specular), to test the picture conversion |
 | `hide_tool_surfaces` | Radiant tool shaders (clip, caulk, ...) draw nothing |
 | `portal_multiply` | HDR portal sheets drawn with a multiply shader (off: hidden like tool surfaces) |
 

@@ -110,6 +110,11 @@ FIXES = [
      "every surface and static model, and the portals between rooms go. Off by default. If the "
      "flicker stops, the rooms and portals (which no stock map we have could be compared with) "
      "are at fault."),
+    ("plain_pictures", "Plain pictures (test)",
+     "Every picture the map brings (2D ones, not lightmaps, reflection probes or loading screens) "
+     "becomes a plain 16x16 one instead of being converted: white for colors, flat for normal "
+     "maps, black for specular. Off by default. If flicker or missing textures stop, the picture "
+     "conversion (tiling, mip levels, headers) is at fault."),
     ("hide_tool_surfaces", "Hide tool surfaces",
      "Radiant tool shaders (clip, caulk, ...) get a see-through stand-in so they draw nothing."),
     ("portal_multiply", "HDR portals as multiply",
@@ -118,7 +123,7 @@ FIXES = [
 ]
 # Off unless switched on: stock_effects (mp_backlot never loaded with it).
 DEFAULT_OFF = {"stock_effects", "hide_foliage", "draw_distance_cap", "skip_lod0", "stock_models",
-               "one_room"}
+               "one_room", "plain_pictures"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
@@ -1166,6 +1171,8 @@ class Porter:
             self.warn("shader set %s isn't in the stock files given, so %s is used"
                       % (a.decode(), b.decode()))
         self.rename_clashes()
+        if self.test_counts.get("plain"):
+            self.log("  test: %d pictures made plain" % self.test_counts["plain"])
         if self.test_counts.get("skip_lod0"):
             self.log("  test: %d models skip their closest detail level" % self.test_counts["skip_lod0"])
         if self.test_counts.get("foliage"):
@@ -1849,6 +1856,11 @@ class Porter:
         # .iwd carries a copy: a second asset with the name would replace the resident one.
         if ("GfxImage", name) in self.resident and (name.startswith(b"$") or not self.in_iwd(name)):
             return self._replace(d, self.reference("GfxImage", name))
+        if self.fixes["plain_pictures"] and d.get("mapType") == 3 and \
+                not name.startswith((b"*", b"$", b"loadscreen")):
+            self.plain_picture(d, name)
+            self.done.add(id(d))
+            return True
         tex = d.get("texture", {})
         ld = tex.get("@", {}).get(("loadDef", ())) if isinstance(tex, dict) else None
         if isinstance(ld, dict) and ld.get("resourceSize"):
@@ -2007,6 +2019,16 @@ class Porter:
         if semantic == 8 or name.endswith((b"_spc", b"_s")):
             return b"$black"
         return None
+
+    def plain_picture(self, d, name):
+        """Test switch plain_pictures: image dict d becomes a plain 16x16 picture of its kind
+        (white color, flat normal map, black specular) instead of the map's own."""
+        kind = self.stand_in(d, name)
+        color = {b"$identitynormalmap": 0x841F, b"$black": 0x0000}.get(kind, 0xFFFF)  # RGB565
+        block = struct.pack("<HHI", color, color, 0)        # DXT1, one color
+        self.images.build(d, "DXT1", 16, 16, [block * 16])
+        d["category"] = 3
+        self.test_counts["plain"] = self.test_counts.get("plain", 0) + 1
 
     def magenta(self, d, name=None):
         """Make image dict d a small plain magenta picture (placeholder)."""
