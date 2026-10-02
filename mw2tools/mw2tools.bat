@@ -7,14 +7,19 @@ rem     mw2tools\app\      the tools themselves, updated from GitHub each time y
 rem The first time, it moves your .ff files, output folders and old launchers from this
 rem folder into mw2tools (old launchers go in mw2tools\old_launchers).
 rem Set NOUPDATE=1 below to skip the update check (for example when you're offline).
+rem The tools run in the background with an icon by the clock (left click opens them, right
+rem click quits) and this window closes. To keep the window instead, put an empty file named
+rem keep_window.txt in the mw2tools folder (this file is replaced by updates; that one stays).
 setlocal
 set BRANCH=main
 set REPO=https://github.com/slanginbeans/pc2xbox360mw2ools.git
 set NOUPDATE=
+set TRAY=1
 cd /d "%~dp0"
 title mw2tools
 set HOME_DIR=%~dp0mw2tools
 set APP=%HOME_DIR%\app
+if exist "%HOME_DIR%\keep_window.txt" set TRAY=
 
 rem "call" everywhere below: python can be a .bat/.cmd shim (pyenv, for example), and running one
 rem without call would end this launcher silently.
@@ -106,8 +111,24 @@ if errorlevel 1 (
 )
 echo.
 echo Your .ff files go in: %HOME_DIR%
-echo Starting mw2tools. Leave this window open while you use it.
 cd /d "%HOME_DIR%"
+
+rem In the background: pythonw (Python without a window), from the same folder as python.
+if not defined TRAY goto window
+set PYW=
+for /f "delims=" %%e in ('call %PY% -c "import sys; print(sys.executable)" 2^>nul') do set "PYW=%%~dpepythonw.exe"
+if not defined PYW goto window
+if not exist "%PYW%" (
+    echo There's no pythonw.exe next to your Python, so mw2tools runs in this window.
+    goto window
+)
+echo Starting mw2tools in the background. Its icon is by the clock (behind the ^^ arrow): click it
+echo to open the tools, right-click it to quit. This window closes now.
+start "" "%PYW%" "%APP%\mw2tools\mw2tools_gui.py" --tray %*
+exit /b 0
+
+:window
+echo Starting mw2tools. Leave this window open while you use it.
 call %PY% "%APP%\mw2tools\mw2tools_gui.py" %*
 echo.
 echo mw2tools has stopped. If there's an error above, send it to Claude.

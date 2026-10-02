@@ -30,4 +30,21 @@ The first time, the launcher tidies up the folder it's in. It moves your `.ff` a
 `mw2tools`. Nothing is deleted, and nothing else in the folder is touched. Close any
 old tool windows first, because Windows can't move files that are in use.
 
-After an update, a newer `mw2tools.bat` replaces itself when you close its window.
+After an update, a newer `mw2tools.bat` replaces itself and starts straight away.
+
+## Running in the background
+
+After checking for updates, the launcher's window closes and the tools keep running in the
+background. Their icon (the Python logo) sits by the clock; Windows puts new icons among the
+hidden ones, behind the `^` arrow (drag it onto the taskbar to keep it in sight).
+
+- Click the icon to open the tools in your browser.
+- Right-click it for **Open mw2tools**, **Show log** (what the window used to show, also in
+  `mw2tools\mw2tools.log`) and **Quit mw2tools**. Quitting during a map conversion asks first.
+
+Starting `mw2tools.bat` again while the tools are running restarts them with any update it
+just downloaded. If a map conversion is running, that one keeps going and its page opens instead.
+
+To keep the old window instead, put an empty file named `keep_window.txt` in the `mw2tools`
+folder (next to your `.ff` files) and start `mw2tools.bat` again. Leave that window open while
+you use the tools. Delete the file to go back to the icon.
