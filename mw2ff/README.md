@@ -92,6 +92,15 @@ probes, map entities, scripts) and the two teams. Custom models, sounds and effe
 brings with it aren't converted yet. Pictures over 40 MB lose their top mip levels so the map
 fits in memory (`--texture-budget` from a command prompt).
 
+### Writer test
+
+**Rewrite stock map (test)** on the converter page (or `python port.py --rewrite-stock STOCK.ff OUT.ff`)
+writes a stock 360 map back out through the converter's own writer, converting nothing, into
+`mw2port_out\rewrite`. On stock mp_rust the zone comes out byte for byte the same as the stock one
+apart from two header sizes, set as they are for converted maps: the temp block (1,200 bytes, stock
+1,216) and the callback block (128 KB, stock 27 KB). If the rewritten map shows the same problems on the
+console as converted maps, the writer is at fault; if it plays like the stock map, it isn't.
+
 ### Fixes and test variants
 
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.

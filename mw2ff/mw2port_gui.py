@@ -156,6 +156,7 @@ def status():
     ui = card_ui()
     return {"folder": FOLDER, "in": IN_DIR, "out": OUT_DIR, "stock": names, "missing": missing,
             "game": game, "settings": settings(),
+            "stock_map_names": [os.path.basename(p) for p in stock_maps()],
             "fixes": [{"id": k, "label": label, "help": text} for k, label, text in port_mod.FIXES],
             "ui": os.path.relpath(ui, FOLDER) if ui else None, "stock_maps": len(stock_maps()),
             "maps": pc_maps(), "teams": team_list(stock),
@@ -301,6 +302,38 @@ def build_card_pak(req):
     return {"ok": True}
 
 
+def _rewrite(path):
+    try:
+        out = os.path.join(OUT_DIR, "rewrite")
+        os.makedirs(out, exist_ok=True)
+        dst = port_mod.rewrite_stock(path, os.path.join(out, os.path.basename(path)), log=_log)
+        job["files"].append(os.path.relpath(dst, FOLDER))
+        _log("")
+        _log("Done. Copy %s to _codxe\\zone\\ on the console and play that map. If it shows the same "
+             "flicker or missing textures as converted maps, the converter's writer is at fault; if it plays "
+             "like the stock map, the writer is fine. Delete it from _codxe\\zone\\ afterwards." % job["files"][-1])
+    except Exception as e:  # noqa: BLE001
+        job["error"] = "%s: %s" % (type(e).__name__, e)
+        _log(traceback.format_exc())
+        _log("Stopped: %s" % job["error"])
+    finally:
+        job["running"] = False
+        job["done"] = True
+
+
+def rewrite(req):
+    if job["running"]:
+        raise ValueError("something is already running")
+    maps = {os.path.basename(p): p for p in stock_maps()}
+    path = maps.get(req.get("map") or "")
+    if path is None:
+        raise ValueError("pick a stock map")
+    job.update(running=True, map="rewrite " + os.path.basename(path), log=[], done=False, error=None, files=[])
+    _log("Writing %s back out through the converter's writer (a few minutes)..." % os.path.basename(path))
+    threading.Thread(target=_rewrite, args=(path,), daemon=True).start()
+    return {"ok": True}
+
+
 def patch_stock(req):
     if job["running"]:
         raise ValueError("something is already running")
@@ -381,6 +414,9 @@ def handle(method, path, body):
             if path == "/api/patch":
                 with lock:
                     return 200, patch_stock(req), None
+            if path == "/api/rewrite":
+                with lock:
+                    return 200, rewrite(req), None
             if path == "/api/cardpak":
                 with lock:
                     return 200, build_card_pak(req), None
@@ -458,6 +494,11 @@ which fix is behind a problem. A few minutes per variant.</span></span></label>
 <span class="dim">When a map is done, the log lists the parts of the converter that took the longest (copy them to Claude
 to speed it up), and the full timings go in <code>mw2port_out\&lt;map&gt;\&lt;map&gt;.prof</code>. Converting is a little
 slower while it's timed; the files it makes are the same.</span></span></label></section>
+<section><h2>Writer test</h2>
+<p class="dim">Writes a stock 360 map back out through the converter's own writer, converting nothing, into
+<code>mw2port_out\rewrite</code>. Play it on the console: if it flickers or loses textures like converted maps do,
+the writer is at fault; if it plays like the stock map, the writer is fine.</p>
+<p><select id="rewriteMap"></select> <button id="rewriteBtn">Rewrite stock map (test)</button></p></section>
 <section><h2>3. Convert</h2>
 <p><button id="convert" class="primary" disabled>Convert</button> <button id="openOut">Open mw2port_out</button> <span id="state" class="dim"></span></p>
 <pre id="log" class="dim">Nothing converted yet.</pre></section>
@@ -485,6 +526,7 @@ function renderMaps(){if(!S.maps.length){$("#maps").innerHTML=`<p class="warn">N
 function renderFixes(){$("#fixes").innerHTML=S.fixes.map(f=>`<label class="toggle" style="margin:6px 0"><input type="checkbox" class="fix" data-k="${f.id}"${S.settings.fixes[f.id]?" checked":""}><span><b>${esc(f.label)}</b> <code class="dim">${f.id}</code><br><span class="dim">${esc(f.help)}</span></span></label>`).join("");
  document.querySelectorAll(".fix").forEach(c=>c.onchange=async()=>{try{S.settings=await api("/api/settings",{fixes:{[c.dataset.k]:c.checked}})}catch(e){alert(e.message)}});
  $("#variants").checked=!!S.settings.variants;$("#profile").checked=!!S.settings.profile}
+function renderRewrite(){const s=$("#rewriteMap");const keep=s.value;s.innerHTML=(S.stock_map_names||[]).map(n=>`<option${n===keep?" selected":""}>${esc(n)}</option>`).join("")||"<option value=''>no stock mp_*.ff here</option>"}
 function renderCards(){$("#cardPak").checked=!!S.settings.card_pak;$("#cardSource").value=S.settings.card_source||"auto";
  $("#cardInfo").innerHTML=S.ui?`Filled from <code>${esc(S.ui)}</code>.`:`<span class="warn">No ui_mp.ff in the work folder or mw2tex_out yet: copy it from the console.</span>`}
 function renderTeams(){const m=S.maps.find(x=>x.path===pick);if(!m){$("#teams").innerHTML=`<span class="dim">Pick a map first.</span>`;return}
@@ -492,12 +534,12 @@ function renderTeams(){const m=S.maps.find(x=>x.path===pick);if(!m){$("#teams").
  $("#teams").innerHTML=`<label>Allies</label><select id="allies">${teamOpts(c[0])}</select><label>Axis</label><select id="axis">${teamOpts(c[1])}</select>`;
  const save=()=>chosen[m.path]=[$("#allies").value,$("#axis").value];$("#allies").onchange=save;$("#axis").onchange=save}
 function renderJob(){const j=S.job;const n=ticked.size;$("#convert").textContent=n>1?"Convert "+n+" maps":"Convert";
- $("#convert").disabled=j.running||(!pick&&!n)||S.missing.length>0;$("#patch").disabled=j.running||!S.ui||!S.stock_maps;$("#cardPakBuild").disabled=j.running||!S.ui;
+ $("#convert").disabled=j.running||(!pick&&!n)||S.missing.length>0;$("#patch").disabled=j.running||!S.ui||!S.stock_maps;$("#rewriteBtn").disabled=j.running||!S.stock_maps;$("#cardPakBuild").disabled=j.running||!S.ui;
  $("#state").textContent=j.running?"Converting "+j.map+"...":(j.error?"Stopped.":(j.done?"Done.":""));
  $("#state").className=j.error?"bad":(j.done&&!j.running?"ok":"dim");
  if(S.log.length){const l=$("#log");const end=l.scrollTop+l.clientHeight>=l.scrollHeight-8;l.textContent=S.log.join("\n");l.className="";if(end)l.scrollTop=l.scrollHeight}
  clearTimeout(timer);if(j.running)timer=setTimeout(()=>load(false),1500)}
-async function load(all=true){try{S=await api("/api/status");if(all){renderStock();renderGame();renderMaps();renderTeams();renderCards();renderFixes()}renderJob()}catch(e){$("#state").textContent=e.message;$("#state").className="bad"}}
+async function load(all=true){try{S=await api("/api/status");if(all){renderStock();renderGame();renderMaps();renderTeams();renderCards();renderFixes();renderRewrite()}renderJob()}catch(e){$("#state").textContent=e.message;$("#state").className="bad"}}
 $("#refresh").onclick=()=>load();
 $("#openIn").onclick=()=>api("/api/open",{which:"in"}).then(()=>load()).catch(e=>alert(e.message));
 $("#openGame").onclick=()=>api("/api/open",{which:"game"}).then(()=>load()).catch(e=>alert(e.message));
@@ -509,6 +551,7 @@ $("#tickNone").onclick=()=>{ticked.clear();renderMaps();renderJob()};
 $("#cardPak").onchange=async e=>{try{S.settings=await api("/api/settings",{card_pak:e.target.checked})}catch(err){alert(err.message)}};
 $("#cardSource").onchange=async e=>{try{S.settings=await api("/api/settings",{card_source:e.target.value});load()}catch(err){alert(err.message)}};
 $("#cardPakBuild").onclick=async()=>{try{await api("/api/cardpak",{});load(false)}catch(e){alert(e.message)}};
+$("#rewriteBtn").onclick=async()=>{const m=$("#rewriteMap").value;if(!m)return;try{await api("/api/rewrite",{map:m});load(false)}catch(e){alert(e.message)}};
 $("#variants").onchange=async e=>{try{S.settings=await api("/api/settings",{variants:e.target.checked})}catch(err){alert(err.message)}};
 $("#profile").onchange=async e=>{try{S.settings=await api("/api/settings",{profile:e.target.checked})}catch(err){alert(err.message)}};
 $("#patch").onclick=async()=>{if(!confirm("Write patched copies of every stock map ("+S.stock_maps+") and imagefile8.pak to mw2port_out\\stock?"))return;
