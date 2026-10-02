@@ -715,7 +715,7 @@ class Porter:
             if len(plain) != 1:
                 raise PortError("don't know which member of union %s is in use" % tx.name)
             names = plain
-        b = bytearray(size)
+        b = bytearray(tx.size)      # the 360's union can be larger (StreamedSound has fileIndex)
         pm = {tree.mkey(tp, m): m for m in tp.members}
         for i, mx in enumerate(tx.members):
             k = tree.mkey(tx, mx)
