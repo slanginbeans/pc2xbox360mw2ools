@@ -351,6 +351,30 @@ def import_texts(in_dir, index, doc, blobs, sch):
     return notes
 
 
+MENU_SOUND_AT = "menuDef_t > soundName(single)"
+SILENT_SOUND = "null"   # code_post_gfx_mp's silent sound alias, always loaded
+
+
+def set_menu_music(src, dst, sound=SILENT_SOUND):
+    """Writes DST: fastfile SRC with every menu's music (menuDef_t.soundName; in ui_mp and
+    patch_mp only the main menu has one, music_mainmenu_mp) set to SOUND. The string can't be
+    dropped (the zone layout keeps its pieces), so the silent "null" alias takes its place.
+    Returns how many menus changed."""
+    ff, zone = read_fastfile(src)
+    r = walk(zone)
+    doc, blobs = decode(zone, r)
+    n = 0
+    for a in doc["assets"]:
+        for rec in a["records"]:
+            if rec.get("k") == "string" and rec.get("at", "").endswith(MENU_SOUND_AT) and rec["s"] != sound:
+                rec["s"] = sound
+                n += 1
+    if n:
+        zone = build(doc, blobs, relocate_mod.Layout.of(r), r.s)
+    write_container(bytearray(ff.raw[:ff.header_end + 8]), zone, dst)
+    return n
+
+
 def write_container(container, zone, path):
     """container: the original file up to and including its two size words (360), or its
     21-byte header (PC). The zone is recompressed and written unsigned, the same way mw2tex

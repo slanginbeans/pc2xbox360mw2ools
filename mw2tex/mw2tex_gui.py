@@ -58,6 +58,9 @@ MENU_GROUPS = ("*ui", "*screens", "*titles", "*emblems")  # only in menu files, 
 # Queued pictures, kept between runs (outside mw2tex_out, which goes to the console). The folder
 # name is from when only map pictures were kept there.
 MAP_CHANGES = os.path.join(FOLDER, "mw2tex_map_changes")
+SETTINGS_FILE = os.path.join(FOLDER, "mw2tex_settings.json")
+MUSIC_MARK = os.path.join(MAP_CHANGES, "menu_music.json")   # what the last Build did about it
+MUSIC_FILES = ("ui_mp.ff", "patch_mp.ff")   # both carry the main menu (patch_mp's is the one used)
 ff_cache = {}  # file name -> FastFile, the last two opened for previews
 
 # In-game names of the multiplayer maps, by file name.
@@ -747,14 +750,16 @@ def build():
     files) and every map, and packs the tables when they changed."""
     with mw2zone_gui.lock:
         table_edits = bool(mw2zone_gui.state["edits"])
-    if not state["pending"] and not state["queue"] and not table_edits and not read_map_changes() and not _built_files():
+    if not state["pending"] and not state["queue"] and not table_edits and not read_map_changes() \
+            and not _built_files() and not music_pending() and settings()["menu_music"]:
         raise ValueError("nothing to build yet: drop a picture on a texture or change a table first")
     log = []
     for name, item in sorted(dict(state["pending"], **{i["name"]: i for i in state["queue"].values()}).items()):
         if item.get("redirect"):
             r = item["redirect"]
             log.append("%s now shows %s instead of %s" % (r["id"], r["new"], r["old"]))
-    save_map_changes()
+    if state["ff_path"]:     # (nothing open: only the menu music setting to build)
+        save_map_changes()
     for item in state["pending"].values():
         item["saved"] = True
     state["queue"].clear()
@@ -767,6 +772,69 @@ def build():
     if not written:
         log.append("Nothing to write: no pictures are queued.")
     return {"log": log, "written": written, "folder": OUT_DIR}
+
+
+def settings():
+    try:
+        with open(SETTINGS_FILE) as fh:
+            return dict({"menu_music": True}, **json.load(fh))
+    except (OSError, ValueError):
+        return {"menu_music": True}
+
+
+def save_settings(req):
+    s = settings()
+    if "menu_music" in req:
+        s["menu_music"] = bool(req["menu_music"])
+    with open(SETTINGS_FILE, "w") as fh:
+        json.dump(s, fh)
+    return s
+
+
+def _music_mark():
+    try:
+        with open(MUSIC_MARK) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {"music": True, "files": []}
+
+
+def music_pending():
+    """The Menu music setting differs from what the last Build wrote."""
+    return settings()["menu_music"] != _music_mark()["music"]
+
+
+def apply_menu_music(log, built):
+    """Menu music off: ui_mp.ff and patch_mp.ff in mw2tex_out get the main menu's music swapped
+    for the silent "null" sound (the ones Build just made with your pictures, else copies of the
+    stock files). On again: the copies made only for this go. Returns the files written."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "mw2ff"))
+    import mw2ff
+    music = settings()["menu_music"]
+    mark = _music_mark()
+    written, ours = [], []
+    for name in MUSIC_FILES:
+        out = os.path.join(OUT_DIR, name)
+        if music:
+            if name in mark["files"] and name not in built and os.path.exists(out):
+                os.remove(out)
+                log.append("Menu music back on: %s removed from mw2tex_out. Delete it from _codxe\\zone\\ "
+                           "on the console too." % name)
+            continue
+        src = out if name in built else os.path.join(FOLDER, name)
+        if not os.path.exists(src):
+            log.append("Menu music: no %s in this folder, so it can't be changed (copy it here from the console)"
+                       % name)
+            continue
+        n = mw2ff.set_menu_music(src, out)
+        written.append(out)
+        if name not in built:
+            ours.append(name)
+        log.append("Menu music off: %s (%d menu%s now silent)" % (name, n, "" if n == 1 else "s"))
+    os.makedirs(MAP_CHANGES, exist_ok=True)
+    with open(MUSIC_MARK, "w") as fh:
+        json.dump({"music": music, "files": ours}, fh)
+    return written
 
 
 def _built_files():
@@ -841,6 +909,7 @@ def rebuild_all(log):
     os.makedirs(MAP_CHANGES, exist_ok=True)
     with open(os.path.join(MAP_CHANGES, "built.json"), "w") as fh:
         json.dump(sorted(built), fh)
+    written += apply_menu_music(log, built)
     if map_files():
         written += rebuild_maps(log)
     elif any(e["name"].lower().startswith(CARD_PREFIXES) for e in read_map_changes()):
@@ -908,7 +977,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "skipped": len(skipped_files()),
                                  "missing": ["imagefile%d.pak" % n for n in range(1, 5)
                                              if not os.path.exists(os.path.join(FOLDER, "imagefile%d.pak" % n))],
-                                 "open": os.path.basename(state["ff_path"]) if state["ff_path"] else None})
+                                 "open": os.path.basename(state["ff_path"]) if state["ff_path"] else None,
+                                 "menu_music": settings()["menu_music"], "music_pending": music_pending()})
             elif url.path == "/api/textures":
                 self.reply(200, {"textures": texture_list(), "pending": self.pending(), "tables": self.table_state()})
             elif url.path == "/api/plan":
@@ -1022,6 +1092,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.reply(200, {"textures": texture_list(), "tables": self.table_state()})
                 elif url.path == "/api/build":
                     self.reply(200, build())
+                elif url.path == "/api/settings":
+                    s = save_settings(json.loads(body or b"{}"))
+                    self.reply(200, dict(s, music_pending=music_pending()))
                 else:
                     self.reply(404, {"error": "not found"})
             except SystemExit as e:
@@ -1073,6 +1146,7 @@ dialog label.opt:has(input:checked){border-color:var(--accent)}dialog select{wid
   <input id="search" placeholder="Search textures, e.g. cardicon_ or camo">
   <div class="chips" id="chips"></div>
   <button id="clearBtn">Clear changes</button>
+  <label title="Off: Build writes ui_mp.ff and patch_mp.ff with the main menu's music silenced. Saved for every Build."><input type="checkbox" id="menuMusic" checked> Menu music</label>
   <button id="buildBtn" class="primary" disabled>Build</button>
 </header>
 <div class="info" id="info">Loading…</div>
@@ -1103,7 +1177,7 @@ function render(){chips();const g=$("#grid");g.innerHTML="";const list=visible()
  const key=$("#search").value+"|"+[...cats].join(",")+"|"+onlyUnused+onlyChanged+"|"+textures.length+"|"+$("#file").value;
  if(key!==lastKey){lastKey=key;limit=FIRST}  // a new search, filter or file starts again at the first 50
  shown=Math.min(list.length,limit);
- const n=Object.keys(pending).length+tables.changed.length;$("#buildBtn").disabled=!n;$("#buildBtn").textContent="Build"+(n?" ("+n+")":"");
+ const n=Object.keys(pending).length+tables.changed.length;$("#buildBtn").disabled=!n&&!musicPending;$("#buildBtn").textContent="Build"+(n?" ("+n+")":"");
  if(!textures.length){g.innerHTML='<div class="empty">Pick a fastfile above and press Open.</div>';return}
  if(!list.length){g.innerHTML='<div class="empty">No textures match.</div>';return}
  for(const t of list.slice(0,limit))g.appendChild(card(t));
@@ -1198,7 +1272,9 @@ async function choose(t,f){if(t.uses<2||pending[t.name]){try{await upload(t.name
    else{const j=await api("/api/upload?name="+encodeURIComponent(t.name)+"&filename="+encodeURIComponent(f.name)+"&only="+who.value+"&spare="+encodeURIComponent(spare.value),{method:"POST",body:f});
     pending=j.pending;textures=j.textures;tables=j.tables;render();toast("Queued "+f.name+" on "+j.redirect.new+"\n"+j.redirect.id+" now uses it (table "+j.redirect.table+", row "+(j.redirect.row+1)+"). The other "+(plan.uses.length-1)+" keep "+j.redirect.old+".","ok")}}catch(err){toast(err.message,"bad")}};
  d.returnValue="";d.showModal()}
-async function loadFiles(){const j=await api("/api/files");const s=$("#file");s.innerHTML="";if(!j.files.length){s.innerHTML="<option>no .ff files here</option>";$("#info").textContent="No multiplayer .ff files in "+j.folder+". Put your fastfiles (like ui_mp.ff and the mp_ maps) in that folder and reload this page.";return}
+var musicPending=false;
+$("#menuMusic").onchange=async e=>{try{const j=await api("/api/settings",{method:"POST",body:JSON.stringify({menu_music:e.target.checked})});musicPending=j.music_pending;toast(musicPending?"Menu music "+(j.menu_music?"on":"off")+": press Build to write it.":"Menu music setting saved.","ok")}catch(err){toast(err.message,"bad")}render()};
+async function loadFiles(){const j=await api("/api/files");$("#menuMusic").checked=j.menu_music!==false;musicPending=!!j.music_pending;const s=$("#file");s.innerHTML="";if(!j.files.length){s.innerHTML="<option>no .ff files here</option>";$("#info").textContent="No multiplayer .ff files in "+j.folder+". Put your fastfiles (like ui_mp.ff and the mp_ maps) in that folder and reload this page.";return}
  if(j.content>1){const g=el("optgroup",{label:"Groups"});if(j.maps>1)g.appendChild(el("option",{value:"*maps",textContent:"All maps ("+j.maps+")"}));
   for(const[k,label]of Object.entries(j.groups))if(k!=="*all")g.appendChild(el("option",{value:k,textContent:label}));
   g.appendChild(el("option",{value:"*all",textContent:"Everything ("+j.content+" files)"}));s.appendChild(g)}
@@ -1213,7 +1289,7 @@ $("#openBtn").onclick=async()=>{$("#openBtn").disabled=true;$("#openBtn").textCo
   +(Object.keys(pending).length?"\n"+Object.keys(pending).length+" queued picture"+(Object.keys(pending).length>1?"s":"")+" in this view (press Changed to see them).":"")+(j.elsewhere&&j.elsewhere.length?"\n"+j.elsewhere.length+" more queued in other files ("+j.elsewhere.slice(0,4).join(", ")+(j.elsewhere.length>4?"…":"")+"). Build writes them too; Clear changes drops them.":"")+(card&&!tables.file&&!allMaps?"\nPut code_post_gfx_mp.ff in this folder to see which titles and emblems use each picture.":""),"ok")}catch(e){toast(e.message,"bad")}$("#openBtn").disabled=false;$("#openBtn").textContent="Open"};
 $("#search").oninput=()=>render();
 $("#clearBtn").onclick=async()=>{if(!confirm("Clear all queued replacements, in every file?"))return;const j=await api("/api/remove",{method:"POST",body:JSON.stringify({all:true})});pending=j.pending;textures=j.textures;tables=j.tables;render()};
-$("#buildBtn").onclick=async()=>{const b=$("#buildBtn");b.disabled=true;b.textContent="Building…";try{const j=await api("/api/build",{method:"POST",body:"{}"});toast("Built:\n"+j.log.join("\n")+"\n\nWrote "+j.written.join(", ")+".\nCopy "+(j.written.length>1?"them":"it")+" to _codxe\\zone\\ on your console.","ok")}catch(e){toast(e.message,"bad")}try{tables=(await api("/api/textures")).tables}catch(e){}render()};
+$("#buildBtn").onclick=async()=>{const b=$("#buildBtn");b.disabled=true;b.textContent="Building…";try{const j=await api("/api/build",{method:"POST",body:"{}"});musicPending=false;toast("Built:\n"+j.log.join("\n")+"\n\nWrote "+j.written.join(", ")+".\nCopy "+(j.written.length>1?"them":"it")+" to _codxe\\zone\\ on your console.","ok")}catch(e){toast(e.message,"bad")}try{tables=(await api("/api/textures")).tables}catch(e){}render()};
 let depth=0;window.addEventListener("dragenter",e=>{if(e.dataTransfer.types.includes("Files")&&textures.length){depth++;$("#drop").style.display="flex"}});
 window.addEventListener("dragleave",()=>{if(--depth<=0){depth=0;$("#drop").style.display="none"}});
 window.addEventListener("dragover",e=>e.preventDefault());

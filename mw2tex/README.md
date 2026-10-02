@@ -164,6 +164,13 @@ To undo, delete the file from `_codxe\zone\`.
 - **Formats that can't be replaced yet** are marked on their card. Most textures are DXT1, DXT3 or DXT5,
   which all work.
 
+- **Menu music.** Untick **Menu music** next to Build (the setting is saved) and Build writes `ui_mp.ff`
+  and `patch_mp.ff` to `mw2tex_out` with the main menu's music swapped for the game's silent `null` sound.
+  It starts from the `ui_mp.ff` that Build just made with your pictures, otherwise from the stock files
+  in this folder (copy `patch_mp.ff` here from the console; its main menu is the one the game uses).
+  Copy both to `_codxe\zone\`. Tick it again and Build: the copies made only for this are removed from
+  `mw2tex_out` (delete them from the console too). Not tried on a console yet.
+
 ## 5. Commands
 
 Run these in PowerShell in your work folder. `out` is the folder the new files go in. Running more
