@@ -2961,6 +2961,23 @@ def reserve_callback_block(zone, porter):
     return bytes(zone)
 
 
+def rewrite_stock(path, out_path, log=print):
+    """Test: read a stock 360 file and write it back out through the converter's own writer and
+    container steps (TreeWriter, the callback block, the picture pak table), converting nothing.
+    If the rewritten file shows the same problems on the console as converted maps (flicker,
+    missing textures), the writer is at fault, not the conversion."""
+    log("reading %s" % os.path.basename(path))
+    root = load_stock(path)
+    w = tree.TreeWriter(root, schema_mod.load("xbox"), keep_fixes=False)
+    out = w.write()
+    holder = type("Root", (), {"root": root})()
+    out = reserve_callback_block(out, holder)
+    _write_x360(out, out_path, pak_table(out, out_path, root, w.starts))
+    log("wrote %s (%d bytes of zone; same bytes as the stock zone: %s)"
+        % (out_path, len(out), "yes" if out == mw2ff.read_fastfile(path)[1] else "no"))
+    return out_path
+
+
 def map_rel(r, P, X):
     t = r.t
     if not isinstance(t, Compound):
@@ -3019,8 +3036,11 @@ def pak_table(zone, out_path, root, starts):
 
 def main(argv):
     ap = argparse.ArgumentParser(description="Convert a PC fastfile to Xbox 360 TU6 layout")
-    ap.add_argument("pc_ff")
+    ap.add_argument("pc_ff", help="the PC map (with --rewrite-stock: a stock 360 file)")
     ap.add_argument("out_ff")
+    ap.add_argument("--rewrite-stock", action="store_true",
+                    help="test: write the stock 360 file pc_ff back out through the converter's "
+                    "writer, converting nothing")
     ap.add_argument("--iwd", nargs="*", default=[], help="the map's .iwd file(s)")
     ap.add_argument("--game", help="folder with the PC game's .iwd files (its main folder)")
     ap.add_argument("--ref360", nargs="*", default=[])
@@ -3041,6 +3061,9 @@ def main(argv):
                     help="time the conversion: print the N functions taking the most time "
                          "(default 30) and save the full profile next to the output as .prof")
     a = ap.parse_args(argv)
+    if a.rewrite_stock:
+        rewrite_stock(a.pc_ff, a.out_ff)
+        return
 
     def run():
         port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams, game_iwds=game_iwd_files(a.game),
