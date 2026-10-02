@@ -96,7 +96,7 @@ fits in memory (`--texture-budget` from a command prompt).
 
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
 Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
-with `--fix-off NAME` (repeatable). All are on by default:
+with `--fix-off NAME` (repeatable). All are on by default except `stock_effects` (`--fix-on stock_effects`):
 
 | Fix | What it does |
 |---|---|

@@ -65,8 +65,8 @@ FIXES = [
      "(mp_backlot ran out of memory without it, and froze on the loading screen at 80 MB)."),
     ("stock_effects", "Stock 360 effects",
      "Effects a stock 360 map also has (dust, car glass, fires) come from it instead of being "
-     "converted: the converted dust drew a yellow haze. mp_backlot failed to load with it "
-     "(MT_GetSize: max allocation exceeded ... for script usage)."),
+     "converted: the converted dust drew a yellow haze. Off by default: mp_backlot never loaded "
+     "with it (MT_GetSize: max allocation exceeded ... for script usage)."),
     ("surface_bounds", "Surface culling radius",
      "Fill in the 360-only number every world surface carries (its culling radius and texture "
      "density), worked out from stock mp_rust. Converted maps used to leave it 0."),
@@ -93,11 +93,14 @@ FIXES = [
      "The white HDR portal sheets in doorways and windows (wc_unlit_distfalloff_*) use a "
      "multiply shader that leaves the picture as it is. Off: they are hidden like tool surfaces."),
 ]
-DEFAULT_FIXES = {k: True for k, _, _ in FIXES}
+# Off unless switched on: stock_effects (mp_backlot never loaded with it).
+DEFAULT_OFF = {"stock_effects"}
+DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
 
 def fix_set(fixes=None, off=()):
-    """All fixes on, as given in fixes ({name: bool}), with those named in off switched off."""
+    """The default fixes (all on but DEFAULT_OFF), as given in fixes ({name: bool}), with those
+    named in off switched off."""
     out = dict(DEFAULT_FIXES)
     for k, v in (fixes or {}).items():
         if k not in out:
@@ -2838,6 +2841,10 @@ def main(argv):
     ap.add_argument("--fix-off", action="append", default=[], metavar="FIX",
                     choices=[k for k, _, _ in FIXES],
                     help="switch a fix off (repeatable): " + ", ".join(k for k, _, _ in FIXES))
+    ap.add_argument("--fix-on", action="append", default=[], metavar="FIX",
+                    choices=[k for k, _, _ in FIXES],
+                    help="switch a fix on that is off by default (repeatable): "
+                    + ", ".join(sorted(DEFAULT_OFF)))
     ap.add_argument("--profile", nargs="?", const=30, type=int, metavar="N",
                     help="time the conversion: print the N functions taking the most time "
                          "(default 30) and save the full profile next to the output as .prof")
@@ -2845,7 +2852,7 @@ def main(argv):
 
     def run():
         port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams, game_iwds=game_iwd_files(a.game),
-             texture_budget=a.texture_budget, card_pak=a.card_pak, fixes=fix_set(off=a.fix_off))
+             texture_budget=a.texture_budget, card_pak=a.card_pak, fixes=fix_set({k: True for k in a.fix_on}, off=a.fix_off))
 
     if a.profile is None:
         run()
