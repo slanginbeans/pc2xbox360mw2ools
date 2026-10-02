@@ -96,7 +96,7 @@ fits in memory (`--texture-budget` from a command prompt).
 
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
 Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
-with `--fix-off NAME` (repeatable). All are on by default except `stock_effects`, `hide_foliage` and `draw_distance_cap` (`--fix-on NAME`):
+with `--fix-off NAME` (repeatable). All are on by default except `stock_effects`, `hide_foliage`, `draw_distance_cap` and `skip_lod0` (`--fix-on NAME`):
 
 | Fix | What it does |
 |---|---|
@@ -110,6 +110,7 @@ with `--fix-off NAME` (repeatable). All are on by default except `stock_effects`
 | `map_fog` | Keep the map's distance fog (off: its `setExpFog` calls are commented out) |
 | `hide_foliage` | Test, off by default: foliage static models never show (to test whether too many models in view make the 360 drop some) |
 | `draw_distance_cap` | Test, off by default: every static model's draw distance capped at 1,200 units (same test) |
+| `skip_lod0` | Test, off by default: models with several detail levels never use the closest one (LOD0), to test whether LOD0 is what the 360 fails to draw |
 | `hide_tool_surfaces` | Radiant tool shaders (clip, caulk, ...) draw nothing |
 | `portal_multiply` | HDR portal sheets drawn with a multiply shader (off: hidden like tool surfaces) |
 
