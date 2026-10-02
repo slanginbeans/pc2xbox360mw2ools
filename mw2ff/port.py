@@ -23,6 +23,7 @@ the two platforms store differently are converted by the hooks below:
 import argparse
 import contextlib
 import io
+import math
 import os
 import re
 import struct
@@ -1303,6 +1304,26 @@ class Porter:
 
     def in_iwd(self, name):
         return name.decode().lower() in self.map_pictures
+
+    def pre_GfxStaticModelDrawInst(self, d, tp, tx):
+        """PC: placement {origin, axis[3][3], scale}; 360: origin and packedAxis[4], each axis
+        three signed 10-bit numbers (x 511, rounded; x, y, z from the low bits) and the scale as
+        a float (worked out from stock maps, whose clip map holds the same models with plain
+        axes: exact for 19,530 of 19,533 axes). Left zero, every static model drew nowhere
+        while its collision stayed."""
+        pl = d.pop("placement", None)
+        if not isinstance(pl, dict):
+            return None
+        d["origin"] = list(pl["origin"])
+        packed = []
+        for axis in pl["axis"]:
+            v = 0
+            for k, c in enumerate(axis):
+                v |= (int(math.floor(max(-1.0, min(1.0, c)) * 511 + 0.5)) & 0x3FF) << (10 * k)
+            packed.append(v)
+        packed.append(struct.unpack("<I", struct.pack("<f", pl["scale"]))[0])
+        d["packedAxis"] = packed
+        return None
 
     def pre_water_t(self, d, tp, tx):
         """The PC keeps a water surface's starting waves as one array of complex numbers (H0);
