@@ -57,6 +57,7 @@ TEXTURE_BUDGET_MB = 40
 # much more than the plain sum of the levels (mp_backlot: 90 MB counted, 115 MB in the block).
 TILING_PAD = 1.28
 LEVELS = 4      # pak table entries per picture
+COLOR_MAP, COLOR_MAP1 = 0xA0AB1041, 0xB60D1850     # texture table name hashes
 
 # Per team (mp/factionTable.csv + the character scripts in common_mp): the models and
 # icons a map carries for it. The 360 keeps these in each map's own file.
@@ -626,7 +627,7 @@ class Porter:
             base = os.path.splitext(os.path.basename(name))[0]
             if base not in RESIDENT:
                 for k, v in effect_index(root).items():
-                    self.stock_fx.setdefault(k, v)
+                    self.stock_fx.setdefault(k, (v, root))
             for k, v in idx.items():
                 if k[1].startswith(b","):
                     self.named.add((k[0], k[1][1:]))
@@ -1080,11 +1081,12 @@ class Porter:
             if e[0] != "fx" or not isinstance(e[1], dict):
                 continue
             name = _name(e[1])
-            src = self.stock_fx.get(name)
-            if src is None:
+            if name not in self.stock_fx:
                 continue
+            src, src_root = self.stock_fx[name]
             e[1]["@"][("name", ())] = Str(b"~pc/" + name)
             fx = self.copy_in(src)
+            self.remap_bones(fx, src_root["script_strings"])
             self.done.add(id(fx))
             new.append(tree.AssetEntry([e[0], fx]))
             self.stock_fx_used.append(fx)
@@ -1157,6 +1159,7 @@ class Porter:
                 self.moved_images.append(c)
 
     def post_GfxWorld(self, d, tx):
+        self.fill_surface_bounds(d)
         ch = d["@"]
         for key, c in list(ch.items()):
             t = deref(c) if isinstance(c, Ref) else None
@@ -1166,6 +1169,92 @@ class Porter:
                 self.moved_images = [m for m in self.moved_images if m is not t]
         if self.moved_images:
             raise PortError("a picture from the lightmap override is still needed elsewhere")
+
+    def fill_surface_bounds(self, world):
+        """GfxSurfaceBounds has two more words on the 360 (the PC has none of it): the first
+        is radius << 16 | colorMap density << 8 | colorMap1 density. Radius: the distance from
+        the bounds' middle to the surface's farthest vertex, rounded up (65535 at most). Density:
+        26 x picture width / (world units per texture repeat), the second for a blend
+        material's second color map, 0 without one. Worked out from stock mp_rust (radius exact
+        on 4803 of 5332 surfaces, 1 more than stock on the rest). Left 0, the game
+        took every surface for a point at its middle."""
+        def leaf(c):
+            if isinstance(c, Ref) and c.rel == 0:
+                c = c.target
+            return c if isinstance(c, Leaf) else None
+        draw, dpvs = world.get("draw"), world.get("dpvs")
+        if not (isinstance(draw, dict) and isinstance(dpvs, dict)):
+            return
+        vd = draw.get("vd")
+        verts = leaf(vd.get("@", {}).get(("vertices", ()))) if isinstance(vd, dict) else None
+        idx = leaf(draw.get("@", {}).get(("indices", ())))
+        surfs = dpvs.get("@", {}).get(("surfaces", ()))
+        surfs = surfs.target if isinstance(surfs, Ref) else surfs
+        bounds = leaf(dpvs.get("@", {}).get(("surfacesBounds", ())))
+        if verts is None or idx is None or not isinstance(surfs, list) or bounds is None:
+            self.warn("the world's surfaces get no culling radius (data not found)")
+            return
+        V, ve = verts.raw, verts.E
+        I = struct.unpack(idx.E + "%dH" % idx.n, idx.raw)
+        size = bounds.t.size
+        out = bytearray(bounds.raw)
+        widths = {}
+
+        def width(mat, hash_):
+            mat = deref(mat) if isinstance(mat, Ref) else mat
+            if not isinstance(mat, dict):
+                return 0
+            key = (id(mat), hash_)
+            if key not in widths:
+                w = 0
+                tt = mat.get("@", {}).get(("textureTable", ()))
+                for t in (tt if isinstance(tt, list) else []):
+                    if isinstance(t, dict) and t.get("nameHash") == hash_ and isinstance(t.get("u"), dict):
+                        img = deref(t["u"].get("@", {}).get(("image", ())))
+                        if isinstance(img, dict):
+                            w = img.get("width") or 0
+                            st = img.get("streams")
+                            if isinstance(st, list):
+                                w = max([w] + [x.get("width") or 0 for x in st if isinstance(x, dict)])
+                            # A picture the game has loaded (",name"): its size isn't here.
+                            if w <= 1:
+                                w = 512
+                widths[key] = w
+            return widths[key]
+
+        for k, s in enumerate(surfs[:bounds.n]):
+            if not isinstance(s, dict) or not isinstance(s.get("tris"), dict):
+                continue
+            t = s["tris"]
+            mid = struct.unpack_from(bounds.E + "3f", out, k * size)
+            base, fv = t["baseIndex"], t["firstVertex"]
+            tri = I[base:base + 3 * t["triCount"]]
+            r2 = 0.0
+            world_area = uv_area = 0.0
+            for j in range(0, len(tri) - 2, 3):
+                p, uv = [], []
+                for v in tri[j:j + 3]:
+                    o = (fv + v) * 44
+                    x = struct.unpack_from(ve + "3f", V, o)
+                    p.append(x)
+                    uv.append(struct.unpack_from(ve + "2f", V, o + 20))
+                    r2 = max(r2, sum((x[q] - mid[q]) ** 2 for q in range(3)))
+                a = [p[1][q] - p[0][q] for q in range(3)]
+                b = [p[2][q] - p[0][q] for q in range(3)]
+                cr = (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+                world_area += math.sqrt(sum(c * c for c in cr))
+                uv_area += abs((uv[1][0] - uv[0][0]) * (uv[2][1] - uv[0][1])
+                               - (uv[1][1] - uv[0][1]) * (uv[2][0] - uv[0][0]))
+            radius = min(65535, math.ceil(math.sqrt(r2)))
+            dens = []
+            for h in (COLOR_MAP, COLOR_MAP1):
+                w = width(s.get("@", {}).get(("material", ())), h)
+                if not w or not world_area or not uv_area or not all(map(math.isfinite, (world_area, uv_area))):
+                    dens.append(0)
+                    continue
+                dens.append(max(1, min(255, round(26 * w / math.sqrt(world_area / uv_area)))))
+            struct.pack_into(bounds.E + "I", out, k * size + 24, radius << 16 | dens[0] << 8 | dens[1])
+        bounds.raw = bytes(out)
 
     def post_FxGlassSystem(self, d, tx):
         """firstFreePiece is really a 16-bit number (then padding): 0xFFFF, "no free piece",
@@ -1945,12 +2034,18 @@ class Porter:
         ents = src["assets"]
         new = [ents[i] for i in sorted(sel)]
         self.localize(new)
-        # Bone names are indexes into the file's script string list: move them to ours.
+        self.remap_bones(new, src["script_strings"])
+        self.root["assets"][:0] = new
+
+    def remap_bones(self, new, theirs):
+        """Bone names are indexes into the file's script string list (theirs: the stock file's):
+        move them to ours. Left as they were, they named whatever string had that number
+        here, or one past the end of the list (the game then failed with "MT_GetSize: max
+        allocation exceeded ... for script usage")."""
         ss = self.root.get("script_strings")
         if ss is None:
             ss = self.root["script_strings"] = [None]
         where = {(s.b if isinstance(s, Str) else None): k for k, s in enumerate(ss)}
-        theirs = src["script_strings"]
         for o in iter_objects(new):
             if isinstance(o, dict) and o.get("_asset") == "XModel":
                 lf = o.get("@", {}).get(("boneNames", ()))
@@ -1967,7 +2062,6 @@ class Porter:
                         ss.append(Str(b))
                     out.append(where[b])
                 lf.raw = struct.pack(lf.E + "%dH" % lf.n, *out)
-        self.root["assets"][:0] = new
 
 
 def _name(d):
