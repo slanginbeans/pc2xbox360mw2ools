@@ -48,17 +48,25 @@ job = {"running": False, "map": None, "log": [], "done": False, "error": None, "
 
 
 def settings():
+    base = {"card_pak": False, "variants": False, "fixes": dict(port_mod.DEFAULT_FIXES)}
     try:
         with open(SETTINGS) as fh:
-            return dict({"card_pak": False}, **json.load(fh))
+            s = dict(base, **json.load(fh))
     except (OSError, ValueError):
-        return {"card_pak": False}
+        s = base
+    # Fixes added since the file was saved start on; ones no longer known are dropped.
+    s["fixes"] = {k: bool(s.get("fixes", {}).get(k, True)) for k in port_mod.DEFAULT_FIXES}
+    return s
 
 
 def save_settings(req):
     s = settings()
-    if "card_pak" in req:
-        s["card_pak"] = bool(req["card_pak"])
+    for k in ("card_pak", "variants"):
+        if k in req:
+            s[k] = bool(req[k])
+    for k, v in (req.get("fixes") or {}).items():
+        if k in s["fixes"]:
+            s["fixes"][k] = bool(v)
     with open(SETTINGS, "w") as fh:
         json.dump(s, fh)
     return s
@@ -141,6 +149,7 @@ def status():
     ui = card_ui()
     return {"folder": FOLDER, "in": IN_DIR, "out": OUT_DIR, "stock": names, "missing": missing,
             "game": game, "settings": settings(),
+            "fixes": [{"id": k, "label": label, "help": text} for k, label, text in port_mod.FIXES],
             "ui": os.path.relpath(ui, FOLDER) if ui else None, "stock_maps": len(stock_maps()),
             "maps": pc_maps(), "teams": team_list(stock),
             "job": {k: job[k] for k in ("running", "map", "done", "error", "files")},
@@ -156,10 +165,12 @@ def _log(msg):
 def _convert_one(pc_path, teams):
     """Converts one map; returns (files written, error or None)."""
     name = os.path.splitext(os.path.basename(pc_path))[0]
-    ui = card_ui() if settings()["card_pak"] else None
+    s = settings()
+    ui = card_ui() if s["card_pak"] else None
+    make = port_mod.port_map_variants if s["variants"] else port_mod.port_map
     try:
-        files = port_mod.port_map(pc_path, os.path.join(OUT_DIR, name), stock_files(), teams, _log,
-                                  port_mod.game_iwd_files(GAME_DIR), card_ui=ui)
+        files = make(pc_path, os.path.join(OUT_DIR, name), stock_files(), teams, _log,
+                     port_mod.game_iwd_files(GAME_DIR), card_ui=ui, fixes=s["fixes"])
         return [os.path.relpath(f, FOLDER) for f in files], None
     except port_mod.PortError as e:
         _log("Stopped: %s" % e)
@@ -272,6 +283,13 @@ def convert(req):
             m["name"], TEAM_NAMES.get(teams[0], teams[0]), TEAM_NAMES.get(teams[1], teams[1])))
     else:
         _log("Converting %d maps one after another (a few minutes each); keep this page open." % len(items))
+    s = settings()
+    off = [label for k, label, _ in port_mod.FIXES if not s["fixes"][k]]
+    if off:
+        _log("Fixes switched off: %s." % ", ".join(off))
+    if s["variants"]:
+        _log("Also building a test variant per fix that is on (with just that fix off), in "
+             "mw2port_out\\<map>\\variants. That takes a few minutes per variant.")
     if settings()["card_pak"]:
         _log("Titles and emblems: from imagefile8.pak (filled from %s)." % (
             os.path.relpath(card_ui(), FOLDER) if card_ui() else "nothing: no ui_mp.ff in the work folder"))
@@ -364,6 +382,14 @@ the maps show the new ones without being converted or copied again. Needs <code>
 <p><button id="patch">Patch stock maps</button> <span class="dim">Does the same for every stock <code>mp_*.ff</code> in the work
 folder: the patched copies and <code>imagefile8.pak</code> go in <code>mw2port_out\stock</code>. Only their picture table changes.</span></p>
 <p id="cardInfo" class="dim"></p></section>
+<section><h2>Fixes (for testing)</h2>
+<p class="dim">Each fix below changes how maps are converted. They are all on normally; untick one to convert
+without it, to see on the console whether it helps or hurts.</p>
+<div id="fixes"></div>
+<label class="toggle" style="margin-top:10px"><input type="checkbox" id="variants"><span><b>Also build test variants</b><br>
+<span class="dim">Besides the map itself, converts it once more for every fix that is ticked, with just that fix off,
+into <code>mw2port_out\&lt;map&gt;\variants\no_&lt;fix&gt;</code>. Try them one after another on the console to find
+which fix is behind a problem. A few minutes per variant.</span></span></label></section>
 <section><h2>3. Convert</h2>
 <p><button id="convert" class="primary" disabled>Convert</button> <button id="openOut">Open mw2port_out</button> <span id="state" class="dim"></span></p>
 <pre id="log" class="dim">Nothing converted yet.</pre></section>
@@ -388,6 +414,9 @@ function renderMaps(){if(!S.maps.length){$("#maps").innerHTML=`<p class="warn">N
  <span class="tag dim">${esc(m.where)}</span></div>`).join("");
  document.querySelectorAll(".map").forEach(d=>d.onclick=e=>{if(e.target.classList.contains("tick"))return;pick=d.dataset.p;renderMaps();renderTeams()});
  document.querySelectorAll(".tick").forEach(c=>c.onchange=()=>{c.checked?ticked.add(c.dataset.p):ticked.delete(c.dataset.p);renderJob()})}
+function renderFixes(){$("#fixes").innerHTML=S.fixes.map(f=>`<label class="toggle" style="margin:6px 0"><input type="checkbox" class="fix" data-k="${f.id}"${S.settings.fixes[f.id]?" checked":""}><span><b>${esc(f.label)}</b> <code class="dim">${f.id}</code><br><span class="dim">${esc(f.help)}</span></span></label>`).join("");
+ document.querySelectorAll(".fix").forEach(c=>c.onchange=async()=>{try{S.settings=await api("/api/settings",{fixes:{[c.dataset.k]:c.checked}})}catch(e){alert(e.message)}});
+ $("#variants").checked=!!S.settings.variants}
 function renderCards(){$("#cardPak").checked=!!S.settings.card_pak;
  $("#cardInfo").innerHTML=S.ui?`Filled from <code>${esc(S.ui)}</code>.`:`<span class="warn">No ui_mp.ff in the work folder or mw2tex_out yet: copy it from the console.</span>`}
 function renderTeams(){const m=S.maps.find(x=>x.path===pick);if(!m){$("#teams").innerHTML=`<span class="dim">Pick a map first.</span>`;return}
@@ -400,7 +429,7 @@ function renderJob(){const j=S.job;const n=ticked.size;$("#convert").textContent
  $("#state").className=j.error?"bad":(j.done&&!j.running?"ok":"dim");
  if(S.log.length){const l=$("#log");const end=l.scrollTop+l.clientHeight>=l.scrollHeight-8;l.textContent=S.log.join("\n");l.className="";if(end)l.scrollTop=l.scrollHeight}
  clearTimeout(timer);if(j.running)timer=setTimeout(()=>load(false),1500)}
-async function load(all=true){try{S=await api("/api/status");if(all){renderStock();renderGame();renderMaps();renderTeams();renderCards()}renderJob()}catch(e){$("#state").textContent=e.message;$("#state").className="bad"}}
+async function load(all=true){try{S=await api("/api/status");if(all){renderStock();renderGame();renderMaps();renderTeams();renderCards();renderFixes()}renderJob()}catch(e){$("#state").textContent=e.message;$("#state").className="bad"}}
 $("#refresh").onclick=()=>load();
 $("#openIn").onclick=()=>api("/api/open",{which:"in"}).then(()=>load()).catch(e=>alert(e.message));
 $("#openGame").onclick=()=>api("/api/open",{which:"game"}).then(()=>load()).catch(e=>alert(e.message));
@@ -410,6 +439,7 @@ $("#convert").onclick=async()=>{const list=ticked.size?S.maps.filter(x=>ticked.h
 $("#tickAll").onclick=()=>{S.maps.forEach(m=>ticked.add(m.path));renderMaps();renderJob()};
 $("#tickNone").onclick=()=>{ticked.clear();renderMaps();renderJob()};
 $("#cardPak").onchange=async e=>{try{S.settings=await api("/api/settings",{card_pak:e.target.checked})}catch(err){alert(err.message)}};
+$("#variants").onchange=async e=>{try{S.settings=await api("/api/settings",{variants:e.target.checked})}catch(err){alert(err.message)}};
 $("#patch").onclick=async()=>{if(!confirm("Write patched copies of every stock map ("+S.stock_maps+") and imagefile8.pak to mw2port_out\\stock?"))return;
  try{await api("/api/patch",{});load(false)}catch(e){alert(e.message)}};
 load();

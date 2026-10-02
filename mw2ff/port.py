@@ -57,9 +57,46 @@ TEXTURE_BUDGET_MB = 40
 # much more than the plain sum of the levels (mp_backlot: 90 MB counted, 115 MB in the block).
 TILING_PAD = 1.28
 LEVELS = 4      # pak table entries per picture
-# Stock 360 effects in place of the map's own (stock_effects). Off: with them mp_backlot failed
-# to load ("MT_GetSize: max allocation exceeded ... for script usage"), cause not found yet.
-STOCK_EFFECTS = False
+# Fixes that can be switched off, to find out on the console which one helps or hurts:
+# (name, short label, what it does). All on by default.
+FIXES = [
+    ("texture_budget", "Picture budget",
+     "Pictures over the budget (40 MB) lose their top mip levels, so big maps fit in memory "
+     "(mp_backlot ran out of memory without it, and froze on the loading screen at 80 MB)."),
+    ("stock_effects", "Stock 360 effects",
+     "Effects a stock 360 map also has (dust, car glass, fires) come from it instead of being "
+     "converted: the converted dust drew a yellow haze. mp_backlot failed to load with it "
+     "(MT_GetSize: max allocation exceeded ... for script usage)."),
+    ("surface_bounds", "Surface culling radius",
+     "Fill in the 360-only number every world surface carries (its culling radius and texture "
+     "density), worked out from stock mp_rust. Converted maps used to leave it 0."),
+    ("model_lods", "Model detail levels as stock",
+     "Each model detail level's partBits and surfs written as stock 360 files have them (0 and "
+     "empty) instead of the PC's values."),
+    ("stock_material_state", "Render state from same-named stock materials",
+     "A material a stock 360 file also has (same name, same shader set) takes that material's "
+     "culling and draw order, instead of another material's with the same shader set."),
+    ("hide_tool_surfaces", "Hide tool surfaces",
+     "Radiant tool shaders (clip, caulk, ...) get a see-through stand-in so they draw nothing."),
+    ("portal_multiply", "HDR portals as multiply",
+     "The white HDR portal sheets in doorways and windows (wc_unlit_distfalloff_*) use a "
+     "multiply shader that leaves the picture as it is. Off: they are hidden like tool surfaces."),
+]
+DEFAULT_FIXES = {k: True for k, _, _ in FIXES}
+
+
+def fix_set(fixes=None, off=()):
+    """All fixes on, as given in fixes ({name: bool}), with those named in off switched off."""
+    out = dict(DEFAULT_FIXES)
+    for k, v in (fixes or {}).items():
+        if k not in out:
+            raise PortError("unknown fix %r (known: %s)" % (k, ", ".join(out)))
+        out[k] = bool(v)
+    for k in off:
+        if k not in out:
+            raise PortError("unknown fix %r (known: %s)" % (k, ", ".join(out)))
+        out[k] = False
+    return out
 COLOR_MAP, COLOR_MAP1 = 0xA0AB1041, 0xB60D1850     # texture table name hashes
 
 # Per team (mp/factionTable.csv + the character scripts in common_mp): the models and
@@ -590,9 +627,11 @@ def encode_dxt3a(lum, width, height):
 # ================================================================ converter
 
 class Porter:
-    def __init__(self, pc_root, x_refs, iwd=None, log=print, game_iwds=(), texture_budget=0):
+    def __init__(self, pc_root, x_refs, iwd=None, log=print, game_iwds=(), texture_budget=0,
+                 fixes=None):
         self.root = pc_root
         self.log = log
+        self.fixes = fix_set(fixes)
         self.texture_budget = texture_budget    # MB; 0: no limit
         self.mip_drop = {}                      # picture name -> top mip levels left out
         self.P = schema_mod.load("pc")
@@ -1079,7 +1118,7 @@ class Porter:
         the map's scripts name effects rather than point at them, so the stock one goes in under
         the name and the converted one is renamed out of the way (it stays: the map's other
         assets can point at materials it brings)."""
-        if not STOCK_EFFECTS:
+        if not self.fixes["stock_effects"]:
             return
         new, names = [], []
         for e in ents:
@@ -1164,7 +1203,8 @@ class Porter:
                 self.moved_images.append(c)
 
     def post_GfxWorld(self, d, tx):
-        self.fill_surface_bounds(d)
+        if self.fixes["surface_bounds"]:
+            self.fill_surface_bounds(d)
         ch = d["@"]
         for key, c in list(ch.items()):
             t = deref(c) if isinstance(c, Ref) else None
@@ -1319,7 +1359,7 @@ class Porter:
             d["@"][("himipRadii", ())] = Leaf(m.type, n, struct.pack(">%dH" % n, *[HIMIP_RADIUS] * n), ">")
         # Each detail level's partBits and surfs: stock 360 models always hold 0 and null here
         # (the game fills them in when it loads the model); the PC file has them set.
-        for li in d.get("lodInfo") or []:
+        for li in (d.get("lodInfo") or []) if self.fixes["model_lods"] else []:
             if not isinstance(li, dict):
                 continue
             li["partBits"] = [0] * len(li.get("partBits") or [0] * 6)
@@ -1366,7 +1406,8 @@ class Porter:
         gets the plain lit shader."""
         if name in self.techset_swaps:
             return self.techset_swaps[name]
-        if b"_distfalloff" in name and self.have_techset(b"wc_unlit_multiply_lin"):
+        if b"_distfalloff" in name and self.fixes["portal_multiply"] and \
+                self.have_techset(b"wc_unlit_multiply_lin"):
             # HDR portals (wc_unlit_distfalloff_replace, a plain white picture, in doorways and
             # windows) are next to invisible. The 360 files have no such set. Drawn opaque
             # (wc_unlit_replace_lin) or alpha tested they still wrote depth: invisible walls
@@ -1374,7 +1415,8 @@ class Porter:
             # white picture they change nothing on screen and write no depth.
             self.techset_swaps[name] = b"wc_unlit_multiply_lin"
             return self.techset_swaps[name]
-        best = self.invisible_techset(name) if self.is_tools_techset(name) else None
+        best = self.invisible_techset(name) if self.is_tools_techset(name) and \
+            self.fixes["hide_tool_surfaces"] else None
         if best is not None:
             self.techset_swaps[name] = best
             return best
@@ -1402,10 +1444,11 @@ class Porter:
             self.techset_swaps[name] = best
         return best
 
-    @staticmethod
-    def is_tools_techset(name):
-        """wc_tools, mc_tools: Radiant's tool shaders, which draw nothing in game."""
-        return name.split(b"_")[1:2] == [b"tools"]
+    def is_tools_techset(self, name):
+        """wc_tools, mc_tools: Radiant's tool shaders, which draw nothing in game (and the HDR
+        portal sets when they aren't drawn as multiply)."""
+        return name.split(b"_")[1:2] == [b"tools"] or (
+            b"_distfalloff" in name and not self.fixes["portal_multiply"])
 
     def invisible_techset(self, name):
         """A stock alpha tested shader set of the same kind (wc_/mc_) with a color picture and
@@ -1607,7 +1650,7 @@ class Porter:
         # A stock material of the same name and shader set: its own render state (culling,
         # draw order), not that of another material that happens to share the shader set.
         same = self.library.get(("Material", name)) or self.common_materials.get(("Material", name))
-        if isinstance(same, dict) and tsname:
+        if isinstance(same, dict) and tsname and self.fixes["stock_material_state"]:
             sts = deref(same.get("@", {}).get(("techniqueSet", ())))
             if isinstance(sts, dict) and (asset_name(sts) or b"").lstrip(b",") == tsname:
                 tpl = same
@@ -2257,18 +2300,21 @@ def effect_donors(root, ref_roots, candidates, log=print, most=2):
 
 
 def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None,
-         game_iwds=(), texture_budget=0, card_pak=False, fx_paths=()):
+         game_iwds=(), texture_budget=0, card_pak=False, fx_paths=(), fixes=None):
     """loaded: {path: tree} of stock files already read (load_stock), to reuse.
     game_iwds: the PC game's .iwd files, for pictures the map's own .iwd doesn't have.
     fx_paths: stock 360 maps to take the map's effects from (those carrying the most of them
-    are read too)."""
+    are read too). fixes: {name: bool} of FIXES (default all on)."""
+    fixes = fix_set(fixes)
+    if not fixes["texture_budget"]:
+        texture_budget = 0
     ff, zone, root = load_tree(pc_path)
     if ff.platform != "pc":
         raise PortError("%s is not a PC fastfile" % pc_path)
     refs = []
     loaded = {} if loaded is None else loaded
     ref_paths = list(ref_paths)
-    if fx_paths and STOCK_EFFECTS:
+    if fx_paths and fixes["stock_effects"]:
         for p in ref_paths:
             if p not in loaded:
                 log("reading stock 360 file %s" % os.path.basename(p))
@@ -2288,7 +2334,11 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         iwd_path = [iwd_path]
     iwd = [zipfile.ZipFile(p) for p in iwd_path]
     log("converting %s" % os.path.basename(pc_path))
-    porter = Porter(root, refs, iwd, log, [zipfile.ZipFile(p) for p in game_iwds], texture_budget)
+    porter = Porter(root, refs, iwd, log, [zipfile.ZipFile(p) for p in game_iwds], texture_budget,
+                    fixes)
+    off = [k for k, v in fixes.items() if not v]
+    if off:
+        log("  fixes switched off: %s" % ", ".join(off))
     porter.convert()
     if porter.map_name:
         porter.add_teams(refs, map_teams(pc_path, teams))
@@ -2305,7 +2355,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
 
 
 def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
-             texture_budget=TEXTURE_BUDGET_MB, card_ui=None):
+             texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None):
     """Convert a PC map (its .ff, and _load.ff / .iwd / .arena next to it when there) into
     out_dir, picking what it needs from the stock 360 files given: code_post_gfx_mp.ff, a
     stock map (render settings, shaders) and the stock maps that carry the map's teams.
@@ -2351,7 +2401,7 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
             out = os.path.join(out_dir, name + "_load.ff")
             try:
                 port(base + "_load.ff", out, iwd, [cpg, template, load_ref], log, loaded=loaded,
-                     game_iwds=game_iwds)
+                     game_iwds=game_iwds, fixes=fixes)
                 written.append(out)
             except (ValueError, PortError, mw2ff.zone_mod.ZoneError) as e:
                 # The map works without it: the game shows a plain loading screen.
@@ -2362,13 +2412,57 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
                     % (name, e, head.hex(" ")))
     out = os.path.join(out_dir, name + ".ff")
     port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded, game_iwds=game_iwds,
-         texture_budget=texture_budget, card_pak=bool(card_ui), fx_paths=maps)
+         texture_budget=texture_budget, card_pak=bool(card_ui), fx_paths=maps, fixes=fixes)
     written.append(out)
     if card_ui:
         # card_ui: a ui_mp.ff (mw2tex's built one, or the stock one) to fill the slots from.
         import mw2tex
         written.append(mw2tex.write_card_pak(card_ui, out_dir, log=log))
     return written
+
+
+def port_map_variants(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
+                      texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None):
+    """The map as port_map makes it with the fixes given, plus one test variant per fix that
+    is on, with just that fix switched off: out_dir/variants/no_<fix>/. One batch of files to
+    try on the console, to find which fix helps or hurts. Returns the paths written; a
+    variant that fails to convert doesn't stop the others."""
+    fixes = fix_set(fixes)
+    written = port_map(pc_path, out_dir, stock_paths, teams, log, game_iwds, texture_budget,
+                       card_ui, fixes)
+    labels = {k: label for k, label, _ in FIXES}
+    for k in [k for k, v in fixes.items() if v]:
+        log("")
+        log("===== test variant: %s switched off =====" % labels[k])
+        vdir = os.path.join(out_dir, "variants", "no_" + k)
+        try:
+            # Titles and emblems: the pak written next to the main file serves every variant.
+            files = [f for f in port_map(pc_path, vdir, stock_paths, teams, log, game_iwds,
+                                         texture_budget, None, dict(fixes, **{k: False}))
+                     if not f.endswith(".pak")]
+        except (PortError, mw2ff.zone_mod.ZoneError, ValueError) as e:
+            log("  variant no_%s stopped: %s" % (k, e))
+            continue
+        if all(_same_file(f, os.path.join(out_dir, os.path.basename(f))) for f in files):
+            # The fix changes nothing in this map: no point trying the variant.
+            for f in files:
+                os.remove(f)
+            try:
+                os.rmdir(vdir)
+            except OSError:
+                pass
+            log("  no_%s: the same as the main file (this fix changes nothing in this map), "
+                "so it's left out" % k)
+            continue
+        written += files
+    return written
+
+
+def _same_file(a, b):
+    if not (os.path.exists(a) and os.path.exists(b)) or os.path.getsize(a) != os.path.getsize(b):
+        return False
+    with open(a, "rb") as fa, open(b, "rb") as fb:
+        return fa.read() == fb.read()
 
 
 def reserve_callback_block(zone, porter):
@@ -2463,9 +2557,12 @@ def main(argv):
                     help="titles and emblems from fixed slots in imagefile8.pak (see mw2tex cardpak)")
     ap.add_argument("--teams", nargs=2, metavar=("ALLIES", "AXIS"),
                     help="teams to use (default: from the map's .arena next to the .ff)")
+    ap.add_argument("--fix-off", action="append", default=[], metavar="FIX",
+                    choices=[k for k, _, _ in FIXES],
+                    help="switch a fix off (repeatable): " + ", ".join(k for k, _, _ in FIXES))
     a = ap.parse_args(argv)
     port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams, game_iwds=game_iwd_files(a.game),
-         texture_budget=a.texture_budget, card_pak=a.card_pak)
+         texture_budget=a.texture_budget, card_pak=a.card_pak, fixes=fix_set(off=a.fix_off))
 
 
 if __name__ == "__main__":
