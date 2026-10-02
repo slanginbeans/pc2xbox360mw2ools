@@ -115,6 +115,12 @@ FIXES = [
      "becomes a plain 16x16 one instead of being converted: white for colors, flat for normal "
      "maps, black for specular. Off by default. If flicker or missing textures stop, the picture "
      "conversion (tiling, mip levels, headers) is at fault."),
+    ("surface_order", "Surfaces in 360 draw order (test)",
+     "Lay the world's surfaces out as the 360 tools do: solid ones (sort key below 6) first, then "
+     "decals and see-through ones, then shadow casters, with the opaque / transparent / shadow "
+     "caster ranges set to match (stock mp_rust: 5,230 / 101 / 1). IW4x maps list every surface "
+     "as opaque (mp_backlot: about 2,400 decals among them), which can make decals flicker and "
+     "hide things behind them. Off by default until tried on a console."),
     ("hide_tool_surfaces", "Hide tool surfaces",
      "Radiant tool shaders (clip, caulk, ...) get a see-through stand-in so they draw nothing."),
     ("portal_multiply", "HDR portals as multiply",
@@ -123,7 +129,7 @@ FIXES = [
 ]
 # Off unless switched on: stock_effects (mp_backlot never loaded with it).
 DEFAULT_OFF = {"stock_effects", "hide_foliage", "draw_distance_cap", "skip_lod0", "stock_models",
-               "one_room", "plain_pictures"}
+               "one_room", "plain_pictures", "surface_order"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
@@ -1381,6 +1387,8 @@ class Porter:
                 self.moved_images.append(c)
 
     def post_GfxWorld(self, d, tx):
+        if self.fixes["surface_order"]:
+            self.order_surfaces(d)
         if self.fixes["surface_bounds"]:
             self.fill_surface_bounds(d)
         if self.fixes["tree_model_bounds"]:
@@ -1396,6 +1404,78 @@ class Porter:
                 self.moved_images = [m for m in self.moved_images if m is not t]
         if self.moved_images:
             raise PortError("a picture from the lightmap override is still needed elsewhere")
+
+    def order_surfaces(self, world):
+        """Test switch surface_order: the static surfaces in the 360 tools' order (solid, sort key
+        below 6; then decals and see-through; then shadow casters; each group keeping its order)
+        and the dpvs ranges to match. Every per-surface array moves with them (bounds, draw
+        surface, sun shadow bit) and every surface number is renumbered (sortedSurfIndex, the
+        shadow geometry lists). Culling tree nodes index sortedSurfIndex, which keeps its order,
+        so they stay valid. Brush model surfaces (after the static ones) don't move."""
+        def tgt(c):
+            return c.target if isinstance(c, Ref) else c
+        dpvs = world.get("dpvs") or {}
+        ch = dpvs.get("@", {})
+        surfs = tgt(ch.get(("surfaces", ())))
+        n = dpvs.get("staticSurfaceCount", 0)
+        if not isinstance(surfs, list) or not n or len(surfs) < n:
+            self.warn("surfaces couldn't be put in 360 order (data not found)")
+            return
+
+        def group(s):
+            m = deref(s.get("@", {}).get(("material", ()))) if isinstance(s, dict) else None
+            if not isinstance(m, dict):
+                return 0, 0
+            ts = deref(m.get("@", {}).get(("techniqueSet", ())))
+            if isinstance(ts, dict) and b"shadowcaster" in (asset_name(ts) or b""):
+                return 2, 0
+            key = (m.get("info") or {}).get("sortKey") or 0
+            return (0 if key < 6 else 1), key
+
+        groups = [group(s)[0] for s in surfs[:n]]
+        order = sorted(range(n), key=lambda i: groups[i])     # stable: each group keeps its order
+        if order == list(range(n)):
+            new_of = None
+        else:
+            new_of = [0] * n
+            for new, old in enumerate(order):
+                new_of[old] = new
+            surfs[:n] = [surfs[i] for i in order]
+            for key in ("surfacesBounds", "surfaceMaterials"):
+                lf = tgt(ch.get((key, ())))
+                if isinstance(lf, Leaf) and lf.n >= n:
+                    size = lf.t.size
+                    raw = lf.raw
+                    lf.raw = b"".join(raw[i * size:(i + 1) * size] for i in order) + raw[n * size:]
+            bits = tgt(ch.get(("surfaceCastsSunShadow", ())))
+            if isinstance(bits, Leaf) and bits.raw:
+                words = list(struct.unpack(bits.E + "%dI" % (len(bits.raw) // 4), bits.raw))
+                out = list(words)
+                for w in range(min(len(out), (n + 31) // 32)):
+                    out[w] &= ~(0xFFFFFFFF if (w + 1) * 32 <= n else (1 << (n - w * 32)) - 1) & 0xFFFFFFFF
+                for old in range(n):
+                    if old >> 5 < len(words) and words[old >> 5] >> (old & 31) & 1:
+                        new = new_of[old]
+                        out[new >> 5] |= 1 << (new & 31)
+                bits.raw = struct.pack(bits.E + "%dI" % len(out), *out)
+
+            def renumber(lf, count=None):
+                if isinstance(lf, Leaf) and lf.n:
+                    k = lf.n if count is None else count
+                    v = list(struct.unpack_from(lf.E + "%dH" % k, lf.raw))
+                    lf.raw = struct.pack(lf.E + "%dH" % k, *[new_of[x] if x < n else x for x in v]) + lf.raw[2 * k:]
+            renumber(tgt(ch.get(("sortedSurfIndex", ()))))
+            geoms = tgt(world.get("@", {}).get(("shadowGeom", ())))
+            for gm in geoms if isinstance(geoms, list) else []:
+                if isinstance(gm, dict) and gm.get("surfaceCount"):
+                    renumber(tgt(gm.get("@", {}).get(("sortedSurfIndex", ()))), gm["surfaceCount"])
+        a = groups.count(0)
+        b = a + groups.count(1)
+        c = b + groups.count(2)
+        dpvs.update(litOpaqueSurfsBegin=0, litOpaqueSurfsEnd=a, litTransSurfsBegin=a, litTransSurfsEnd=b,
+                    shadowCasterSurfsBegin=b, shadowCasterSurfsEnd=c, emissiveSurfsBegin=c, emissiveSurfsEnd=c)
+        self.log("  test: surfaces in 360 order: %d solid, %d decals / see-through, %d shadow casters%s"
+                 % (a, b - a, c - b, "" if new_of else " (already in order)"))
 
     def grow_tree_bounds(self, world):
         """Grow every culling tree node's box (GfxAabbTree.bounds) to enclose the static models
