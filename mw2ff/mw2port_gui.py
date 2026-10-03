@@ -158,6 +158,7 @@ def status():
             "game": game, "settings": settings(),
             "stock_map_names": [os.path.basename(p) for p in stock_maps()],
             "fixes": [{"id": k, "label": label, "help": text} for k, label, text in port_mod.FIXES],
+            "fix_defaults": dict(port_mod.DEFAULT_FIXES),
             "ui": os.path.relpath(ui, FOLDER) if ui else None, "stock_maps": len(stock_maps()),
             "maps": pc_maps(), "teams": team_list(stock),
             "job": {k: job[k] for k in ("running", "map", "done", "error", "files")},
@@ -486,6 +487,7 @@ folder: the patched copies and <code>imagefile8.pak</code> go in <code>mw2port_o
 <p class="dim">Each fix below changes how maps are converted. They are all on normally; untick one to convert
 without it, to see on the console whether it helps or hurts.</p>
 <div id="fixes"></div>
+<p><button id="fixDefaults">Restore default switches</button> <span class="dim">Puts every switch above back the way it is normally (fixes on, test switches off).</span></p>
 <label class="toggle" style="margin-top:10px"><input type="checkbox" id="variants"><span><b>Also build test variants</b><br>
 <span class="dim">Besides the map itself, converts it once more for every fix that is ticked, with just that fix off,
 into <code>mw2port_out\&lt;map&gt;\variants\no_&lt;fix&gt;</code>. Try them one after another on the console to find
@@ -552,6 +554,7 @@ $("#cardPak").onchange=async e=>{try{S.settings=await api("/api/settings",{card_
 $("#cardSource").onchange=async e=>{try{S.settings=await api("/api/settings",{card_source:e.target.value});load()}catch(err){alert(err.message)}};
 $("#cardPakBuild").onclick=async()=>{try{await api("/api/cardpak",{});load(false)}catch(e){alert(e.message)}};
 $("#rewriteBtn").onclick=async()=>{const m=$("#rewriteMap").value;if(!m)return;try{await api("/api/rewrite",{map:m});load(false)}catch(e){alert(e.message)}};
+$("#fixDefaults").onclick=async()=>{try{S.settings=await api("/api/settings",{fixes:S.fix_defaults});renderFixes()}catch(err){alert(err.message)}};
 $("#variants").onchange=async e=>{try{S.settings=await api("/api/settings",{variants:e.target.checked})}catch(err){alert(err.message)}};
 $("#profile").onchange=async e=>{try{S.settings=await api("/api/settings",{profile:e.target.checked})}catch(err){alert(err.message)}};
 $("#patch").onclick=async()=>{if(!confirm("Write patched copies of every stock map ("+S.stock_maps+") and imagefile8.pak to mw2port_out\\stock?"))return;
