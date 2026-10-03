@@ -10,6 +10,9 @@ All of them use the folder this runs in: your .ff files go there, and so do thei
 folders (mw2tex_out, mw2ff_out, mw2port_out). Nothing is sent anywhere: the pages talk only to
 this program on your own PC.
 
+The program stops by itself a few seconds after the page is closed (not during a map
+conversion). Start it with --keep-running to leave it going until you quit it.
+
 With --tray (how mw2tools.bat starts it, with pythonw: no window) it shows an icon by the
 clock instead (left click: open the page; right click: Open, Show log, Quit) and writes what it
 would have printed to mw2tools.log.
@@ -17,6 +20,7 @@ would have printed to mw2tools.log.
 import json
 import os
 import sys
+import time
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -91,9 +95,41 @@ apps.forEach((a,i)=>{const b=document.createElement("button");b.textContent=a.ti
  if(a.url)p.dataset.src=a.url;else{const e=document.createElement("div");e.className="err";e.textContent=a.title+" couldn't start:\n"+a.error+"\n\nSend this to Claude.";p.appendChild(e)}
  document.body.appendChild(p);panes.push(p)});
 const s=document.createElement("small");s.textContent="Your files: __FOLDER__";nav.appendChild(s);
+const id=Math.random().toString(36).slice(2);
+const ping=()=>fetch("/ping?id="+id,{method:"POST"}).catch(()=>{});ping();setInterval(ping,5000);
+addEventListener("pagehide",()=>navigator.sendBeacon("/bye?id="+id));
 let t=0;try{t=+localStorage.getItem("mw2tools_tab")||0}catch(e){}show(Math.min(t,apps.length-1));
 </script></body></html>
 """
+
+
+GRACE = 15          # seconds with no page open before the program stops (a reload comes back sooner)
+STALE = 180         # a page that stopped pinging without saying goodbye (a hidden tab pings slowly)
+pages = {}          # page id -> when it last pinged
+pages_lock = threading.Lock()
+seen_page = False
+
+
+def watch_pages(server):
+    """Stops the program once the browser page has been closed. Never in the middle of a map
+    conversion, and not before a page has opened at all."""
+    empty_since = None
+    while True:
+        time.sleep(1)
+        now = time.time()
+        with pages_lock:
+            for k in [k for k, t in pages.items() if now - t > STALE]:
+                del pages[k]
+            if not seen_page:
+                continue
+            if pages or busy():
+                empty_since = None
+                continue
+        empty_since = empty_since or now
+        if now - empty_since > GRACE:
+            print("The page was closed, so mw2tools stops.")
+            server.shutdown()
+            return
 
 
 def busy():
@@ -111,8 +147,20 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        global seen_page
+        route, _, query = self.path.partition("?")
+        if route in ("/ping", "/bye"):
+            with pages_lock:
+                if route == "/ping":
+                    pages[query] = time.time()
+                    seen_page = True
+                else:
+                    pages.pop(query, None)
+            self.send_response(204)
+            self.end_headers()
+            return
         # Another mw2tools starting (after an update) asks this one to make way for it.
-        if self.path != "/quit":
+        if route != "/quit":
             self.send_response(404)
             self.end_headers()
             return
@@ -143,16 +191,25 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _running_copy():
-    """The address of an mw2tools already running on this PC, or None."""
+    """The address of an mw2tools already running on this PC, or None. The ports are tried all
+    at once: one after another, each closed port can take a second to refuse on Windows."""
     import urllib.request
-    for port in range(PORT, PORT + 20):
+    from concurrent.futures import ThreadPoolExecutor
+
+    def probe(port):
         url = "http://127.0.0.1:%d/" % port
         try:
             with urllib.request.urlopen(url, timeout=1) as r:
                 if b"<title>mw2tools</title>" in r.read(4096):
                     return url
         except Exception:  # noqa: BLE001 - nothing there (or something else)
-            continue
+            pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        for url in pool.map(probe, range(PORT, PORT + 20)):
+            if url:
+                return url
     return None
 
 
@@ -160,7 +217,6 @@ def _make_way(url, say):
     """An mw2tools is already running: ask it to stop, so this (perhaps just updated) copy takes
     over. Returns False when it can't stop now (a conversion is running) or won't (an older
     copy without /quit) and this one should step aside."""
-    import time
     import urllib.error
     import urllib.request
     try:
@@ -251,6 +307,8 @@ def main():
         print("Running with an icon by the clock: right-click it to quit.")
     else:
         print("Leave this window open while you use it. Press Ctrl+C here to stop.")
+    if "--keep-running" not in sys.argv:
+        threading.Thread(target=watch_pages, args=(server,), daemon=True).start()
     if "--no-browser" not in sys.argv:
         webbrowser.open(url)
     try:
