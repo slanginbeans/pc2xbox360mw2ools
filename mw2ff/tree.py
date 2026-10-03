@@ -121,7 +121,9 @@ def slot_asset(r):
         return tgt[1]
     if isinstance(tgt, InsertSlot):
         return tgt.asset
-    if not isinstance(t, Compound) or t.kind != "struct":
+    # (A union of pointers too: an effect element's visuals "the same as that element's",
+    # FxElemVisuals, point at the other element's union, whose pointer holds the asset.)
+    if not isinstance(t, Compound) or t.kind not in ("struct", "union"):
         return None
     if isinstance(tgt, list):
         i, rel = divmod(rel, t.size)
@@ -579,6 +581,14 @@ class TreeWriter(zone_mod.Reader):
                     if cur not in (0, FOLLOWING, INSERT):
                         mark = INSERT if isinstance(c, dict) and "_slot" in c else FOLLOWING
                         struct.pack_into(self.E + "I", b, m.offset, mark)
+                        # In the union itself, not a copy: the walk goes on to the data from
+                        # this object (a copy here had the union written as the asset:
+                        # "can't write XModel at ... FxElemVisuals > model").
+                        u = bytearray.fromhex(d["union"])
+                        struct.pack_into(self.E + "I", u, m.offset, mark)
+                        d["union"] = u.hex()
+            if b.hex() == d["union"]:
+                return d
             return dict(d, union=b.hex())
         out = None
         for i, m in enumerate(t.members):

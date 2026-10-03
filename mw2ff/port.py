@@ -356,7 +356,7 @@ def _asset_in_slot(r):
         c = tgt[rel // 4]
         if (isinstance(c, dict) and "_asset" in c) or isinstance(c, Ref):
             return c
-    if not isinstance(t, Compound) or t.kind != "struct":
+    if not isinstance(t, Compound) or t.kind not in ("struct", "union"):
         return None
     if isinstance(tgt, list):
         i, rel = divmod(rel, t.size)
