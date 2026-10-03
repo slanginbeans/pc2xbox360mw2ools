@@ -68,6 +68,11 @@ FIXES = [
      "Effects a stock 360 map also has (dust, car glass, fires) come from it instead of being "
      "converted: the converted dust drew a yellow haze. Off by default: mp_backlot never loaded "
      "with it (MT_GetSize: max allocation exceeded ... for script usage)."),
+    ("pc_sort_keys", "Keep the PC's draw order (sort keys)",
+     "Each material keeps its own sort key (which pass it draws in: opaque, decal layers, glass, "
+     "effects), which means the same on the 360: all 271 materials PC mp_rust shares with stock "
+     "360 mp_rust have the same one. Off: it comes from a stock material with the same shader set, "
+     "which moved backlot's decals and blend layers into other passes (decals to opaque, ...)."),
     ("normal_maps_dxn", "Normal maps as DXN",
      "PC normal maps (DXT5: X in alpha, Y in green) become DXN, two channels, as every stock 360 "
      "normal map is: X is the PC's alpha block as it is, Y its green channel. Off: they stay DXT5, "
@@ -788,6 +793,7 @@ class Porter:
         self.stock_models = {}          # model name -> (a stock map's model, its file) (stock_models)
         self.model_swap = {}            # id() of a converted model -> the stock model's list entry
         self.swapped_rows = set()       # light grid row data already put in 360 byte order
+        self.pc_sort = {}               # id() of a material -> the PC's sort key (pc_sort_keys)
         self.stock_aliases = {}         # sound alias name -> (stock alias list, resident?) (stock_sounds)
         for name, root in x_refs:
             idx = asset_index(root)
@@ -2249,6 +2255,7 @@ class Porter:
         tsname = asset_name(ts) if isinstance(ts, dict) else None
         if tsname and tsname.startswith(b","):     # already converted to a reference
             tsname = tsname[1:]
+        orig_ts = tsname
         tpl = self.material_templates.get(tsname)
         # A stock material of the same name and shader set: its own render state (culling,
         # draw order), not that of another material that happens to share the shader set.
@@ -2273,13 +2280,19 @@ class Porter:
         # PC render state (D3D9) means nothing to the 360: it comes from the template instead.
         d["@"].pop(("stateBitsTable", ()), None)
         d["_template"] = tpl
+        # The PC's own draw order (sort key) means the same on the 360: all 271 materials PC
+        # mp_rust shares with stock 360 mp_rust have the same one. Kept unless the shader set
+        # was swapped for one that hides it (tool surfaces, HDR portals).
+        if self.fixes["pc_sort_keys"] and not d.get("_invisible") and not (b"_distfalloff" in (orig_ts or b"")):
+            self.pc_sort[id(d)] = (d.get("info") or {}).get("sortKey")
         return None
 
     def post_Material(self, d, tx):
         tpl = d.pop("_template")
         for k in ("stateBitsEntry", "stateBitsCount", "stateFlags", "cameraRegion", "stateBitsTable", "unknown"):
             d[k] = tpl[k]
-        d["info"]["sortKey"] = tpl["info"]["sortKey"]
+        sort = self.pc_sort.pop(id(d), None)
+        d["info"]["sortKey"] = sort if isinstance(sort, int) else tpl["info"]["sortKey"]
         # The game builds drawSurf itself when it registers the material; stock 360 files
         # always hold zero here (the PC keeps its own bit layout).
         d["info"]["drawSurf"] = tpl["info"]["drawSurf"]
