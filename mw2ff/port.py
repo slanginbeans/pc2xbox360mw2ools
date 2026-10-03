@@ -68,6 +68,10 @@ FIXES = [
      "Effects a stock 360 map also has (dust, car glass, fires) come from it instead of being "
      "converted: the converted dust drew a yellow haze. Off by default: mp_backlot never loaded "
      "with it (MT_GetSize: max allocation exceeded ... for script usage)."),
+    ("stock_scripts", "Stock 360 scripts",
+     "A script a stock 360 file also has (a stock map's own maps/mp/<map>.gsc, its effects "
+     "scripts) comes from it. PC scripts can call what only later PC patches have: PC mp_rust's "
+     "killTrigger isn't in the 360's scripts. The teams are still set in the map's script."),
     ("stock_sounds", "Stock 360 sounds",
      "Sound aliases a stock 360 file also has come from it, with its 360 audio. The PC file only "
      "names its sound files (,null.wav: files the PC game loads from disk); the 360 has nothing "
@@ -1102,12 +1106,29 @@ class Porter:
         # is, but marked compressed (compressedLen 42, len 0). The 360 would take it for a
         # zlib stream. Stock files have the same rawfile empty (0, 0, one zero byte).
         self.tests_found = {"map_effects": 0, "map_fog": 0}
+        stock_scripts = []
         for e in ents:
             if e[0] == "rawfile" and isinstance(e[1], dict) and _is_builder_signature(e[1]):
                 _set_rawfile_text(e[1], b"")
+                continue
+            src = self.library.get(("RawFile", _name(e[1]) or b"")) \
+                if e[0] == "rawfile" and isinstance(e[1], dict) and self.fixes["stock_scripts"] else None
+            if src is not None:
+                # The stock 360 map's own script: PC scripts can call what only later PC
+                # patches have (PC mp_rust's killTrigger, missing from the 360's _utility).
+                try:
+                    text = _rawfile_text(src)
+                except (KeyError, ValueError, zlib_error()):
+                    text = None
+                if text is not None and text != _rawfile_text(e[1]):
+                    _set_rawfile_text(e[1], text)
+                    stock_scripts.append(_name(e[1]).decode("latin-1"))
             elif e[0] == "rawfile" and isinstance(e[1], dict) and \
                     (not self.fixes["map_effects"] or not self.fixes["map_fog"]):
                 self.edit_script(e[1])
+        if stock_scripts:
+            self.log("  %d script%s from the stock 360 files: %s" % (
+                len(stock_scripts), "s" if len(stock_scripts) > 1 else "", ", ".join(stock_scripts)))
         gfx = next((e[1] for e in ents if e[0] == "gfx_map" and isinstance(e[1], dict)), {})
         self.map_name = re.sub(rb"^maps/mp/|\.d3dbsp$", b"", _name(gfx) or b"")
         if gfx:
@@ -2656,6 +2677,11 @@ def _set_name(d, b):
     ch[("name", ())] = Str(b)
 
 
+def zlib_error():
+    import zlib
+    return zlib.error
+
+
 def _rawfile_text(d):
     import zlib
     ch = d["data"]["@"]
@@ -3116,7 +3142,12 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
     arena = next((_rawfile_text(e[1]) for e in loaded[cpg]["assets"]
                   if e[0] == "rawfile" and _name(e[1]) == b"mp/basemaps.arena"), b"")
     want = map_teams(pc_path, teams)
-    refs = [cpg] + ([common] if common else []) + [template]
+    # A PC copy of a stock map (PC mp_rust): the stock 360 map of that name comes first for
+    # what it has (scripts, sounds, materials), and its teams are the 360's for the map.
+    same = stock.get(name.lower() + ".ff")
+    if not teams and not os.path.exists(base + ".arena") and _arena_teams(arena, name.lower()):
+        want = _arena_teams(arena, name.lower())
+    refs = [cpg] + ([common] if common else []) + ([same] if same and same != template else []) + [template]
     for team in want:
         carriers = set(_team_maps(arena, team.lower()))
         donor = next((p for p in maps if os.path.splitext(os.path.basename(p))[0].lower() in carriers), None)

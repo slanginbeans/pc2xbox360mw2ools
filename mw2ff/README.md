@@ -50,6 +50,9 @@ Your work folder needs these stock 360 files from the console (copy them over FT
   `mp_rust` has OpFor, `mp_derail` has the arctic teams, and `mp_checkpoint` (Karachi) has
   the SEALs.
 
+A PC copy of a stock map (for example PC `mp_rust.ff`) is converted with the stock 360 map of the
+same name as its main source when that file is in the work folder: its scripts, sounds and teams.
+
 1. Double-click `mw2port.bat`. The converter opens in your browser.
 2. Press **Open mw2port_in** and put each PC map in its own folder there. For an IW4x map,
    copy its whole `usermaps\<map>` folder (`.ff`, `_load.ff`, `.iwd`, `.arena`). Press
@@ -111,6 +114,7 @@ with `--fix-off NAME` (repeatable). All are on by default except `stock_effects`
 |---|---|
 | `texture_budget` | Pictures over the budget lose their top mip levels (out of memory / loading-screen freeze without it) |
 | `stock_effects` | Effects a stock 360 map also has come from it (the yellow dust haze); maps have failed to load with it (MT_GetSize ... script usage) |
+| `stock_scripts` | A script a stock 360 file also has (a stock map's own `maps/mp/<map>.gsc`, effects scripts) comes from it; PC scripts can call functions only later PC patches have (PC mp_rust's `killTrigger`). The teams are still set in it |
 | `stock_sounds` | Sound aliases come from a stock 360 file with the same alias, audio and all; others play the silent stock `null` sound (the PC file only names sound files the 360 doesn't have: a converted PC mp_rust froze on the loading screen) |
 | `surface_bounds` | Fills in the 360-only culling radius / texture density of every world surface |
 | `model_lods` | Model detail levels' partBits and surfs written as stock files have them (0 and empty) |
