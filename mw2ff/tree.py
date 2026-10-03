@@ -570,6 +570,15 @@ class TreeWriter(zone_mod.Reader):
                 c = ch.get((k, ())) if ch else None
                 if isinstance(c, Ref) and m.mods and m.mods[0] == PTR:
                     struct.pack_into(self.E + "I", b, m.offset, self.ref_val(c))
+                elif c is not None and m.mods and m.mods[0] == PTR:
+                    # The data itself is here (port.py's copy_in puts what an alias meant in
+                    # its place): the pointer must say so. Left as the source file's alias
+                    # value, the console read whatever that address held (converted mp_rust:
+                    # 402 such pointers, material texture images and effect names among them).
+                    cur = struct.unpack_from(self.E + "I", b, m.offset)[0]
+                    if cur not in (0, FOLLOWING, INSERT):
+                        mark = INSERT if isinstance(c, dict) and "_slot" in c else FOLLOWING
+                        struct.pack_into(self.E + "I", b, m.offset, mark)
             return dict(d, union=b.hex())
         out = None
         for i, m in enumerate(t.members):
