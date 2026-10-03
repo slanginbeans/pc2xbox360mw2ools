@@ -108,7 +108,7 @@ console as converted maps, the writer is at fault; if it plays like the stock ma
 
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
 Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
-with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials`, `stock_pictures` and `merge_duplicates` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
+with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials`, `stock_pictures`, `merge_duplicates` and `model_box_bounds` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
 
 | Fix | What it does |
 |---|---|
@@ -122,7 +122,8 @@ with `--fix-off NAME` (repeatable). All are on by default except `portal_multipl
 | `model_lods` | Model detail levels' partBits and surfs written as stock files have them (0 and empty) |
 | `pc_face_culling` | A material the PC draws two-sided (no back-face culling: mp_backlot's market umbrellas, milk cartons, stone blocks) stays two-sided; the stock render state it takes culls back faces, so such models went invisible from one side. Face culling is the same bits on PC and 360 (state word 0, bits 14-15) |
 | `stock_material_state` | A material a stock file also has takes that material's culling and draw order |
-| `tree_model_bounds` | Culling tree boxes grow to enclose the static models they list (CoD4 ports list models sticking out of their box, which vanish as you turn) |
+| `tree_model_bounds` | Culling tree boxes grow to enclose the static models they list (CoD4 ports list models sticking out of their box, which vanish as you turn), and each placed model's box grows to enclose its vertices |
+| `model_box_bounds` | Test, off by default: each placed model's culling box grows to enclose its vertices as placed (stock maps' always do; mp_backlot's hanging lights sat 11 units below theirs), for models that vanish depending on the view angle |
 | `map_effects` | Keep the effects the map's createfx script places (off: left out, its ambient sounds stay; for testing, e.g. the dust haze) |
 | `map_fog` | Keep the map's distance fog (off: its `setExpFog` calls are commented out) |
 | `hide_foliage` | Test, off by default: foliage static models never show (to test whether too many models in view make the 360 drop some) |
