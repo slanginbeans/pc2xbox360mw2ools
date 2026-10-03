@@ -81,6 +81,12 @@ FIXES = [
      "A script a stock 360 file also has (a stock map's own maps/mp/<map>.gsc, its effects "
      "scripts) comes from it. PC scripts can call what only later PC patches have: PC mp_rust's "
      "killTrigger isn't in the 360's scripts. The teams are still set in the map's script."),
+    ("stock_anims", "Stock 360 animations",
+     "Animations (XAnimParts: swaying foliage, fans, lockers, windsocks) a stock 360 file also has "
+     "come from it. The 360 packs rotations differently (a quaternion in 32 bits, the largest "
+     "component left out) and has two more part types, so PC animations can't be copied as they "
+     "are: PC mp_terminal and mp_afghan didn't convert at all. Animations no stock file has are "
+     "left out of the map (it then lacks those movements)."),
     ("stock_sounds", "Stock 360 sounds",
      "Sound aliases a stock 360 file also has come from it, with its 360 audio. The PC file only "
      "names its sound files (,null.wav: files the PC game loads from disk); the 360 has nothing "
@@ -124,6 +130,12 @@ FIXES = [
      "type among them) are drawn with Infinity Ward's own 360 copy instead of the converted one. "
      "Off by default. If they still flicker, the models are fine and the map's visibility data "
      "is at fault; if not, the converted models are."),
+    ("stock_world", "Stock 360 world (test)",
+     "For a PC copy of a stock map (PC mp_rust): the world assets (drawn world, collision, map "
+     "entities, effects placement, game world) come from the stock 360 map of the same name, "
+     "everything else stays converted. Off by default. If the converted map stops crashing or "
+     "flickering with it, the world conversion is at fault; if not, the rest (models, materials, "
+     "pictures, effects, sounds) is."),
     ("one_room", "Room visibility off (test)",
      "The map is treated as one room: every room's culling tree becomes a single node listing "
      "every surface and static model, and the portals between rooms go. Off by default. If the "
@@ -148,7 +160,7 @@ FIXES = [
 ]
 # Off unless switched on: stock_effects (mp_backlot never loaded with it).
 DEFAULT_OFF = {"stock_effects", "hide_foliage", "draw_distance_cap", "skip_lod0", "stock_models",
-               "one_room", "plain_pictures", "surface_order"}
+               "one_room", "plain_pictures", "surface_order", "stock_world"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
@@ -1213,6 +1225,7 @@ class Porter:
         self.stock_effects(ents)
         if self.fixes["stock_sounds"]:
             self.stock_sounds(ents)
+        self.stock_anims(ents)
         if self.fixes["stock_models"]:
             self.stock_model_swap(ents)
         # Materials and pictures a left-out asset brought in first are only pointed at from
@@ -1246,6 +1259,8 @@ class Porter:
             self.log("  %d pictures come from the PC game's own .iwd files" % self.from_game)
         if getattr(self, "dxn_count", 0):
             self.log("  %d normal maps converted to DXN, as the 360 keeps them" % self.dxn_count)
+        if self.fixes["stock_world"]:
+            self.stock_world_swap(ents)
         self.own_reference_copies(ents)
         for u in self.unreadable[:5]:
             self.warn("picture %s can't be read, so it's treated as missing" % u)
@@ -1436,6 +1451,38 @@ class Porter:
             self.log("  %d effect%s from the stock 360 files: %s" % (
                 len(names), "s" if len(names) > 1 else "", ", ".join(names)))
 
+    WORLD_ASSETS = {"gfx_map": "GfxWorld", "col_map_mp": "clipMap_t", "com_map": "ComWorld",
+                    "game_map_mp": "GameWorldMp", "fx_map": "FxWorld", "map_ents": "MapEnts"}
+
+    def stock_world_swap(self, ents):
+        """Test switch stock_world: every world asset the stock 360 file of the same map has
+        (same name) is copied in from there in place of the converted one, with what it points
+        at (its own materials, pictures, ...)."""
+        names = []
+        for i, e in enumerate(ents):
+            typ = self.WORLD_ASSETS.get(e[0])
+            if typ is None or not isinstance(e[1], dict):
+                continue
+            name = (asset_name(e[1]) or _name(e[1]) or b"").lstrip(b",")
+            src = self.library.get((typ, name))
+            if src is None:
+                continue
+            new = self.copy_in(src)
+            self.done.add(id(new))
+            for o in iter_objects(new):
+                if isinstance(o, dict):
+                    self.done.add(id(o))
+            slot = e[1].get("_slot")
+            if slot is not None:
+                new["_slot"] = slot
+                slot.asset = new
+            ents[i] = tree.AssetEntry([e[0], new])
+            names.append(e[0])
+        if names:
+            self.log("  test: world from the stock 360 file (%s)" % ", ".join(names))
+        else:
+            self.warn("stock_world is on, but no stock 360 file given has this map's world")
+
     def own_reference_copies(self, ents):
         """A pointer to the slot of a picture that is only a name (",$white": the game has it
         loaded) gets its own copy of that name, as stock materials repeat such names inline. The
@@ -1470,6 +1517,53 @@ class Porter:
         if count:
             self.log("  %d pointers to a name-only asset given their own copy of the name (%s)" % (
                 count, ", ".join("%s %d" % kv for kv in sorted(self.ref_copy_types.items()))))
+
+    def stock_anims(self, ents):
+        """Animations (XAnimParts) can't be converted yet: the 360 packs rotations differently
+        (one 32-bit value: sign and index of the largest component, the other three over it in
+        9, 10 and 10 bits) and has two more part types. Same-named ones come from a stock 360
+        file (stock_anims); the rest are left out, as nothing points at an animation (scripts
+        and map entities name them)."""
+        took, dropped = [], []
+        keep = []
+        for e in ents:
+            if e[0] != "xanim" or not isinstance(e[1], dict):
+                keep.append(e)
+                continue
+            name = (_name(e[1]) or b"")
+            if name.startswith(b","):
+                keep.append(e)
+                continue
+            if not hasattr(self, "_anim_root"):
+                # By resolved name: stock files name animations through a shared string.
+                self._anim_root, self._stock_anims = {}, {}
+                for base, r in self.x_refs:
+                    resident = os.path.splitext(os.path.basename(base))[0] in RESIDENT
+                    for o in iter_objects(r["assets"]):
+                        if isinstance(o, dict) and o.get("_asset") == "XAnimParts":
+                            n = (_name(o) or b"")
+                            if n and not n.startswith(b",") and (n not in self._stock_anims or not resident):
+                                self._stock_anims.setdefault(n, o)
+                                self._anim_root.setdefault(id(o), r)
+            src = self._stock_anims.get(name) if self.fixes["stock_anims"] else None
+            if src is None:
+                dropped.append(name.decode("latin-1"))
+                continue
+            root = self._anim_root[id(src)]
+            new = self.copy_in(src)
+            self.remap_bones(new, root["script_strings"])
+            self._replace(e[1], new)
+            for o in iter_objects(e[1]):
+                if isinstance(o, dict):
+                    self.done.add(id(o))
+            keep.append(e)
+            took.append(name.decode("latin-1"))
+        ents[:] = keep
+        if took:
+            self.log("  %d animations from the stock 360 files" % len(took))
+        if dropped:
+            self.warn("%d animations left out (no stock 360 copy, and PC animations can't be converted "
+                      "yet): %s" % (len(dropped), ", ".join(dropped[:8]) + (" ..." if len(dropped) > 8 else "")))
 
     def stock_sounds(self, ents):
         """Sound alias lists come from a stock 360 file with the same alias (stock mp_rust has
@@ -2825,22 +2919,32 @@ class Porter:
         if ss is None:
             ss = self.root["script_strings"] = [None]
         where = {(s.b if isinstance(s, Str) else None): k for k, s in enumerate(ss)}
+
+        def ours(v):
+            b = theirs[v].b if isinstance(theirs[v], Str) else None
+            if b not in where:
+                where[b] = len(ss)
+                ss.append(Str(b))
+            return where[b]
         for o in iter_objects(new):
-            if isinstance(o, dict) and o.get("_asset") == "XModel":
-                lf = o.get("@", {}).get(("boneNames", ()))
-                if isinstance(lf, Ref):
-                    lf = lf.target
-                if not isinstance(lf, Leaf) or id(lf) in self.remapped:
-                    continue
-                self.remapped.add(id(lf))
-                out = []
-                for v in struct.unpack(lf.E + "%dH" % lf.n, lf.raw):
-                    b = theirs[v].b if isinstance(theirs[v], Str) else None
-                    if b not in where:
-                        where[b] = len(ss)
-                        ss.append(Str(b))
-                    out.append(where[b])
-                lf.raw = struct.pack(lf.E + "%dH" % lf.n, *out)
+            if not isinstance(o, dict):
+                continue
+            # Model bone names; an animation's bone names and its notifies' names (XAnimParts).
+            key = {"XModel": "boneNames", "XAnimParts": "names"}.get(o.get("_asset"))
+            if key is None:
+                if "time" in o and isinstance(o.get("name"), int) and id(o) not in self.remapped:
+                    # XAnimNotifyInfo: {name (script string), time}
+                    self.remapped.add(id(o))
+                    o["name"] = ours(o["name"])
+                continue
+            lf = o.get("@", {}).get((key, ()))
+            if isinstance(lf, Ref):
+                lf = lf.target
+            if not isinstance(lf, Leaf) or id(lf) in self.remapped:
+                continue
+            self.remapped.add(id(lf))
+            out = [ours(v) for v in struct.unpack(lf.E + "%dH" % lf.n, lf.raw)]
+            lf.raw = struct.pack(lf.E + "%dH" % lf.n, *out)
 
 
 def _name(d):
