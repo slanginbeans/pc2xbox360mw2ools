@@ -108,7 +108,7 @@ console as converted maps, the writer is at fault; if it plays like the stock ma
 
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
 Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
-with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials` and `stock_pictures` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
+with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials`, `stock_pictures` and `merge_duplicates` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
 
 | Fix | What it does |
 |---|---|
@@ -135,6 +135,7 @@ with `--fix-off NAME` (repeatable). All are on by default except `portal_multipl
 | `one_room` | Test, off by default: the map is treated as one room (each room's culling tree lists everything, no portals) |
 | `plain_pictures` | Test, off by default: the map's own 2D pictures become plain 16x16 ones (white / flat normal / black specular), to test the picture conversion |
 | `surface_order` | The world's surfaces laid out as the 360 tools do (solid, then decals / see-through, then shadow casters) with the draw ranges to match; IW4x maps list every surface as opaque |
+| `merge_duplicates` | Test, off by default (PC mp_rust stopped partway through loading with it on): same-named assets (shader sets several PC ones turn into, the PC map's own team models next to the stock team) are written once, as stock files have them; the game keeps the first of two anyway, so this only saves memory (PC mp_rust: about 10 MB) |
 | `hide_tool_surfaces` | Radiant tool shaders (clip, caulk, ...) draw nothing |
 | `portal_multiply` | HDR portal sheets drawn with a multiply shader (off: hidden like tool surfaces) |
 
