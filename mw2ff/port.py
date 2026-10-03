@@ -3704,6 +3704,64 @@ def effect_donors(root, ref_roots, candidates, log=print, most=2):
     return out
 
 
+# How many assets of each kind the game holds at once (TU6 default_mp.xex, the table its
+# "Exceeded limit of %d '%s' assets" check reads), shared by the map and the files that stay
+# loaded with it (common_mp, code_post_gfx_mp, patch_mp). Over one, the load stops part way.
+POOL_LIMITS = {
+    "PhysPreset": 64, "PhysCollmap": 1024, "XAnimParts": 4096, "XModelSurfs": 4096, "XModel": 1536,
+    "Material": 4096, "MaterialPixelShader": 8096, "MaterialTechniqueSet": 768, "GfxImage": 3584,
+    "snd_alias_list_t": 16000, "SndCurve": 64, "LoadedSound": 1350, "GfxLightDef": 32,
+    "FxEffectDef": 600, "FxImpactTable": 4, "RawFile": 1024, "StringTable": 400, "TracerDef": 32,
+}
+_pool_cache = {}
+
+
+def pool_names(root, cache=True):
+    """{asset type: set of names} of the assets a tree brings (named references to assets the
+    game already has, ",name", take no place)."""
+    key = id(root)
+    if cache and key in _pool_cache and _pool_cache[key][0] is root:
+        return _pool_cache[key][1]
+    out = {}
+    for o in iter_objects(root["assets"]):
+        if not (isinstance(o, dict) and o.get("_asset") in POOL_LIMITS):
+            continue
+        n = alias_name(o) if o["_asset"] == "snd_alias_list_t" else (asset_name(o) or _name(o))
+        if n is None:
+            f = o.get("@", {}).get(("filename", ()))
+            n = f.b if isinstance(f, Str) else None
+        if n and not n.startswith(b","):
+            out.setdefault(o["_asset"], set()).add(n.lower())
+    if cache:
+        _pool_cache[key] = (root, out)
+    return out
+
+
+def check_pools(root, refs, log, warn):
+    """Stop when the map and the files loaded with it hold more assets of a kind than the game
+    has room for; warn when it is close."""
+    have = {}
+    for name, r in refs:
+        if os.path.splitext(os.path.basename(name))[0].lower() in RESIDENT + ("patch_mp",):
+            for t, names in pool_names(r).items():
+                have.setdefault(t, set()).update(names)
+    over, used = [], []
+    for t, names in pool_names(root, cache=False).items():
+        n = len(names | have.get(t, set()))
+        lim = POOL_LIMITS[t]
+        used.append((n / float(lim), "%s %d/%d" % (t, n, lim)))
+        if n > lim:
+            over.append("%s: %d of %d" % (t, n, lim))
+        elif n > lim * 0.95:
+            warn("%d %s assets with the files loaded alongside, of the %d the game has room for"
+                 % (n, t, lim))
+    log("  game asset room used (with the files loaded alongside): %s"
+        % ", ".join(u for _, u in sorted(used, reverse=True)[:4]))
+    if over:
+        raise PortError("the map holds more assets than the game has room for (%s); it would stop "
+                        "loading part way" % ", ".join(over))
+
+
 def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None,
          game_iwds=(), texture_budget=0, card_pak=False, fx_paths=(), fixes=None, pak_path=None):
     """loaded: {path: tree} of stock files already read (load_stock), to reuse.
@@ -3759,6 +3817,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         # The stock team copied in: the PC copy of a stock map carries its own (PC mp_rust).
         if porter.fixes["merge_duplicates"]:
             porter.merge_same_named(root["assets"])
+    check_pools(root, refs, log, porter.warn)
     xs = schema_mod.load("xbox")
     w = tree.TreeWriter(root, xs, keep_fixes=False)
     w.map_rel = lambda r: map_rel(r, porter.P, porter.X)
