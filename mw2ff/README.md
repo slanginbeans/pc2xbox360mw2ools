@@ -114,6 +114,8 @@ with `--fix-off NAME` (repeatable). All are on by default except `stock_effects`
 |---|---|
 | `texture_budget` | Pictures over the budget lose their top mip levels (out of memory / loading-screen freeze without it) |
 | `stock_effects` | Effects a stock 360 map also has come from it (the yellow dust haze); maps have failed to load with it (MT_GetSize ... script usage) |
+| `pc_sort_keys` | Each material keeps the PC's sort key (its draw pass: opaque, decal layers, glass, effects), which means the same on the 360 (all 271 materials PC mp_rust shares with stock 360 mp_rust match). Off: taken from a stock material with the same shader set, which moved backlot's decals and blend layers into other passes |
+| `normal_maps_dxn` | PC normal maps (DXT5, X in alpha, Y in green) become DXN as every stock 360 normal map is (checked against stock mp_rust's in imagefile1.pak: within 2-3 levels of 255) |
 | `stock_scripts` | A script a stock 360 file also has (a stock map's own `maps/mp/<map>.gsc`, effects scripts) comes from it; PC scripts can call functions only later PC patches have (PC mp_rust's `killTrigger`). The teams are still set in it |
 | `stock_sounds` | Sound aliases come from a stock 360 file with the same alias, audio and all; others play the silent stock `null` sound (the PC file only names sound files the 360 doesn't have: a converted PC mp_rust froze on the loading screen) |
 | `surface_bounds` | Fills in the 360-only culling radius / texture density of every world surface |

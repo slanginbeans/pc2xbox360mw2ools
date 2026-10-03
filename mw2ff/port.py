@@ -68,6 +68,15 @@ FIXES = [
      "Effects a stock 360 map also has (dust, car glass, fires) come from it instead of being "
      "converted: the converted dust drew a yellow haze. Off by default: mp_backlot never loaded "
      "with it (MT_GetSize: max allocation exceeded ... for script usage)."),
+    ("pc_sort_keys", "Keep the PC's draw order (sort keys)",
+     "Each material keeps its own sort key (which pass it draws in: opaque, decal layers, glass, "
+     "effects), which means the same on the 360: all 271 materials PC mp_rust shares with stock "
+     "360 mp_rust have the same one. Off: it comes from a stock material with the same shader set, "
+     "which moved backlot's decals and blend layers into other passes (decals to opaque, ...)."),
+    ("normal_maps_dxn", "Normal maps as DXN",
+     "PC normal maps (DXT5: X in alpha, Y in green) become DXN, two channels, as every stock 360 "
+     "normal map is: X is the PC's alpha block as it is, Y its green channel. Off: they stay DXT5, "
+     "which the 360's shaders read as if DXN."),
     ("stock_scripts", "Stock 360 scripts",
      "A script a stock 360 file also has (a stock map's own maps/mp/<map>.gsc, its effects "
      "scripts) comes from it. PC scripts can call what only later PC patches have: PC mp_rust's "
@@ -589,6 +598,32 @@ def read_iwi_wavelet(data, flags, fmt, w, h, head):
     return "ARGB8", w, h, [lv if convert is None else convert(lv) for lv in levels], False
 
 
+def _bc4_block(vals):
+    """16 values (0-255) -> one 8-byte BC4 block (8-step ramp between the extremes)."""
+    hi, lo = max(vals), min(vals)
+    if hi == lo:
+        return bytes([hi, lo]) + bytes(6)
+    pal = [hi, lo] + [((7 - i) * hi + i * lo) // 7 for i in range(1, 7)]
+    bits = 0
+    for k, v in enumerate(vals):
+        bits |= min(range(8), key=lambda i: abs(pal[i] - v)) << (3 * k)
+    return bytes([hi, lo]) + bits.to_bytes(6, "little")
+
+
+def dxt5_normal_to_dxn(mip):
+    """A PC DXT5 normal map level (X in alpha, Y in green) as 360 DXN: the alpha block as it
+    is, then green as a second block. Stock 360 normal maps are laid out this way: their first
+    block is the PC's alpha block (byte for byte in most), the second the PC's green channel."""
+    out = bytearray(len(mip))
+    for o in range(0, len(mip) - 15, 16):
+        c0, c1, bits = struct.unpack_from("<HHI", mip, o + 8)
+        g0, g1 = ((c0 >> 5) & 63) * 255 // 63, ((c1 >> 5) & 63) * 255 // 63
+        pal = [g0, g1, (2 * g0 + g1) // 3, (g0 + 2 * g1) // 3] if c0 > c1 else [g0, g1, (g0 + g1) // 2, 0]
+        out[o:o + 8] = mip[o:o + 8]
+        out[o + 8:o + 16] = _bc4_block([pal[(bits >> (2 * k)) & 3] for k in range(16)])
+    return bytes(out)
+
+
 def fit_picture(fmt_name, w, h, mips, limit=2048):
     """Pictures the 360 can't take as they are (sides not a power of two, or too big) are
     resized: decoded, scaled down to powers of two, and compressed again (top level only)."""
@@ -629,6 +664,17 @@ class ImageMaker:
         if tpl is None:
             tpl = self.templates.get((gpu, cube))
         make_cube = False
+        if tpl is None and gpu == 0x31 and self.templates.get((0x14, cube)) is not None:
+            # Stock DXN pictures (normal maps) all stream from the disc, so no file carries one
+            # to copy: a DXT5 one with the format changed (in the fetch constant and in
+            # textureFormat, as stock DXN pictures' 0x1a200171 against DXT5's 0x1a200154).
+            tpl = dict(self.templates[(0x14, cube)])
+            hdr = bytearray(bytes.fromhex(tpl["texture"]))
+            dw1 = struct.unpack_from("<I", hdr, 32)[0]
+            struct.pack_into("<I", hdr, 32, (dw1 & ~0x3F) | 0x31)
+            tpl["texture"] = hdr.hex()
+            tpl["textureFormat"] = (tpl.get("textureFormat", 0) & ~0x3F) | 0x31
+            self.templates[(0x31, cube)] = tpl
         if tpl is None and cube:
             # No stock cube map of this format inside a file: take a flat one and make it a cube.
             tpl = self.templates.get((gpu, False))
@@ -747,6 +793,7 @@ class Porter:
         self.stock_models = {}          # model name -> (a stock map's model, its file) (stock_models)
         self.model_swap = {}            # id() of a converted model -> the stock model's list entry
         self.swapped_rows = set()       # light grid row data already put in 360 byte order
+        self.pc_sort = {}               # id() of a material -> the PC's sort key (pc_sort_keys)
         self.stock_aliases = {}         # sound alias name -> (stock alias list, resident?) (stock_sounds)
         for name, root in x_refs:
             idx = asset_index(root)
@@ -1194,6 +1241,8 @@ class Porter:
             a["_forward"] = True
         if self.from_game:
             self.log("  %d pictures come from the PC game's own .iwd files" % self.from_game)
+        if getattr(self, "dxn_count", 0):
+            self.log("  %d normal maps converted to DXN, as the 360 keeps them" % self.dxn_count)
         for u in self.unreadable[:5]:
             self.warn("picture %s can't be read, so it's treated as missing" % u)
         if len(self.unreadable) > 5:
@@ -2206,6 +2255,7 @@ class Porter:
         tsname = asset_name(ts) if isinstance(ts, dict) else None
         if tsname and tsname.startswith(b","):     # already converted to a reference
             tsname = tsname[1:]
+        orig_ts = tsname
         tpl = self.material_templates.get(tsname)
         # A stock material of the same name and shader set: its own render state (culling,
         # draw order), not that of another material that happens to share the shader set.
@@ -2230,13 +2280,19 @@ class Porter:
         # PC render state (D3D9) means nothing to the 360: it comes from the template instead.
         d["@"].pop(("stateBitsTable", ()), None)
         d["_template"] = tpl
+        # The PC's own draw order (sort key) means the same on the 360: all 271 materials PC
+        # mp_rust shares with stock 360 mp_rust have the same one. Kept unless the shader set
+        # was swapped for one that hides it (tool surfaces, HDR portals).
+        if self.fixes["pc_sort_keys"] and not d.get("_invisible") and not (b"_distfalloff" in (orig_ts or b"")):
+            self.pc_sort[id(d)] = (d.get("info") or {}).get("sortKey")
         return None
 
     def post_Material(self, d, tx):
         tpl = d.pop("_template")
         for k in ("stateBitsEntry", "stateBitsCount", "stateFlags", "cameraRegion", "stateBitsTable", "unknown"):
             d[k] = tpl[k]
-        d["info"]["sortKey"] = tpl["info"]["sortKey"]
+        sort = self.pc_sort.pop(id(d), None)
+        d["info"]["sortKey"] = sort if isinstance(sort, int) else tpl["info"]["sortKey"]
         # The game builds drawSurf itself when it registers the material; stock 360 files
         # always hold zero here (the PC keeps its own bit layout).
         d["info"]["drawSurf"] = tpl["info"]["drawSurf"]
@@ -2361,6 +2417,10 @@ class Porter:
             # console stopped loading mp_waw_castle with "MT_GetSize: max allocation exceeded
             # ... for script usage"; the top level alone (512 KB) loads.
             mips = mips[:1]
+        if fmt == "DXT5" and not cube and d.get("semantic") == 5 and self.fixes["normal_maps_dxn"]:
+            mips = [dxt5_normal_to_dxn(m) for m in mips]
+            fmt = "DXN"
+            self.dxn_count = getattr(self, "dxn_count", 0) + 1
         self.images.build(d, fmt, w, h, mips, cube)
         # Pictures from files are "load from file" on the 360 (the PC leaves them unknown);
         # stock loading screens are plain 2D pictures.
