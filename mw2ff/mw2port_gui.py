@@ -493,8 +493,10 @@ folder: the patched copies and <code>imagefile8.pak</code> go in <code>mw2port_o
 <section><h2>Fixes (for testing)</h2>
 <p class="dim">Each fix below changes how maps are converted. They are all on normally; untick one to convert
 without it, to see on the console whether it helps or hurts.</p>
+<details id="fixBox"><summary><b>Switches</b> <span id="fixSummary" class="dim"></span></summary>
 <div id="fixes"></div>
-<p><button id="fixDefaults">Restore default switches</button> <span class="dim">Puts every switch above back the way it is normally (fixes on, test switches off).</span></p>
+</details>
+<p><button id="fixDefaults">Restore default switches</button> <span class="dim">Puts every switch back the way it is normally.</span></p>
 <p><label>Picture budget <input type="number" id="budget" min="4" max="400" style="width:5em"> MB</label>
 <span class="dim">Pictures over this lose their top mip levels so the map fits in memory (normally 40). Stock
 360 maps stream most pictures from the disc, so converted maps are bigger in memory: lower it to test whether a
@@ -536,8 +538,9 @@ function renderMaps(){if(!S.maps.length){$("#maps").innerHTML=`<p class="warn">N
  <span class="tag dim">${esc(m.where)}</span></div>`).join("");
  document.querySelectorAll(".map").forEach(d=>d.onclick=e=>{if(e.target.classList.contains("tick"))return;pick=d.dataset.p;renderMaps();renderTeams()});
  document.querySelectorAll(".tick").forEach(c=>c.onchange=()=>{c.checked?ticked.add(c.dataset.p):ticked.delete(c.dataset.p);renderJob()})}
+function fixSummary(){const d=S.fixes.filter(f=>!!S.settings.fixes[f.id]!==!!S.fix_defaults[f.id]);$("#fixSummary").textContent=`(${S.fixes.length}; ${d.length?d.length+" changed from the defaults: "+d.map(f=>f.id).join(", "):"all at their defaults"})`}
 function renderFixes(){$("#fixes").innerHTML=S.fixes.map(f=>`<label class="toggle" style="margin:6px 0"><input type="checkbox" class="fix" data-k="${f.id}"${S.settings.fixes[f.id]?" checked":""}><span><b>${esc(f.label)}</b> <code class="dim">${f.id}</code><br><span class="dim">${esc(f.help)}</span></span></label>`).join("");
- document.querySelectorAll(".fix").forEach(c=>c.onchange=async()=>{try{S.settings=await api("/api/settings",{fixes:{[c.dataset.k]:c.checked}})}catch(e){alert(e.message)}});
+ document.querySelectorAll(".fix").forEach(c=>c.onchange=async()=>{try{S.settings=await api("/api/settings",{fixes:{[c.dataset.k]:c.checked}});fixSummary()}catch(e){alert(e.message)}});fixSummary();
  $("#variants").checked=!!S.settings.variants;$("#budget").value=S.settings.texture_budget;$("#profile").checked=!!S.settings.profile}
 function renderRewrite(){const s=$("#rewriteMap");const keep=s.value;s.innerHTML=(S.stock_map_names||[]).map(n=>`<option${n===keep?" selected":""}>${esc(n)}</option>`).join("")||"<option value=''>no stock mp_*.ff here</option>"}
 function renderCards(){$("#cardPak").checked=!!S.settings.card_pak;$("#cardSource").value=S.settings.card_source||"auto";
@@ -565,6 +568,8 @@ $("#cardPak").onchange=async e=>{try{S.settings=await api("/api/settings",{card_
 $("#cardSource").onchange=async e=>{try{S.settings=await api("/api/settings",{card_source:e.target.value});load()}catch(err){alert(err.message)}};
 $("#cardPakBuild").onclick=async()=>{try{await api("/api/cardpak",{});load(false)}catch(e){alert(e.message)}};
 $("#rewriteBtn").onclick=async()=>{const m=$("#rewriteMap").value;if(!m)return;try{await api("/api/rewrite",{map:m});load(false)}catch(e){alert(e.message)}};
+try{$("#fixBox").open=localStorage.getItem("fixBoxOpen")==="1"}catch(e){}
+$("#fixBox").addEventListener("toggle",()=>{try{localStorage.setItem("fixBoxOpen",$("#fixBox").open?"1":"0")}catch(e){}});
 $("#fixDefaults").onclick=async()=>{try{S.settings=await api("/api/settings",{fixes:S.fix_defaults});renderFixes()}catch(err){alert(err.message)}};
 $("#budget").onchange=async e=>{try{S.settings=await api("/api/settings",{texture_budget:e.target.value});$("#budget").value=S.settings.texture_budget}catch(err){alert(err.message)}};
 $("#variants").onchange=async e=>{try{S.settings=await api("/api/settings",{variants:e.target.checked})}catch(err){alert(err.message)}};
