@@ -120,6 +120,7 @@ with `--fix-off NAME` (repeatable). All are on by default except `portal_multipl
 | `stock_sounds` | Sound aliases come from a stock 360 file with the same alias, audio and all; others play the silent stock `null` sound (the PC file only names sound files the 360 doesn't have: a converted PC mp_rust froze on the loading screen) |
 | `surface_bounds` | Fills in the 360-only culling radius / texture density of every world surface |
 | `model_lods` | Model detail levels' partBits and surfs written as stock files have them (0 and empty) |
+| `pc_face_culling` | A material the PC draws two-sided (no back-face culling: mp_backlot's market umbrellas, milk cartons, stone blocks) stays two-sided; the stock render state it takes culls back faces, so such models went invisible from one side. Face culling is the same bits on PC and 360 (state word 0, bits 14-15) |
 | `stock_material_state` | A material a stock file also has takes that material's culling and draw order |
 | `tree_model_bounds` | Culling tree boxes grow to enclose the static models they list (CoD4 ports list models sticking out of their box, which vanish as you turn) |
 | `map_effects` | Keep the effects the map's createfx script places (off: left out, its ambient sounds stay; for testing, e.g. the dust haze) |
