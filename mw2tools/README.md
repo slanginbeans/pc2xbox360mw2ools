@@ -48,3 +48,9 @@ just downloaded. If a map conversion is running, that one keeps going and its pa
 To keep the old window instead, put an empty file named `keep_window.txt` in the `mw2tools`
 folder (next to your `.ff` files) and start `mw2tools.bat` again. Leave that window open while
 you use the tools. Delete the file to go back to the icon.
+
+## Closing
+
+Close the browser page (all of its tabs) and mw2tools stops about 15 seconds later, icon and
+window included. It never stops during a map conversion. A reload doesn't count as closing. To
+keep it running with no page open, add `--keep-running` to the `start` line in `mw2tools.bat`.
