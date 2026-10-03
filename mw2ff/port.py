@@ -1866,6 +1866,14 @@ class Porter:
             packed.append(v)
         packed.append(struct.unpack("<I", struct.pack("<f", pl["scale"]))[0])
         d["packedAxis"] = packed
+        # Ground-lit models (grass): the PC marks them 0x20, stock 360 rust marks the same 299
+        # models 0x02, and the 360 holds their ground color with its bytes the other way round.
+        f = d.get("flags") or 0
+        if f & 0x20:
+            d["flags"] = (f & ~0x20) | 0x02
+        gl = d.get("groundLighting")
+        if isinstance(gl, dict) and isinstance(gl.get("union"), str):
+            gl["union"] = bytes.fromhex(gl["union"])[::-1].hex()
         if self.fixes["hide_foliage"] or self.fixes["draw_distance_cap"]:
             m = deref(d.get("@", {}).get(("model", ())))
             name = (_name(m) or b"").lstrip(b",") if isinstance(m, dict) else b""
@@ -1916,7 +1924,7 @@ class Porter:
         return new
 
     def pre_GfxImage(self, d, tp, tx):
-        name = asset_name(d)
+        name = asset_name(d) or _name(d) or b""     # (_name: a name shared with another asset)
         if d.get("category") == 5 and not name.startswith(b","):
             # Water (IMG_CATEGORY_WATER): a stand-in picture of another size would have the
             # game write the waves past its end.
@@ -1976,7 +1984,11 @@ class Porter:
         return False
 
     def pre_Material(self, d, tp, tx):
-        name = asset_name(d)
+        name = asset_name(d) or _name(d) or b""     # (_name: a name shared with another asset)
+        if name and name.startswith(b","):
+            # The PC file only names it (the game has it loaded): so does the 360 file (stock
+            # 360 mp_rust names ,mc/lambert1 the same way).
+            return self._replace(d, self.reference("Material", name[1:]))
         tt = d.get("@", {}).get(("textureTable", ()))
         images = [deref(t.get("@", {}).get(("image", ()))) for t in (tt if isinstance(tt, list) else [])
                   if isinstance(t, dict) and isinstance(t.get("u"), dict)]
