@@ -131,6 +131,12 @@ FIXES = [
      "type among them) are drawn with Infinity Ward's own 360 copy instead of the converted one. "
      "Untick to draw the converted models instead (if they then flicker and the stock ones "
      "didn't, the converted models are at fault)."),
+    ("stream_pictures", "Stream pictures from imagefile9.pak (test)",
+     "The map's own pictures stream from a pak as stock maps' do, instead of sitting in the map "
+     "file: they come in at full size and take no map memory (converted mp_rust needed about 112 MB "
+     "against stock's 67). Writes mw2port_out\\imagefile9.pak, shared by every map converted this "
+     "way (new pictures are added to it): copy it to the game folder (next to default_mp.xex), as "
+     "imagefile8.pak. Off by default until tried on a console."),
     ("stock_world", "Stock 360 world (test)",
      "For a PC copy of a stock map (PC mp_rust): the world assets (drawn world, collision, map "
      "entities, effects placement, game world) come from the stock 360 map of the same name, "
@@ -162,7 +168,7 @@ FIXES = [
 ]
 # Off unless switched on: the test switches, and portal_multiply (HDR portals are hidden instead).
 DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "skip_lod0", "one_room", "plain_pictures",
-               "stock_world", "portal_multiply"}
+               "stock_world", "portal_multiply", "stream_pictures"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
@@ -687,6 +693,64 @@ def fit_picture(fmt_name, w, h, mips, limit=2048):
     return nw, nh, [mw2tex._encode(pic.tobytes(), nw, nh, gpu)]
 
 
+STREAM_PAK = 9          # imagefile9.pak: mw2tex uses 7 (textures) and 8 (titles and emblems)
+STREAMABLE = ("DXT1", "DXT3", "DXT5", "DXN")
+
+
+class PakWriter:
+    """imagefile<STREAM_PAK>.pak, shared by every map converted with stream_pictures. Chunks are
+    only ever added (maps converted earlier point into it); one already in it is reused (an
+    index of them is kept next to it)."""
+
+    def __init__(self, path):
+        import json
+        self.path, self.index_path = path, os.path.splitext(path)[0] + ".json"
+        self.data = bytearray(open(path, "rb").read()) if os.path.exists(path) else bytearray(b"IWffu100\0\0\x01\x0d")
+        self.index = {}
+        try:
+            with open(self.index_path) as fh:
+                idx = json.load(fh)
+            if idx.get("size") == len(self.data):
+                self.index = idx.get("chunks", {})
+        except (OSError, ValueError):
+            pass
+        self.added = 0
+
+    def add(self, blob):
+        """(pak, start, end) of the zlib chunk holding blob."""
+        import hashlib
+        import zlib
+        key = hashlib.sha1(blob).hexdigest()
+        if key in self.index:
+            start, end = self.index[key]
+            return (STREAM_PAK, start, end)
+        chunk = zlib.compress(blob, 9)
+        start = len(self.data)
+        self.data += chunk
+        self.index[key] = [start, len(self.data)]
+        self.added += len(chunk)
+        return (STREAM_PAK, start, len(self.data))
+
+    def save(self):
+        import json
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        with open(self.path, "wb") as fh:
+            fh.write(bytes(self.data))
+        with open(self.index_path, "w") as fh:
+            json.dump({"size": len(self.data), "chunks": self.index}, fh)
+
+
+def stream_levels(width, height, has_mips):
+    """The sizes a streamed picture comes in, smallest first, as stock pictures do: up to four,
+    each twice the one before (stock 1024x512: 128x64, 256x128, 512x256, 1024x512)."""
+    if not has_mips:
+        return [(width, height)]
+    n = 1
+    while n < 4 and max(width, height) >> n >= 32 and min(width, height) >> n >= 16:
+        n += 1
+    return [(max(1, width >> k), max(1, height >> k)) for k in reversed(range(n))]
+
+
 class ImageMaker:
     """Builds 360 GfxImage dicts with their pixels in the fastfile."""
 
@@ -776,6 +840,51 @@ class ImageMaker:
         d.update(new)
         d.update(keep)
 
+    def build_streamed(self, d, fmt_name, width, height, mips, pak):
+        """Fill image dict d (in place) as a streamed 360 picture, as stock ones are: a 1x1
+        record listing up to four levels (streams: size, and mip count << 26 | data size), each
+        one zlib chunk in pak. The smallest level holds its whole mip chain, each bigger one only
+        its own top mip (a whole chain there overflows the game's buffer, as mw2tex found).
+        False when it can't be (mips missing): the caller keeps the picture in the file."""
+        import math
+        tex = self.tex
+        gpu = {v[0]: k for k, v in tex.FORMATS.items()}[fmt_name]
+        tpl = self.templates.get((gpu, False))
+        if tpl is None:
+            self.build(d, fmt_name, 4, 4, [b"\0" * tex.FORMATS[gpu][2]], tpl=None)   # makes the DXN one
+            tpl = self.templates.get((gpu, False))
+        if tpl is None:
+            return False
+        full = int(math.log2(max(width, height))) + 1
+        has_mips = len(mips) >= full
+        levels = stream_levels(width, height, has_mips)
+        streams, paks = [], []
+        for k, (w, h) in enumerate(levels):
+            first = int(round(math.log2(width / w))) if w else 0
+            if k == 0:
+                chain = mips[first:] if has_mips else mips[:1]
+                blob = tex.tile(chain, w, h, gpu, single=not has_mips)
+                count = int(math.log2(max(w, h))) + 1 if has_mips else 1
+            else:
+                blob = tex.tile(mips[first:first + 1], w, h, gpu, single=True)
+                count = int(math.log2(max(w, h))) + 1
+            streams.append({"width": w, "height": h, "info": (count << 26) | len(blob)})
+            paks.append(pak.add(blob))
+        while len(streams) < 4:
+            streams.append({"width": 0, "height": 0, "info": 0})
+            paks.append((0, 0, 0))
+        name = d.get("@", {}).get(("name", ()))
+        new = {"texture": "00" * 52, "textureFormat": tpl.get("textureFormat"), "mapType": 3,
+               "semantic": d.get("semantic", 0), "category": d.get("category", 3), "useSrgbReads": 0,
+               "cardMemory": 0, "width": 1, "height": 1, "depth": 1, "levelCount": 1, "streaming": 1,
+               "pixels": None, "streams": streams, "name": "follow", "@": {("name", ()): name},
+               "_asset": "GfxImage", "_pak": paks}
+        keep = {k: d[k] for k in ("_slot", "_forward") if k in d}
+        d.clear()
+        d.update(new)
+        d.update(keep)
+        return True
+
 
 def encode_dxt3a(lum, width, height):
     """8-bit single channel -> DXT3A blocks (4 bits a pixel, DXT3's alpha block), linear."""
@@ -796,8 +905,10 @@ def encode_dxt3a(lum, width, height):
 
 class Porter:
     def __init__(self, pc_root, x_refs, iwd=None, log=print, game_iwds=(), texture_budget=0,
-                 fixes=None):
+                 fixes=None, pak=None):
         self.root = pc_root
+        self.pak = pak                  # PakWriter for stream_pictures, else None
+        self.streamed = 0
         self.log = log
         self.fixes = fix_set(fixes)
         self.test_counts = {}           # static models hide_foliage / draw_distance_cap changed
@@ -1166,6 +1277,8 @@ class Porter:
                 fmt, w, h, mips, cube = read_iwi(found[0].read(found[1]))
             except (PortError, struct.error, ValueError, KeyError):
                 continue
+            if self.pak is not None and not cube and fmt in STREAMABLE and not name.startswith(b"loadscreen"):
+                continue        # streamed from the pak: takes no map memory
             if cube or len(mips) < 2:
                 fixed += sum(len(m) for m in mips)
             else:
@@ -2631,6 +2744,18 @@ class Porter:
             raise PortError("image %s isn't in the .iwd" % name.decode())
         fmt, w, h, mips, cube = read_iwi(data)
         limit = 1024 if name.startswith(b"loadscreen") else 2048
+        if self.pak is not None and not cube and fmt in STREAMABLE and not name.startswith(b"loadscreen"):
+            w, h, mips = fit_picture(fmt, w, h, mips, limit)
+            if fmt == "DXT5" and (d.get("semantic") == 5 or name.endswith(b"_nml")) \
+                    and self.fixes["normal_maps_dxn"]:
+                mips = [dxt5_normal_to_dxn(m) for m in mips]
+                fmt = "DXN"
+                self.dxn_count = getattr(self, "dxn_count", 0) + 1
+            d["category"] = 3
+            if self.images.build_streamed(d, fmt, w, h, mips, self.pak):
+                self.streamed += 1
+                self.done.add(id(d))
+                return d
         if not cube:
             w, h, mips = fit_picture(fmt, w, h, mips, limit)
             k = self.mip_drop.get(name, 0)
@@ -3451,7 +3576,7 @@ def effect_donors(root, ref_roots, candidates, log=print, most=2):
 
 
 def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None,
-         game_iwds=(), texture_budget=0, card_pak=False, fx_paths=(), fixes=None):
+         game_iwds=(), texture_budget=0, card_pak=False, fx_paths=(), fixes=None, pak_path=None):
     """loaded: {path: tree} of stock files already read (load_stock), to reuse.
     game_iwds: the PC game's .iwd files, for pictures the map's own .iwd doesn't have.
     fx_paths: stock 360 maps to take the map's effects from (those carrying the most of them
@@ -3485,8 +3610,12 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         iwd_path = [iwd_path]
     iwd = [zipfile.ZipFile(p) for p in iwd_path]
     log("converting %s" % os.path.basename(pc_path))
+    pak = None
+    if fixes["stream_pictures"]:
+        pak = PakWriter(pak_path or os.path.join(os.path.dirname(os.path.abspath(out_path)),
+                                                 "imagefile%d.pak" % STREAM_PAK))
     porter = Porter(root, refs, iwd, log, [zipfile.ZipFile(p) for p in game_iwds], texture_budget,
-                    fixes)
+                    fixes, pak)
     off = [k for k, v in fixes.items() if not v and DEFAULT_FIXES[k]]
     on = [k for k, v in fixes.items() if v and not DEFAULT_FIXES[k]]
     if off:
@@ -3505,11 +3634,16 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     out = reserve_callback_block(out, porter)
     _write_x360(out, out_path, pak_table(out, out_path, porter.root, w.starts, w.written))
     log("wrote %s (%d bytes of zone)" % (out_path, len(out)))
+    if pak is not None and porter.streamed:
+        pak.save()
+        log("  %d pictures stream from %s (%.1f MB added, %.1f MB in all): copy it to the game "
+            "folder, next to default_mp.xex" % (porter.streamed, pak.path, pak.added / 1048576.0,
+                                                 len(pak.data) / 1048576.0))
     return out, porter
 
 
 def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
-             texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None):
+             texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None, pak_path=None):
     """Convert a PC map (its .ff, and _load.ff / .iwd / .arena next to it when there) into
     out_dir, picking what it needs from the stock 360 files given: code_post_gfx_mp.ff, a
     stock map (render settings, shaders) and the stock maps that carry the map's teams.
@@ -3526,6 +3660,9 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
     base = os.path.splitext(pc_path)[0]
     name = os.path.basename(base)
     iwd = [base + ".iwd"] if os.path.exists(base + ".iwd") else []
+    # One pak for every map (stream_pictures), next to the maps' folders (mw2port_out).
+    pak_path = pak_path or os.path.join(os.path.dirname(os.path.normpath(os.path.abspath(out_dir))),
+                                        "imagefile%d.pak" % STREAM_PAK)
     os.makedirs(out_dir, exist_ok=True)
     loaded = {}
     log("reading stock 360 file code_post_gfx_mp.ff")
@@ -3560,7 +3697,7 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
             out = os.path.join(out_dir, name + "_load.ff")
             try:
                 port(base + "_load.ff", out, iwd, [cpg, template, load_ref], log, loaded=loaded,
-                     game_iwds=game_iwds, fixes=fixes)
+                     game_iwds=game_iwds, fixes=fixes, pak_path=pak_path)
                 written.append(out)
             except (ValueError, PortError, mw2ff.zone_mod.ZoneError) as e:
                 # The map works without it: the game shows a plain loading screen.
@@ -3571,8 +3708,11 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
                     % (name, e, head.hex(" ")))
     out = os.path.join(out_dir, name + ".ff")
     port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded, game_iwds=game_iwds,
-         texture_budget=texture_budget, card_pak=bool(card_ui), fx_paths=maps, fixes=fixes)
+         texture_budget=texture_budget, card_pak=bool(card_ui), fx_paths=maps, fixes=fixes,
+         pak_path=pak_path)
     written.append(out)
+    if fix_set(fixes)["stream_pictures"] and os.path.exists(pak_path):
+        written.append(pak_path)
     if card_ui:
         # card_ui: a ui_mp.ff (mw2tex's built one, or the stock one) to fill the slots from.
         import mw2tex
@@ -3589,6 +3729,8 @@ def port_map_variants(pc_path, out_dir, stock_paths, teams=None, log=print, game
     fixes = fix_set(fixes)
     written = port_map(pc_path, out_dir, stock_paths, teams, log, game_iwds, texture_budget,
                        card_ui, fixes)
+    main_pak = os.path.join(os.path.dirname(os.path.normpath(os.path.abspath(out_dir))),
+                            "imagefile%d.pak" % STREAM_PAK)
     labels = {k: label for k, label, _ in FIXES}
     for k in [k for k, v in fixes.items() if v]:
         log("")
@@ -3597,7 +3739,8 @@ def port_map_variants(pc_path, out_dir, stock_paths, teams=None, log=print, game
         try:
             # Titles and emblems: the pak written next to the main file serves every variant.
             files = [f for f in port_map(pc_path, vdir, stock_paths, teams, log, game_iwds,
-                                         texture_budget, None, dict(fixes, **{k: False}))
+                                         texture_budget, None, dict(fixes, **{k: False}),
+                                         pak_path=main_pak)
                      if not f.endswith(".pak")]
         except (PortError, mw2ff.zone_mod.ZoneError, ValueError) as e:
             log("  variant no_%s stopped: %s" % (k, e))
