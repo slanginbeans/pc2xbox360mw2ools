@@ -1677,6 +1677,13 @@ class Porter:
         def swap(x):
             if isinstance(x, dict) and id(x) in keep:
                 return ref_to(keep[id(x)])
+            if isinstance(x, Ref) and isinstance(x.target, dict) and id(x.target) in keep \
+                    and keep[id(x.target)][1].get("@") is x.target.get("@"):
+                # Inside the asset itself (a techset's techniques alias each other): copies of
+                # one stock asset share their insides, so the kept one has the same layout.
+                r = Ref(x.val)
+                r.target, r.rel, r.t = keep[id(x.target)][1], x.rel, x.t
+                return r
             if isinstance(x, Ref):
                 t = x.target[1] if isinstance(x.target, tree.AssetEntry) else None
                 a = t if isinstance(t, dict) and x.rel == 4 else _asset_in_slot(x)
@@ -1696,7 +1703,7 @@ class Porter:
                             v = swap(x)
                             if v is not None:
                                 c[j] = v
-                                early += pos[id(v.target)] > i
+                                early += pos.get(id(v.target), -1) > i
                         continue
                     v = swap(c)
                     if v is not None:
@@ -1704,9 +1711,21 @@ class Porter:
                             o["@"][k] = v
                         else:
                             o[k] = v
-                        early += pos[id(v.target)] > i
+                        early += pos.get(id(v.target), -1) > i
         types = Counter(e[0] for e in ents if isinstance(e[1], dict) and id(e[1]) in dropped)
         ents[:] = [e for e in ents if not (isinstance(e[1], dict) and id(e[1]) in dropped)]
+        # What a kept asset shares with a dropped one (PC models share their surfaces: PC
+        # mp_rust's ghillie sniper head uses the TF141 sniper head's) is written at its first
+        # pointer instead.
+        reached = set(id(o) for o in iter_objects(ents))
+        for o in list(iter_objects(ents)):
+            if not isinstance(o, dict):
+                continue
+            for c in o.get("@", {}).values():
+                for x in (c if isinstance(c, list) else [c]):
+                    if isinstance(x, Ref) and isinstance(x.target, tree.InsertSlot) and \
+                            isinstance(x.target.asset, dict) and id(x.target.asset) not in reached:
+                        x.target.asset["_forward"] = True
         self.log("  %d duplicate assets left out, their pointers going to the one kept (%s)" % (
             len(dropped), ", ".join("%s %d" % kv for kv in types.most_common())))
         if early:
@@ -3728,6 +3747,8 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         porter.add_teams(refs, map_teams(pc_path, teams))
         if card_pak:
             porter.cards_to_pak()
+        # The stock team copied in: the PC copy of a stock map carries its own (PC mp_rust).
+        porter.merge_same_named(root["assets"])
     xs = schema_mod.load("xbox")
     w = tree.TreeWriter(root, xs, keep_fixes=False)
     w.map_rel = lambda r: map_rel(r, porter.P, porter.X)
