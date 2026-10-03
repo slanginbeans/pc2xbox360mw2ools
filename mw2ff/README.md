@@ -108,7 +108,7 @@ console as converted maps, the writer is at fault; if it plays like the stock ma
 
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
 Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
-with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `skip_lod0`, `one_room`, `plain_pictures` and `stock_world` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
+with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials` and `stock_pictures` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
 
 | Fix | What it does |
 |---|---|
@@ -129,6 +129,9 @@ with `--fix-off NAME` (repeatable). All are on by default except `portal_multipl
 | `skip_lod0` | Test, off by default: models with several detail levels never use the closest one (LOD0), to test whether LOD0 is what the 360 fails to draw |
 | `stock_models` | Static models a stock 360 file also has are drawn with the stock copy (do the converted models cause a problem?) |
 | `stream_pictures` | Test, off by default: the map's own pictures stream from `imagefile9.pak` as stock maps' do (full size, no map memory: converted mp_rust 106 MB -> 82 MB, stock 64 MB). The pak, `mw2port_out\imagefile9.pak`, is shared by every map converted this way and only grows (a picture already in it is reused); copy it to the game folder next to `default_mp.xex`, like `imagefile8.pak` |
+| `stock_world` | Test, off by default: for a PC copy of a stock map, the world assets (drawn world, collision, entities, effect placement) come from the stock 360 map of the same name |
+| `stock_materials` | Test, off by default: for a PC copy of a stock map, every material the stock 360 map has under the same name comes from it whole (shader set, render state, pictures) |
+| `stock_pictures` | Test, off by default: for a PC copy of a stock map, every picture the stock 360 map has under the same name comes from it, streamed from the game's own `imagefile1-4.pak` |
 | `one_room` | Test, off by default: the map is treated as one room (each room's culling tree lists everything, no portals) |
 | `plain_pictures` | Test, off by default: the map's own 2D pictures become plain 16x16 ones (white / flat normal / black specular), to test the picture conversion |
 | `surface_order` | The world's surfaces laid out as the 360 tools do (solid, then decals / see-through, then shadow casters) with the draw ranges to match; IW4x maps list every surface as opaque |
@@ -136,6 +139,13 @@ with `--fix-off NAME` (repeatable). All are on by default except `portal_multipl
 | `portal_multiply` | HDR portal sheets drawn with a multiply shader (off: hidden like tool surfaces) |
 
 **Restore default switches** puts every switch back the way it is normally.
+
+**Rust crash tests.** To find which part of a converted PC copy of a stock map (PC mp_rust) makes it
+crash or flicker, convert it once per test: **Restore default switches**, then change one switch,
+so that one kind of data comes from the stock 360 map instead of being converted (or the other way
+round): `stock_world` on, `stock_materials` on, `stock_pictures` on, `stock_models` off (converted
+models), `stock_effects` off (converted effects). The test that stops (or starts) the crash names
+the part at fault.
 
 **Also build test variants** converts the map once more for every fix that is on, with just that
 fix off, into `mw2port_out\<map>\variants\no_<fix>`. Copy them to the console one after another
