@@ -143,6 +143,16 @@ FIXES = [
      "everything else stays converted. Off by default. If the converted map stops crashing or "
      "flickering with it, the world conversion is at fault; if not, the rest (models, materials, "
      "pictures, effects, sounds) is."),
+    ("stock_materials", "Stock 360 materials (test)",
+     "For a PC copy of a stock map (PC mp_rust): every material the stock 360 map has under the "
+     "same name comes from it whole (its shader set, render state and pictures) instead of being "
+     "converted. Off by default. If the crash or flicker stops with it, the material conversion "
+     "is at fault."),
+    ("stock_pictures", "Stock 360 pictures (test)",
+     "For a PC copy of a stock map: every picture the stock 360 map has under the same name comes "
+     "from it (streamed from the game's own imagefile1-4.pak, as there) instead of being "
+     "converted. Off by default. If the crash or flicker stops with it, the picture conversion is "
+     "at fault."),
     ("one_room", "Room visibility off (test)",
      "The map is treated as one room: every room's culling tree becomes a single node listing "
      "every surface and static model, and the portals between rooms go. Off by default. If the "
@@ -168,7 +178,7 @@ FIXES = [
 ]
 # Off unless switched on: the test switches, and portal_multiply (HDR portals are hidden instead).
 DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "skip_lod0", "one_room", "plain_pictures",
-               "stock_world", "portal_multiply", "stream_pictures"}
+               "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
@@ -946,6 +956,7 @@ class Porter:
         self.stock_fx_used = []
         self.stock_models = {}          # model name -> (a stock map's model, its file) (stock_models)
         self.model_swap = {}            # id() of a converted model -> the stock model's list entry
+        self.stock_copied = Counter()   # materials / pictures copied whole (stock_materials, stock_pictures)
         self.swapped_rows = set()       # light grid row data already put in 360 byte order
         self.pc_sort = {}               # id() of a material -> the PC's sort key (pc_sort_keys)
         self.stock_glass = None         # glass material name -> a stock glass type's 360-only numbers
@@ -1264,6 +1275,8 @@ class Porter:
                 continue
             if ("GfxImage", name) in self.resident and (name.startswith(b"$") or not self.in_iwd(name)):
                 continue
+            if self.fixes["stock_pictures"] and ("GfxImage", name) in self.library:
+                continue        # copied from stock, streamed
             tex = o.get("texture", {})
             ld = tex.get("@", {}).get(("loadDef", ())) if isinstance(tex, dict) else None
             if isinstance(ld, dict) and ld.get("resourceSize"):
@@ -1403,6 +1416,9 @@ class Porter:
             self.log("  %d pictures come from the PC game's own .iwd files" % self.from_game)
         if getattr(self, "dxn_count", 0):
             self.log("  %d normal maps converted to DXN, as the 360 keeps them" % self.dxn_count)
+        for k in ("materials", "pictures"):
+            if self.fixes["stock_" + k]:
+                self.log("  test: %d %s copied from the stock 360 files" % (self.stock_copied[k], k))
         if self.fixes["stock_world"]:
             self.stock_world_swap(ents)
         self.own_reference_copies(ents)
@@ -2267,6 +2283,15 @@ class Porter:
                 li.get("@", {}).pop(("surfs", ()), None)
                 li["surfs"] = None
 
+    def stock_copy(self, src):
+        """A copy of stock asset src (with what it points at), left as it is (stock_materials,
+        stock_pictures)."""
+        new = self.copy_in(src)
+        for o in iter_objects(new):
+            if isinstance(o, dict):
+                self.done.add(id(o))
+        return new
+
     def _replace(self, d, new):
         slot = d.get("_slot")
         fwd = d.get("_forward")
@@ -2525,6 +2550,9 @@ class Porter:
         # .iwd carries a copy: a second asset with the name would replace the resident one.
         if ("GfxImage", name) in self.resident and (name.startswith(b"$") or not self.in_iwd(name)):
             return self._replace(d, self.reference("GfxImage", name))
+        if self.fixes["stock_pictures"] and ("GfxImage", name) in self.library:
+            self.stock_copied["pictures"] += 1
+            return self._replace(d, self.stock_copy(self.library[("GfxImage", name)]))
         if self.fixes["plain_pictures"] and d.get("mapType") == 3 and \
                 not name.startswith((b"*", b"$", b"loadscreen")):
             self.plain_picture(d, name)
@@ -2580,6 +2608,9 @@ class Porter:
             # The game has this material loaded already and the map brings no pictures of its
             # own for it (a map's $levelbriefing does, so it gets its own copy).
             return self._replace(d, self.reference("Material", name))
+        if self.fixes["stock_materials"] and ("Material", name) in self.library:
+            self.stock_copied["materials"] += 1
+            return self._replace(d, self.stock_copy(self.library[("Material", name)]))
         ts = deref(d.get("@", {}).get(("techniqueSet", ())))
         tsname = asset_name(ts) if isinstance(ts, dict) else None
         if tsname and tsname.startswith(b","):     # already converted to a reference
