@@ -166,6 +166,12 @@ FIXES = [
      "from it (streamed from the game's own imagefile1-4.pak, as there) instead of being "
      "converted. Off by default. If the crash or flicker stops with it, the picture conversion is "
      "at fault."),
+    ("rebuild_trees", "Rebuild culling trees (test)",
+     "Each room's culling tree is built anew from what it holds, the way stock trees are: boxes "
+     "fitted to their contents, split in two along the longest side until a node holds 16 or "
+     "fewer surfaces and models, every node listing the models below it. Off by default. "
+     "mp_ancient's rocks and foliage vanished depending on the view angle with the converted "
+     "trees and didn't with Room visibility off; this keeps rooms and portals as they are."),
     ("one_room", "Room visibility off (test)",
      "The map is treated as one room: every room's culling tree becomes a single node listing "
      "every surface and static model, and the portals between rooms go. Off by default. If the "
@@ -199,7 +205,7 @@ FIXES = [
 # Off unless switched on: the test switches, and portal_multiply (HDR portals are hidden instead).
 DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "skip_lod0", "one_room", "plain_pictures",
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
-               "merge_duplicates", "model_box_bounds"}
+               "merge_duplicates", "model_box_bounds", "rebuild_trees"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
@@ -1597,6 +1603,139 @@ class Porter:
         ents[:0] = front + moved
         self.log("  test: %d kinds of static model drawn with the stock 360 copy" % len(names))
 
+    def rebuild_trees(self, world):
+        """Test switch rebuild_trees: every room's culling tree (GfxAabbTree array) built anew
+        from the surfaces (its root's sortedSurfIndex range) and static models (its root's list)
+        it holds: boxes fitted to their contents, split in two at the median along the longest
+        side down to 16 items, each node listing every model below it and the range of surfaces
+        below it (the room's slice of sortedSurfIndex laid out again in leaf order), children
+        stored together after their parent. The 360 walks these (TU6 0x8240DDA0): a box out of
+        view skips the node, one wholly in view takes its lists, one partly in view goes down
+        to its children and tests a leaf's items one by one."""
+        def tgt(c):
+            return c.target if isinstance(c, Ref) else c
+        dpvs = world.get("dpvs") or {}
+        ch = dpvs.get("@", {})
+        insts = tgt(ch.get(("smodelInsts", ())))
+        sbounds = tgt(ch.get(("surfacesBounds", ())))
+        order = tgt(ch.get(("sortedSurfIndex", ())))
+        trees = tgt(world.get("@", {}).get(("aabbTrees", ())))
+        counts = tgt(world.get("@", {}).get(("aabbTreeCounts", ())))
+        if not (isinstance(insts, Leaf) and isinstance(sbounds, Leaf) and isinstance(order, Leaf)
+                and isinstance(trees, list) and isinstance(counts, Leaf)):
+            self.warn("culling trees couldn't be rebuilt (data not found)")
+            return
+        mboxes = [struct.unpack_from(insts.E + "6f", insts.raw, 36 * i) for i in range(len(insts.raw) // 36)]
+        ssize = sbounds.t.size
+        sboxes = [struct.unpack_from(sbounds.E + "6f", sbounds.raw, ssize * i) for i in range(len(sbounds.raw) // ssize)]
+        sorted_idx = list(struct.unpack(order.E + "%dH" % (len(order.raw) // 2), order.raw))
+        idx_t = idx_e = None
+        for ct in trees:
+            for nd in tgt(ct.get("@", {}).get(("aabbTree", ()))) or []:
+                c = tgt(nd.get("@", {}).get(("smodelIndexes", ())))
+                if isinstance(c, Leaf):
+                    idx_t, idx_e = c.t, c.E
+                    break
+            if idx_t is not None:
+                break
+
+        def models_of(nd):
+            c = nd.get("@", {}).get(("smodelIndexes", ()))
+            cnt = nd.get("smodelIndexCount") or 0
+            off = 0
+            if isinstance(c, Ref):
+                off, c = c.rel, c.target
+            if not cnt or not isinstance(c, Leaf):
+                return []
+            return list(struct.unpack_from(c.E + "%dH" % cnt, c.raw, off))
+
+        def union(items):
+            lo = [min(b[k] - b[3 + k] for _, _, b in items) for k in range(3)]
+            hi = [max(b[k] + b[3 + k] for _, _, b in items) for k in range(3)]
+            return lo, hi
+
+        def split(items, depth):
+            lo, hi = union(items)
+            node = {"lo": lo, "hi": hi, "items": items, "kids": []}
+            if len(items) <= 16 or depth >= 16:
+                return node
+            cen = [[b[k] for _, _, b in items] for k in range(3)]
+            ext = [max(c) - min(c) for c in cen]
+            ax = ext.index(max(ext))
+            if ext[ax] <= 0:
+                return node
+            items = sorted(items, key=lambda it: it[2][ax])
+            h = len(items) // 2
+            node["kids"] = [split(items[:h], depth + 1), split(items[h:], depth + 1)]
+            return node
+
+        rebuilt = total = 0
+        new_counts = list(struct.unpack(counts.E + "%di" % counts.n, counts.raw))
+        for ci, ct in enumerate(trees):
+            nodes = tgt(ct.get("@", {}).get(("aabbTree", ()))) if isinstance(ct, dict) else None
+            if not nodes:
+                continue
+            root = nodes[0]
+            start, scount = root.get("startSurfIndex", 0), root.get("surfaceCount", 0)
+            surfs = sorted_idx[start:start + scount]
+            models = models_of(root)
+            if len(surfs) != scount or any(s >= len(sboxes) for s in surfs) or any(m >= len(mboxes) for m in models):
+                self.warn("room %d's culling tree kept (its lists don't add up)" % ci)
+                continue
+            items = [("s", s, sboxes[s]) for s in surfs] + [("m", m, mboxes[m]) for m in models]
+            if not items:
+                continue
+            if models and idx_t is None:
+                self.warn("room %d's culling tree kept (no model list to copy the type of)" % ci)
+                continue
+            tree_ = split(items, 0)
+            # Surfaces in leaf order (depth first): every subtree's surfaces are then one run.
+            run = []
+
+            def lay(nd):
+                if nd["kids"]:
+                    first = len(run)
+                    ms = []
+                    for k in nd["kids"]:
+                        lay(k)
+                        ms += k["models"]
+                    nd["start"], nd["count"], nd["models"] = first, len(run) - first, ms
+                else:
+                    nd["start"] = len(run)
+                    run.extend(i for t, i, _ in nd["items"] if t == "s")
+                    nd["count"] = len(run) - nd["start"]
+                    nd["models"] = [i for t, i, _ in nd["items"] if t == "m"]
+            lay(tree_)
+            # Breadth first: each node's children next to each other, after it.
+            flat, queue = [], [tree_]
+            while queue:
+                nd = queue.pop(0)
+                nd["at"] = len(flat)
+                flat.append(nd)
+                queue.extend(nd["kids"])
+            out = []
+            for nd in flat:
+                lo, hi = nd["lo"], nd["hi"]
+                o = {"bounds": {"midPoint": {"union": struct.pack(">3f", *[(lo[k] + hi[k]) / 2 for k in range(3)]).hex()},
+                                "halfSize": {"union": struct.pack(">3f", *[(hi[k] - lo[k]) / 2 for k in range(3)]).hex()}},
+                     "childCount": len(nd["kids"]), "surfaceCount": nd["count"], "startSurfIndex": start + nd["start"],
+                     "smodelIndexCount": len(nd["models"]), "smodelIndexes": "follow" if nd["models"] else None,
+                     "childrenOffset": (nd["kids"][0]["at"] - nd["at"]) * 40 if nd["kids"] else 0, "@": {}}
+                if nd["models"]:
+                    o["@"][("smodelIndexes", ())] = Leaf(idx_t, len(nd["models"]),
+                                                         struct.pack(idx_e + "%dH" % len(nd["models"]), *nd["models"]), idx_e)
+                out.append(o)
+            sorted_idx[start:start + scount] = run
+            ct.setdefault("@", {})[("aabbTree", ())] = out
+            ct["aabbTree"] = "follow"
+            if ci < len(new_counts):
+                new_counts[ci] = len(out)
+            rebuilt += 1
+            total += len(out)
+        order.raw = struct.pack(order.E + "%dH" % len(sorted_idx), *sorted_idx)
+        counts.raw = struct.pack(counts.E + "%di" % counts.n, *new_counts)
+        self.log("  test: culling trees rebuilt (%d rooms, %d nodes)" % (rebuilt, total))
+
     def one_room(self, world):
         """Test switch one_room: every room's culling tree becomes one node listing every surface
         (all of sortedSurfIndex) and static model, and the portals go, so whichever room the
@@ -2060,6 +2199,8 @@ class Porter:
             self.grow_model_boxes(d)
         if self.fixes["tree_model_bounds"]:
             self.grow_tree_bounds(d)
+        if self.fixes["rebuild_trees"]:
+            self.rebuild_trees(d)
         if self.fixes["one_room"]:
             self.one_room(d)
         ch = d["@"]

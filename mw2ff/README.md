@@ -108,7 +108,7 @@ console as converted maps, the writer is at fault; if it plays like the stock ma
 
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
 Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
-with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials`, `stock_pictures`, `merge_duplicates` and `model_box_bounds` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
+with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials`, `stock_pictures`, `merge_duplicates`, `model_box_bounds` and `rebuild_trees` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
 
 | Fix | What it does |
 |---|---|
@@ -134,6 +134,7 @@ with `--fix-off NAME` (repeatable). All are on by default except `portal_multipl
 | `stock_world` | Test, off by default: for a PC copy of a stock map, the world assets (drawn world, collision, entities, effect placement) come from the stock 360 map of the same name |
 | `stock_materials` | Test, off by default: for a PC copy of a stock map, every material the stock 360 map has under the same name comes from it whole (shader set, render state, pictures) |
 | `stock_pictures` | Test, off by default: for a PC copy of a stock map, every picture the stock 360 map has under the same name comes from it, streamed from the game's own `imagefile1-4.pak` |
+| `rebuild_trees` | Test, off by default: each room's culling tree is built anew from its surfaces and static models (boxes fitted to contents, split in two down to 16 items, every node listing the models below it); rooms and portals stay. mp_ancient's rocks and foliage vanished by view angle with the converted trees and didn't with `one_room` |
 | `one_room` | Test, off by default: the map is treated as one room (each room's culling tree lists everything, no portals) |
 | `plain_pictures` | Test, off by default: the map's own 2D pictures become plain 16x16 ones (white / flat normal / black specular), to test the picture conversion |
 | `surface_order` | The world's surfaces laid out as the 360 tools do (solid, then decals / see-through, then shadow casters) with the draw ranges to match; IW4x maps list every surface as opaque |
