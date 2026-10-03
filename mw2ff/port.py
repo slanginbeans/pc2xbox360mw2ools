@@ -22,6 +22,7 @@ the two platforms store differently are converted by the hooks below:
 
 import argparse
 import contextlib
+import copy
 import io
 import math
 import os
@@ -67,6 +68,11 @@ FIXES = [
      "Effects a stock 360 map also has (dust, car glass, fires) come from it instead of being "
      "converted: the converted dust drew a yellow haze. Off by default: mp_backlot never loaded "
      "with it (MT_GetSize: max allocation exceeded ... for script usage)."),
+    ("stock_sounds", "Stock 360 sounds",
+     "Sound aliases a stock 360 file also has come from it, with its 360 audio. The PC file only "
+     "names its sound files (,null.wav: files the PC game loads from disk); the 360 has nothing "
+     "under those names, and a converted PC mp_rust froze on the loading screen with them. An "
+     "alias no stock file has plays the silent stock \"null\" sound."),
     ("surface_bounds", "Surface culling radius",
      "Fill in the 360-only number every world surface carries (its culling radius and texture "
      "density), worked out from stock mp_rust. Converted maps used to leave it 0."),
@@ -328,6 +334,25 @@ def iter_objects(root):
                     stack.append(v)
         elif isinstance(o, list):
             stack.extend(o)
+
+
+def alias_name(d):
+    """A sound alias list's name (aliasName, not name), or None."""
+    c = d.get("@", {}).get(("aliasName", ()))
+    if isinstance(c, Ref) and isinstance(c.target, Str) and c.rel == 0:
+        c = c.target
+    return c.b if isinstance(c, Str) else None
+
+
+def alias_index(root):
+    """{alias name: snd_alias_list_t dict} for every sound alias list in a tree."""
+    out = {}
+    for o in iter_objects(root):
+        if isinstance(o, dict) and o.get("_asset") == "snd_alias_list_t":
+            n = alias_name(o)
+            if n is not None:
+                out.setdefault(n, o)
+    return out
 
 
 def asset_index(root):
@@ -717,9 +742,17 @@ class Porter:
         self.stock_fx_used = []
         self.stock_models = {}          # model name -> (a stock map's model, its file) (stock_models)
         self.model_swap = {}            # id() of a converted model -> the stock model's list entry
+        self.stock_aliases = {}         # sound alias name -> (stock alias list, resident?) (stock_sounds)
         for name, root in x_refs:
             idx = asset_index(root)
             base = os.path.splitext(os.path.basename(name))[0]
+            order = {id(e[1]): i for i, e in enumerate(root["assets"])}
+            for k, v in alias_index(root).items():
+                if k.startswith(b","):
+                    continue
+                old = self.stock_aliases.get(k)
+                if old is None or (old[1] and base not in RESIDENT):
+                    self.stock_aliases[k] = (v, base in RESIDENT, root, order.get(id(v), -1))
             if base not in RESIDENT:
                 for k, v in effect_index(root).items():
                     self.stock_fx.setdefault(k, (v, root))
@@ -1106,6 +1139,8 @@ class Porter:
                             x.target, x.rel, x.t = slots[id(x.target)], 0, None
         ents[:] = [e for e in ents if e[0] not in ("pixelshader", "vertexshader", "vertexdecl", "xmodelsurfs")]
         self.stock_effects(ents)
+        if self.fixes["stock_sounds"]:
+            self.stock_sounds(ents)
         if self.fixes["stock_models"]:
             self.stock_model_swap(ents)
         # Materials and pictures a left-out asset brought in first are only pointed at from
@@ -1325,6 +1360,100 @@ class Porter:
         if names:
             self.log("  %d effect%s from the stock 360 files: %s" % (
                 len(names), "s" if len(names) > 1 else "", ", ".join(names)))
+
+    def stock_sounds(self, ents):
+        """Sound alias lists come from a stock 360 file with the same alias (stock mp_rust has
+        all 143 of PC mp_rust's), audio and all, as stock maps carry them. The PC file only
+        names its sound files (",null.wav", read from the PC game's own files), which the 360
+        has nothing under. An alias no stock file has gets the stock "null" alias's silent
+        sound under its own name. The PC's sound file assets then go."""
+        swapped, silent, missing = 0, [], []
+        null = self.stock_aliases.get(b"null")
+        ours = [o for o in iter_objects(ents) if isinstance(o, dict)
+                and o.get("_asset") == "snd_alias_list_t" and id(o) not in self.done]
+        # Stock aliases share sound files (one alias's points into another's): those taken from
+        # one file are made self-contained together, so they keep sharing, and go in that
+        # file's order, so what is shared is written before what points at it.
+        take = {}
+        for d in ours:
+            n = alias_name(d)
+            if n and not n.startswith(b",") and n in self.stock_aliases:
+                take[id(d)] = self.stock_aliases[n]
+        by_root = {}
+        for src in take.values():
+            by_root.setdefault(id(src[2]), {})[id(src[0])] = src[0]
+        for group in by_root.values():
+            self.localize(list(group.values()))
+        rank = {}
+        for d in ours:
+            src = take.get(id(d))
+            if src is None:
+                continue
+            new = dict(src[0])
+            new.pop("_slot", None)
+            self._replace(d, new)
+            rank[id(d)] = (id(src[2]), src[3])
+            swapped += 1
+        at = [i for i, e in enumerate(ents) if isinstance(e[1], dict) and id(e[1]) in rank]
+        for i, e in zip(at, sorted((ents[i] for i in at), key=lambda e: rank[id(e[1])])):
+            ents[i] = e
+        # Silent ones share the first one's sound file (in the order they are written).
+        pos = {id(e[1]): i for i, e in enumerate(ents)}
+        ours.sort(key=lambda d: pos.get(id(d), len(ents)))
+        null_sf = None
+        for d in ours:
+            if id(d) in rank:
+                continue
+            name = alias_name(d)
+            if not name or name.startswith(b","):
+                continue
+            if null is None:
+                missing.append(name)
+                continue
+            new = copy.deepcopy(self.copy_in(null[0]))
+            new["@"][("aliasName", ())] = Str(name)
+            head = new["@"].get(("head", ()))
+            head = head.target if isinstance(head, Ref) else head
+            for h in head if isinstance(head, list) else [head]:
+                if isinstance(h, dict):
+                    h.setdefault("@", {})[("aliasName", ())] = Str(name)
+                    h["aliasName"] = "follow"
+                    sf = h["@"].get(("soundFile", ()))
+                    if not isinstance(sf, dict):
+                        continue
+                    if null_sf is None:
+                        null_sf = sf
+                    else:
+                        r = tree.Ref(0)
+                        r.target, r.rel = null_sf, 0
+                        h["@"][("soundFile", ())] = r
+            self._replace(d, new)
+            silent.append(name)
+        # The PC's sound files (each only a name) are pointed at by nothing now.
+        held = set()
+        for e in ents:
+            if e[0] == "loaded_sound":
+                continue
+            for o in iter_objects(e[1]):
+                if isinstance(o, dict):
+                    for c in o.get("@", {}).values():
+                        for x in (c if isinstance(c, list) else [c]):
+                            if isinstance(x, Ref):
+                                t = x.target.asset if isinstance(x.target, tree.InsertSlot) else x.target
+                                held.add(id(t))
+                            elif isinstance(x, dict):
+                                held.add(id(x))
+        before = len(ents)
+        ents[:] = [e for e in ents if not (e[0] == "loaded_sound" and isinstance(e[1], dict)
+                                           and id(e[1]) not in held)]
+        self.log("  sounds: %d aliases from the stock 360 files, %d silent (no stock copy), "
+                 "%d PC sound files left out" % (swapped, len(silent), before - len(ents)))
+        if silent:
+            self.log("    silent: " + ", ".join(n.decode("latin-1") for n in silent[:20])
+                     + (" ..." if len(silent) > 20 else ""))
+        if missing:
+            self.warn("%d sound aliases have no stock copy and no stock \"null\" alias was found "
+                      "to stand in: add a stock map, they stay as the PC has them" % len(missing))
 
     def rename_clashes(self):
         """The map's own materials and pictures named as one a stock effect brings get a name
@@ -2264,6 +2393,21 @@ class Porter:
                             inside.add(id(y))
                     inside.add(id(tail))
                     return tail
+                if isinstance(o.target, list) and isinstance(o.t, Compound) and o.rel % o.t.size:
+                    # Points at a pointer field of another array's element (stock sound aliases
+                    # share a sound file that way): the thing that field points at.
+                    el = o.target[o.rel // o.t.size]
+                    off = o.rel % o.t.size
+                    m = next((m for m in o.t.members if getattr(m, "offset", None) == off
+                              and m.mods and m.mods[0] == "*"), None)
+                    if m is not None and isinstance(el, dict):
+                        c = el.get("@", {}).get((m.name, ()))
+                        if isinstance(c, Ref):
+                            return cp(c)
+                        if isinstance(c, dict):
+                            for x in iter_objects(c):
+                                inside.add(id(x))
+                            return c
                 if o.target is not None and o.rel == 0:
                     inside.add(id(o.target))
                     for x in iter_objects(o.target):

@@ -111,6 +111,7 @@ with `--fix-off NAME` (repeatable). All are on by default except `stock_effects`
 |---|---|
 | `texture_budget` | Pictures over the budget lose their top mip levels (out of memory / loading-screen freeze without it) |
 | `stock_effects` | Effects a stock 360 map also has come from it (the yellow dust haze); maps have failed to load with it (MT_GetSize ... script usage) |
+| `stock_sounds` | Sound aliases come from a stock 360 file with the same alias, audio and all; others play the silent stock `null` sound (the PC file only names sound files the 360 doesn't have: a converted PC mp_rust froze on the loading screen) |
 | `surface_bounds` | Fills in the 360-only culling radius / texture density of every world surface |
 | `model_lods` | Model detail levels' partBits and surfs written as stock files have them (0 and empty) |
 | `stock_material_state` | A material a stock file also has takes that material's culling and draw order |
