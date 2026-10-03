@@ -132,6 +132,8 @@ with `--fix-off NAME` (repeatable). All are on by default except `stock_effects`
 | `hide_tool_surfaces` | Radiant tool shaders (clip, caulk, ...) draw nothing |
 | `portal_multiply` | HDR portal sheets drawn with a multiply shader (off: hidden like tool surfaces) |
 
+**Restore default switches** puts every switch back the way it is normally.
+
 **Also build test variants** converts the map once more for every fix that is on, with just that
 fix off, into `mw2port_out\<map>\variants\no_<fix>`. Copy them to the console one after another
 to find which fix is behind a problem (a few minutes per variant).
