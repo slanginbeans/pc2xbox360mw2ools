@@ -169,6 +169,13 @@ FIXES = [
      "caster ranges set to match (stock mp_rust: 5,230 / 101 / 1). IW4x maps list every surface "
      "as opaque (mp_backlot: about 2,400 decals among them), which can make decals flicker and "
      "hide things behind them."),
+    ("merge_duplicates", "One copy of each asset (test)",
+     "Assets with the same type and name are written once, as in stock 360 files: several PC "
+     "shader sets become the same 360 one, and PC copies of stock maps carry their own team "
+     "models next to the stock team copied in (PC mp_rust: 217 copies, about 10 MB). The game "
+     "itself keeps the first of two same-named assets in a map, so this only saves memory. "
+     "Off by default until a converted map with it has loaded on a console (PC mp_rust stopped "
+     "partway through loading with it on; not yet known whether it is the cause)."),
     ("hide_tool_surfaces", "Hide tool surfaces",
      "Radiant tool shaders (clip, caulk, ...) get a see-through stand-in so they draw nothing."),
     ("portal_multiply", "HDR portals as multiply",
@@ -178,7 +185,8 @@ FIXES = [
 ]
 # Off unless switched on: the test switches, and portal_multiply (HDR portals are hidden instead).
 DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "skip_lod0", "one_room", "plain_pictures",
-               "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures"}
+               "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
+               "merge_duplicates"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
@@ -1423,7 +1431,8 @@ class Porter:
         if self.fixes["stock_world"]:
             self.stock_world_swap(ents)
         self.own_reference_copies(ents)
-        self.merge_same_named(ents)
+        if self.fixes["merge_duplicates"]:
+            self.merge_same_named(ents)
         for u in self.unreadable[:5]:
             self.warn("picture %s can't be read, so it's treated as missing" % u)
         if len(self.unreadable) > 5:
@@ -3748,7 +3757,8 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         if card_pak:
             porter.cards_to_pak()
         # The stock team copied in: the PC copy of a stock map carries its own (PC mp_rust).
-        porter.merge_same_named(root["assets"])
+        if porter.fixes["merge_duplicates"]:
+            porter.merge_same_named(root["assets"])
     xs = schema_mod.load("xbox")
     w = tree.TreeWriter(root, xs, keep_fixes=False)
     w.map_rel = lambda r: map_rel(r, porter.P, porter.X)
