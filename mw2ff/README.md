@@ -124,6 +124,7 @@ with `--fix-off NAME` (repeatable). All are on by default except `portal_multipl
 | `stock_material_state` | A material a stock file also has takes that material's culling and draw order |
 | `tree_model_bounds` | Culling tree boxes grow to enclose the static models they list (CoD4 ports list models sticking out of their box, which vanish as you turn), and each placed model's box grows to enclose its vertices |
 | `model_box_bounds` | Test, off by default: each placed model's culling box grows to enclose its vertices as placed (stock maps' always do; mp_backlot's hanging lights sat 11 units below theirs), for models that vanish depending on the view angle |
+| `lighting_origin` | A placed model whose lighting origin is empty (0,0,0) takes its box centre, as stock maps have it; the 360 lights each static model from the light grid at that point, and custom-compiled maps (mp_ancient: all 488) leave it at the world origin |
 | `map_effects` | Keep the effects the map's createfx script places (off: left out, its ambient sounds stay; for testing, e.g. the dust haze) |
 | `map_fog` | Keep the map's distance fog (off: its `setExpFog` calls are commented out) |
 | `hide_foliage` | Test, off by default: foliage static models never show (to test whether too many models in view make the 360 drop some) |
