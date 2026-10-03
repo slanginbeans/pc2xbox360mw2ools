@@ -794,6 +794,9 @@ class Porter:
         self.model_swap = {}            # id() of a converted model -> the stock model's list entry
         self.swapped_rows = set()       # light grid row data already put in 360 byte order
         self.pc_sort = {}               # id() of a material -> the PC's sort key (pc_sort_keys)
+        self.stock_glass = None         # glass material name -> a stock glass type's 360-only numbers
+        self.stock_sort_keys = None     # every sort key a stock material uses (pc_sort_keys)
+        self.x_refs = x_refs
         self.stock_aliases = {}         # sound alias name -> (stock alias list, resident?) (stock_sounds)
         for name, root in x_refs:
             idx = asset_index(root)
@@ -1243,6 +1246,7 @@ class Porter:
             self.log("  %d pictures come from the PC game's own .iwd files" % self.from_game)
         if getattr(self, "dxn_count", 0):
             self.log("  %d normal maps converted to DXN, as the 360 keeps them" % self.dxn_count)
+        self.own_reference_copies(ents)
         for u in self.unreadable[:5]:
             self.warn("picture %s can't be read, so it's treated as missing" % u)
         if len(self.unreadable) > 5:
@@ -1431,6 +1435,41 @@ class Porter:
         if names:
             self.log("  %d effect%s from the stock 360 files: %s" % (
                 len(names), "s" if len(names) > 1 else "", ", ".join(names)))
+
+    def own_reference_copies(self, ents):
+        """A pointer to the slot of a picture that is only a name (",$white": the game has it
+        loaded) gets its own copy of that name, as stock materials repeat such names inline. The
+        360 orders some structs' members differently from the PC (GfxWorld), so the pointer
+        can come before the asset it points into: PC mp_tundra_depot's world stopped the
+        writer ("a pointer refers to ... before it is written")."""
+        count = 0
+        self.ref_copy_types = {}
+        for o in list(iter_objects(ents)):
+            if not isinstance(o, dict):
+                continue
+            ch = o.get("@", {})
+            for k, c in list(ch.items()):
+                if not (isinstance(c, Ref) and isinstance(c.target, tree.InsertSlot) and c.rel == 0):
+                    continue
+                a = c.target.asset
+                if not (isinstance(a, dict) and a.get("_asset") == "GfxImage"
+                        and (_name(a) or b"").startswith(b",")):
+                    continue
+                new = {kk: vv for kk, vv in a.items() if kk not in ("_slot", "_forward")}
+                new["@"] = dict(a.get("@", {}))
+                if isinstance(a.get("info"), dict):
+                    new["info"] = dict(a["info"])
+                ch[k] = new
+                if "union" in o and len(k[1]) == 0:
+                    o["union"] = "ffffffff"
+                elif isinstance(o.get(k[0]), str):
+                    o[k[0]] = "follow"
+                self.done.add(id(new))
+                count += 1
+                self.ref_copy_types[a.get("_asset")] = self.ref_copy_types.get(a.get("_asset"), 0) + 1
+        if count:
+            self.log("  %d pointers to a name-only asset given their own copy of the name (%s)" % (
+                count, ", ".join("%s %d" % kv for kv in sorted(self.ref_copy_types.items()))))
 
     def stock_sounds(self, ents):
         """Sound alias lists come from a stock 360 file with the same alias (stock mp_rust has
@@ -1867,6 +1906,25 @@ class Porter:
         elif isinstance(c, str) and len(c) == 8:
             d["color"] = bytes.fromhex(c)[::-1].hex()
 
+    def post_FxGlassDef(self, d, tx):
+        """Two 360-only numbers per glass type (unknown[2], floats). Stock maps always hold 0.4077
+        in the second; the first follows the material (com_glass_clear: always 0.001593,
+        glass_clear mostly 0.012741). Converted ones were left 0. Taken from a stock glass type
+        with the same material, else com_glass_clear's (the most common)."""
+        if any(d.get("unknown") or [0]):
+            return
+        m = deref(d.get("@", {}).get(("material", ())))
+        name = ((_name(m) or b"") if isinstance(m, dict) else b"").lstrip(b",")
+        if self.stock_glass is None:
+            self.stock_glass = {}
+            for _, root in self.x_refs:
+                for o in iter_objects(root["assets"]):
+                    if isinstance(o, dict) and "halfThickness" in o and "texVecs" in o and any(o.get("unknown") or [0]):
+                        sm = deref(o.get("@", {}).get(("material", ())))
+                        if isinstance(sm, dict):
+                            self.stock_glass.setdefault((_name(sm) or b"").lstrip(b","), list(o["unknown"]))
+        d["unknown"] = list(self.stock_glass.get(name) or [986759600, 1053868464])   # 0.001593, 0.4077
+
     def post_FxGlassSystem(self, d, tx):
         """firstFreePiece is really a 16-bit number (then padding): 0xFFFF, "no free piece",
         reads 0x0000FFFF on the PC and 0xFFFF0000 on the 360."""
@@ -2122,7 +2180,10 @@ class Porter:
         # models 0x02, and the 360 holds their ground color with its bytes the other way round.
         f = d.get("flags") or 0
         if f & 0x20:
-            d["flags"] = (f & ~0x20) | 0x02
+            f = (f & ~0x20) | 0x02
+        # Stock 360 maps only ever use 0x01 and 0x02 (119,000 placed models). PC mp_raid also
+        # sets 0x10 (no shadow casting on the PC), which has no 360 bit: left out.
+        d["flags"] = f & 0x03
         gl = d.get("groundLighting")
         if isinstance(gl, dict) and isinstance(gl.get("union"), str):
             gl["union"] = bytes.fromhex(gl["union"])[::-1].hex()
@@ -2283,8 +2344,16 @@ class Porter:
         # The PC's own draw order (sort key) means the same on the 360: all 271 materials PC
         # mp_rust shares with stock 360 mp_rust have the same one. Kept unless the shader set
         # was swapped for one that hides it (tool surfaces, HDR portals).
-        if self.fixes["pc_sort_keys"] and not d.get("_invisible") and not (b"_distfalloff" in (orig_ts or b"")):
-            self.pc_sort[id(d)] = (d.get("info") or {}).get("sortKey")
+        if self.stock_sort_keys is None:
+            self.stock_sort_keys = set(
+                (v.get("info") or {}).get("sortKey") for (t, _), v in
+                list(self.library.items()) + list(self.resident.items()) + list(self.common_materials.items())
+                if t == "Material" and isinstance(v, dict))
+        sort = (d.get("info") or {}).get("sortKey")
+        # (A sort key no stock material uses, PC mp_raid's 35, 49, 52, 54: the template's.)
+        if self.fixes["pc_sort_keys"] and not d.get("_invisible") and not (b"_distfalloff" in (orig_ts or b"")) \
+                and sort in self.stock_sort_keys:
+            self.pc_sort[id(d)] = sort
         return None
 
     def post_Material(self, d, tx):
