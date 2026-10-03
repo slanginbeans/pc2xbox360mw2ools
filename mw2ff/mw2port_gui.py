@@ -49,6 +49,7 @@ job = {"running": False, "map": None, "log": [], "done": False, "error": None, "
 
 def settings():
     base = {"card_pak": False, "card_source": "auto", "variants": False, "profile": False,
+            "texture_budget": port_mod.TEXTURE_BUDGET_MB,
             "fixes": dict(port_mod.DEFAULT_FIXES)}
     try:
         with open(SETTINGS) as fh:
@@ -65,6 +66,11 @@ def save_settings(req):
     for k in ("card_pak", "variants", "profile"):
         if k in req:
             s[k] = bool(req[k])
+    if "texture_budget" in req:
+        try:
+            s["texture_budget"] = max(4, min(400, int(req["texture_budget"])))
+        except (TypeError, ValueError):
+            pass
     if req.get("card_source") in ("auto", "stock"):
         s["card_source"] = req["card_source"]
     for k, v in (req.get("fixes") or {}).items():
@@ -180,7 +186,8 @@ def _convert_one(pc_path, teams, s):
 
     def run():
         return make(pc_path, out_dir, stock_files(), teams, _log,
-                    port_mod.game_iwd_files(GAME_DIR), card_ui=ui, fixes=s["fixes"])
+                    port_mod.game_iwd_files(GAME_DIR), texture_budget=s["texture_budget"],
+                    card_ui=ui, fixes=s["fixes"])
 
     try:
         if not s["profile"]:
@@ -488,6 +495,10 @@ folder: the patched copies and <code>imagefile8.pak</code> go in <code>mw2port_o
 without it, to see on the console whether it helps or hurts.</p>
 <div id="fixes"></div>
 <p><button id="fixDefaults">Restore default switches</button> <span class="dim">Puts every switch above back the way it is normally (fixes on, test switches off).</span></p>
+<p><label>Picture budget <input type="number" id="budget" min="4" max="400" style="width:5em"> MB</label>
+<span class="dim">Pictures over this lose their top mip levels so the map fits in memory (normally 40). Stock
+360 maps stream most pictures from the disc, so converted maps are bigger in memory: lower it to test whether a
+map that crashes or freezes is running out of memory.</span></p>
 <label class="toggle" style="margin-top:10px"><input type="checkbox" id="variants"><span><b>Also build test variants</b><br>
 <span class="dim">Besides the map itself, converts it once more for every fix that is ticked, with just that fix off,
 into <code>mw2port_out\&lt;map&gt;\variants\no_&lt;fix&gt;</code>. Try them one after another on the console to find
@@ -527,7 +538,7 @@ function renderMaps(){if(!S.maps.length){$("#maps").innerHTML=`<p class="warn">N
  document.querySelectorAll(".tick").forEach(c=>c.onchange=()=>{c.checked?ticked.add(c.dataset.p):ticked.delete(c.dataset.p);renderJob()})}
 function renderFixes(){$("#fixes").innerHTML=S.fixes.map(f=>`<label class="toggle" style="margin:6px 0"><input type="checkbox" class="fix" data-k="${f.id}"${S.settings.fixes[f.id]?" checked":""}><span><b>${esc(f.label)}</b> <code class="dim">${f.id}</code><br><span class="dim">${esc(f.help)}</span></span></label>`).join("");
  document.querySelectorAll(".fix").forEach(c=>c.onchange=async()=>{try{S.settings=await api("/api/settings",{fixes:{[c.dataset.k]:c.checked}})}catch(e){alert(e.message)}});
- $("#variants").checked=!!S.settings.variants;$("#profile").checked=!!S.settings.profile}
+ $("#variants").checked=!!S.settings.variants;$("#budget").value=S.settings.texture_budget;$("#profile").checked=!!S.settings.profile}
 function renderRewrite(){const s=$("#rewriteMap");const keep=s.value;s.innerHTML=(S.stock_map_names||[]).map(n=>`<option${n===keep?" selected":""}>${esc(n)}</option>`).join("")||"<option value=''>no stock mp_*.ff here</option>"}
 function renderCards(){$("#cardPak").checked=!!S.settings.card_pak;$("#cardSource").value=S.settings.card_source||"auto";
  $("#cardInfo").innerHTML=S.ui?`Filled from <code>${esc(S.ui)}</code>.`:`<span class="warn">No ui_mp.ff in the work folder or mw2tex_out yet: copy it from the console.</span>`}
@@ -555,6 +566,7 @@ $("#cardSource").onchange=async e=>{try{S.settings=await api("/api/settings",{ca
 $("#cardPakBuild").onclick=async()=>{try{await api("/api/cardpak",{});load(false)}catch(e){alert(e.message)}};
 $("#rewriteBtn").onclick=async()=>{const m=$("#rewriteMap").value;if(!m)return;try{await api("/api/rewrite",{map:m});load(false)}catch(e){alert(e.message)}};
 $("#fixDefaults").onclick=async()=>{try{S.settings=await api("/api/settings",{fixes:S.fix_defaults});renderFixes()}catch(err){alert(err.message)}};
+$("#budget").onchange=async e=>{try{S.settings=await api("/api/settings",{texture_budget:e.target.value});$("#budget").value=S.settings.texture_budget}catch(err){alert(err.message)}};
 $("#variants").onchange=async e=>{try{S.settings=await api("/api/settings",{variants:e.target.checked})}catch(err){alert(err.message)}};
 $("#profile").onchange=async e=>{try{S.settings=await api("/api/settings",{profile:e.target.checked})}catch(err){alert(err.message)}};
 $("#patch").onclick=async()=>{if(!confirm("Write patched copies of every stock map ("+S.stock_maps+") and imagefile8.pak to mw2port_out\\stock?"))return;
