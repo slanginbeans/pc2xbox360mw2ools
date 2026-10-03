@@ -1783,6 +1783,18 @@ class Porter:
             struct.pack_into(bounds.E + "I", out, k * size + 24, radius << 16 | dens[0] << 8 | dens[1])
         bounds.raw = bytes(out)
 
+    def post_FxElemVisualState(self, d, tx):
+        """An effect element's color: the PC keeps it as a D3DCOLOR (bytes B, G, R, A), the 360
+        as A, R, G, B (stock mp_rust's misc/glow_stick_glow_pile_orange: 80 e8 31 15, where the
+        converted file had 15 31 e8 80)."""
+        c = d.get("color")
+        if isinstance(c, list):
+            d["color"] = c[::-1]
+        elif isinstance(c, (bytes, bytearray)):
+            d["color"] = bytes(c[::-1])
+        elif isinstance(c, str) and len(c) == 8:
+            d["color"] = bytes.fromhex(c)[::-1].hex()
+
     def post_FxGlassSystem(self, d, tx):
         """firstFreePiece is really a 16-bit number (then padding): 0xFFFF, "no free piece",
         reads 0x0000FFFF on the PC and 0xFFFF0000 on the 360."""
