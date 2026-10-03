@@ -1017,6 +1017,7 @@ class Porter:
         self.warnings = []
         self.moved_images = []
         self.picked = {}        # stock file -> its asset list entries to copy in
+        self.stock_entry_ids = set()    # id() of asset list entries copied whole from stock (teams)
         self.remapped = set()
         self.report = set()     # (type, "dropped" | "defaulted", member) seen while converting
 
@@ -1422,6 +1423,7 @@ class Porter:
         if self.fixes["stock_world"]:
             self.stock_world_swap(ents)
         self.own_reference_copies(ents)
+        self.merge_same_named(ents)
         for u in self.unreadable[:5]:
             self.warn("picture %s can't be read, so it's treated as missing" % u)
         if len(self.unreadable) > 5:
@@ -1642,6 +1644,73 @@ class Porter:
             self.log("  test: world from the stock 360 file (%s)" % ", ".join(names))
         else:
             self.warn("stock_world is on, but no stock 360 file given has this map's world")
+
+    def merge_same_named(self, ents):
+        """One asset list entry per (type, name), as stock 360 files have: the others' pointers
+        go to it and they are left out. PC copies of stock maps carry their own team models next
+        to the stock team copied in (PC mp_rust: 37 models twice, 7 MB), and several PC shader
+        sets become the same 360 one (mc_l_sm_t0c0 five times, 4 MB of shader sets in all)."""
+        groups = {}
+        for i, e in enumerate(ents):
+            if isinstance(e, tree.AssetEntry) and isinstance(e[1], dict):
+                name = asset_name(e[1]) or _name(e[1])
+                if name:
+                    groups.setdefault((e[0], name), []).append(i)
+        keep = {}       # id() of a dropped asset -> the entry kept in its place
+        for (typ, name), idx in groups.items():
+            if len(idx) < 2:
+                continue
+            first = next((i for i in idx if id(ents[i]) in self.stock_entry_ids), idx[0])
+            for i in idx:
+                if i != first:
+                    keep[id(ents[i][1])] = ents[first]
+        if not keep:
+            return
+        dropped = set(keep)
+        pos = {id(e): i for i, e in enumerate(ents)}
+
+        def ref_to(entry):
+            r = Ref(0)
+            r.target, r.rel = entry, 4
+            return r
+
+        def swap(x):
+            if isinstance(x, dict) and id(x) in keep:
+                return ref_to(keep[id(x)])
+            if isinstance(x, Ref):
+                t = x.target[1] if isinstance(x.target, tree.AssetEntry) else None
+                a = t if isinstance(t, dict) and x.rel == 4 else _asset_in_slot(x)
+                if isinstance(a, dict) and id(a) in keep:
+                    return ref_to(keep[id(a)])
+            return None
+        early = 0
+        for i, e in enumerate(ents):
+            if not isinstance(e[1], dict) or id(e[1]) in dropped:
+                continue
+            for o in iter_objects(e[1]):
+                items = o.get("@", {}).items() if isinstance(o, dict) else (
+                    enumerate(o) if isinstance(o, PtrList) else ())
+                for k, c in list(items):
+                    if isinstance(c, list) and not isinstance(c, PtrList):
+                        for j, x in enumerate(c):
+                            v = swap(x)
+                            if v is not None:
+                                c[j] = v
+                                early += pos[id(v.target)] > i
+                        continue
+                    v = swap(c)
+                    if v is not None:
+                        if isinstance(o, dict):
+                            o["@"][k] = v
+                        else:
+                            o[k] = v
+                        early += pos[id(v.target)] > i
+        types = Counter(e[0] for e in ents if isinstance(e[1], dict) and id(e[1]) in dropped)
+        ents[:] = [e for e in ents if not (isinstance(e[1], dict) and id(e[1]) in dropped)]
+        self.log("  %d duplicate assets left out, their pointers going to the one kept (%s)" % (
+            len(dropped), ", ".join("%s %d" % kv for kv in types.most_common())))
+        if early:
+            self.warn("%d pointers to a merged asset come before it in the file" % early)
 
     def own_reference_copies(self, ents):
         """A pointer to the slot of a picture that is only a name (",$white": the game has it
@@ -3152,6 +3221,7 @@ class Porter:
             return
         ents = src["assets"]
         new = [ents[i] for i in sorted(sel)]
+        self.stock_entry_ids.update(id(e) for e in new)
         self.localize(new)
         self.remap_bones(new, src["script_strings"])
         self.root["assets"][:0] = new
