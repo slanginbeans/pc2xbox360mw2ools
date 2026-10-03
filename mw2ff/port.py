@@ -119,6 +119,11 @@ FIXES = [
      "cover every vertex (mp_rust: 3,356 of 3,356); mp_backlot's hanging fluorescent lights sat 11 "
      "units below theirs. Off by default: for testing models that vanish depending on the "
      "angle you look at them from."),
+    ("lighting_origin", "Model lighting origins at their boxes",
+     "A placed model whose lighting origin is empty (0,0,0) takes its culling box's centre "
+     "instead, as stock 360 maps have it (mp_terminal: 4,032 of 4,032). The 360 lights each "
+     "static model from the light grid at that point; custom-compiled maps (mp_ancient: all "
+     "488) leave it at the world origin, so every model was lit as if it stood there."),
     ("map_effects", "Map effects",
      "Keep the effects the map's createfx script places (mp_backlot: 32, its blowing dust among "
      "them). Off: they are left out of the script (its ambient sounds stay), to see whether "
@@ -2199,6 +2204,8 @@ class Porter:
             self.grow_model_boxes(d)
         if self.fixes["tree_model_bounds"]:
             self.grow_tree_bounds(d)
+        if self.fixes["lighting_origin"]:
+            self.fill_lighting_origins(d)
         if self.fixes["rebuild_trees"]:
             self.rebuild_trees(d)
         if self.fixes["one_room"]:
@@ -2298,6 +2305,25 @@ class Porter:
                     shadowCasterSurfsBegin=b, shadowCasterSurfsEnd=c, emissiveSurfsBegin=c, emissiveSurfsEnd=c)
         self.log("  test: surfaces in 360 order: %d solid, %d decals / see-through, %d shadow casters%s"
                  % (a, b - a, c - b, "" if new_of else " (already in order)"))
+
+    def fill_lighting_origins(self, world):
+        """GfxStaticModelInst is (box centre, box half-size, lighting origin). The 360 samples
+        the light grid at the lighting origin for the model's lighting (TU6 0x823F2958); stock
+        maps set it, custom-compiled ones can leave it (0,0,0). Those take the box centre."""
+        insts = (world.get("dpvs") or {}).get("@", {}).get(("smodelInsts", ()))
+        insts = insts.target if isinstance(insts, Ref) else insts
+        if not isinstance(insts, Leaf):
+            return
+        raw = bytearray(insts.raw)
+        filled = 0
+        for i in range(len(raw) // 36):
+            if struct.unpack_from(insts.E + "3f", raw, 36 * i + 24) == (0.0, 0.0, 0.0):
+                raw[36 * i + 24:36 * i + 36] = raw[36 * i:36 * i + 12]
+                filled += 1
+        if filled:
+            insts.raw = bytes(raw)
+            self.log("  static model lighting origins set to their box centres: %d of %d"
+                     % (filled, len(raw) // 36))
 
     def grow_model_boxes(self, world):
         """Grow each placed model's box (GfxStaticModelInst.bounds) to enclose the model's
