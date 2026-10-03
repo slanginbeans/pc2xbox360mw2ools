@@ -99,6 +99,11 @@ FIXES = [
     ("model_lods", "Model detail levels as stock",
      "Each model detail level's partBits and surfs written as stock 360 files have them (0 and "
      "empty) instead of the PC's values."),
+    ("pc_face_culling", "Keep the PC's two-sided materials",
+     "A material the PC draws two-sided (no back-face culling: mp_backlot's market umbrellas, "
+     "milk cartons, stone blocks) stays two-sided. Its render state comes from a stock material "
+     "with the same shader set, which culls back faces, so such models went invisible from one "
+     "side. Untick to take the stock state as it is."),
     ("stock_material_state", "Render state from same-named stock materials",
      "A material a stock 360 file also has (same name, same shader set) takes that material's "
      "culling and draw order, instead of another material's with the same shader set."),
@@ -392,6 +397,40 @@ def asset_name(d):
     if c is None and isinstance(d.get("info"), dict):
         c = d["info"].get("@", {}).get(("name", ()))
     return c.b if isinstance(c, Str) else None
+
+
+def state_words(table):
+    """[(loadBits[0], loadBits[1])] of a material's stateBitsTable (raw or decoded; or shared
+    with another material through a pointer, as PC files share identical ones)."""
+    if isinstance(table, Ref) and table.rel == 0:
+        table = table.target
+    if isinstance(table, Leaf):
+        return [struct.unpack_from(table.E + "2I", table.raw, 8 * i) for i in range(len(table.raw) // 8)]
+    if isinstance(table, list):
+        return [tuple(x["loadBits"]) if isinstance(x, dict) else tuple(x) for x in table]
+    return None
+
+
+def with_cull(table, cull):
+    """A copy of stateBitsTable with every entry's face culling (loadBits[0] bits 14-15, the
+    same on PC and 360: 1 none, 2 back, 3 front) set to cull."""
+    def w0(v):
+        return (v & ~0xC000) | (cull << 14)
+    if isinstance(table, Leaf):
+        raw = bytearray(table.raw)
+        for i in range(len(raw) // 8):
+            a, b = struct.unpack_from(table.E + "2I", raw, 8 * i)
+            struct.pack_into(table.E + "2I", raw, 8 * i, w0(a), b)
+        return Leaf(table.t, table.n, raw, table.E)
+    out = []
+    for x in table:
+        if isinstance(x, dict):
+            y = dict(x)
+            y["loadBits"] = [w0(x["loadBits"][0])] + list(x["loadBits"][1:])
+            out.append(y)
+        else:
+            out.append([w0(x[0])] + list(x[1:]))
+    return out
 
 
 def iter_objects(root):
@@ -967,6 +1006,8 @@ class Porter:
         self.stock_copied = Counter()   # materials / pictures copied whole (stock_materials, stock_pictures)
         self.swapped_rows = set()       # light grid row data already put in 360 byte order
         self.pc_sort = {}               # id() of a material -> the PC's sort key (pc_sort_keys)
+        self.pc_cull = {}               # id() of a two-sided PC material -> its culling (pc_face_culling)
+        self.two_sided = 0
         self.stock_glass = None         # glass material name -> a stock glass type's 360-only numbers
         self.stock_sort_keys = None     # every sort key a stock material uses (pc_sort_keys)
         self.x_refs = x_refs
@@ -1423,6 +1464,8 @@ class Porter:
             a["_forward"] = True
         if self.from_game:
             self.log("  %d pictures come from the PC game's own .iwd files" % self.from_game)
+        if self.two_sided:
+            self.log("  %d materials drawn two-sided as on the PC (the stock render state they take culls back faces)" % self.two_sided)
         if getattr(self, "dxn_count", 0):
             self.log("  %d normal maps converted to DXN, as the 360 keeps them" % self.dxn_count)
         for k in ("materials", "pictures"):
@@ -2689,6 +2732,23 @@ class Porter:
             return True
         return False
 
+    # PC technique slots that draw the material: from 4 (vertex lit, then the lit ones) up to the
+    # wireframe and debug views at 44 (0-3: depth and shadow map passes, which a material such
+    # as wc/shadowcaster draws two-sided while drawing itself one-sided).
+    PC_DRAW_TECHNIQUES = range(4, 44)
+
+    def pc_cull_of(self, d):
+        """The face culling a PC material draws itself with (its most common one over its
+        drawing passes), or None."""
+        entry = d.get("stateBitsEntry")
+        entry = bytes.fromhex(entry) if isinstance(entry, str) else bytes(entry or b"")
+        words = state_words(d.get("@", {}).get(("stateBitsTable", ())))
+        if not words:
+            return None
+        votes = Counter((words[e][0] >> 14) & 3 for t, e in enumerate(entry)
+                        if t in self.PC_DRAW_TECHNIQUES and e < len(words))
+        return votes.most_common(1)[0][0] if votes else None
+
     def pre_Material(self, d, tp, tx):
         name = asset_name(d) or _name(d) or b""     # (_name: a name shared with another asset)
         if name and name.startswith(b","):
@@ -2734,7 +2794,12 @@ class Porter:
         if tpl is None:
             raise PortError("material %s: no stock 360 material uses techset %s to copy render "
                             "settings from" % (name.decode(), tsname))
-        # PC render state (D3D9) means nothing to the 360: it comes from the template instead.
+        # PC render state (D3D9) means nothing to the 360: it comes from the template instead,
+        # all but its face culling (the same bits on both): a two-sided PC material stays so.
+        if self.fixes["pc_face_culling"]:
+            cull = self.pc_cull_of(d)
+            if cull in (1, 3):
+                self.pc_cull[id(d)] = cull
         d["@"].pop(("stateBitsTable", ()), None)
         d["_template"] = tpl
         # The PC's own draw order (sort key) means the same on the 360: all 271 materials PC
@@ -2766,6 +2831,16 @@ class Porter:
             c = c.target if c.rel == 0 else None
         if c is None:
             raise PortError("template material's render state can't be copied")
+        cull = self.pc_cull.pop(id(d), None)
+        words = state_words(c) or []
+        entry = d.get("stateBitsEntry")
+        entry = bytes.fromhex(entry) if isinstance(entry, str) else bytes(entry or b"")
+        main = Counter((words[e][0] >> 14) & 3 for e in entry if e < len(words)).most_common(1)
+        # (Only where the template draws mostly otherwise: a same-named stock material that
+        # already draws two-sided keeps its own state, as PC mp_rust's 271 do.)
+        if cull is not None and main and main[0][0] != cull:
+            c = with_cull(c, cull)
+            self.two_sided += 1
         d["@"][("stateBitsTable", ())] = c
         d["stateBitsTable"] = "follow"
         invisible = d.pop("_invisible", False)
