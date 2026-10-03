@@ -2641,7 +2641,9 @@ class Porter:
             # console stopped loading mp_waw_castle with "MT_GetSize: max allocation exceeded
             # ... for script usage"; the top level alone (512 KB) loads.
             mips = mips[:1]
-        if fmt == "DXT5" and not cube and d.get("semantic") == 5 and self.fixes["normal_maps_dxn"]:
+        # (semantic 5, or named _nml: mp_afghan's wavy_nml, semantic 3, is DXN in stock too)
+        if fmt == "DXT5" and not cube and (d.get("semantic") == 5 or name.endswith(b"_nml")) \
+                and self.fixes["normal_maps_dxn"]:
             mips = [dxt5_normal_to_dxn(m) for m in mips]
             fmt = "DXN"
             self.dxn_count = getattr(self, "dxn_count", 0) + 1
