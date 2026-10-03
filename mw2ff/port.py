@@ -1546,6 +1546,20 @@ class Porter:
         if self.fixes["one_room"]:
             self.one_room(d)
         ch = d["@"]
+        # One bit per room ("cell has sun-lit surfaces"), 32 to a word. Stock 360 maps always
+        # carry it (all zero in every one checked: mp_rust 1 word, mp_favela 2) and the renderer
+        # reads it every frame; the original PC mp_rust has none (null), and its conversion
+        # crashed in the renderer as the first frame drew.
+        cells = (d.get("dpvsPlanes") or {}).get("cellCount") or 0
+        if cells and ch.get(("cellHasSunLitSurfsBits", ())) is None:
+            caster = ch.get(("cellCasterBits", ()))
+            caster = caster.target if isinstance(caster, Ref) else caster
+            m = next(m for m in tx.members if m.name == "cellHasSunLitSurfsBits")
+            n = (cells + 31) // 32
+            ch[("cellHasSunLitSurfsBits", ())] = Leaf(caster.t if isinstance(caster, Leaf) else m.type,
+                                                        n, bytes(4 * n), ">")
+            d["cellHasSunLitSurfsBits"] = "follow"
+            self.log("  world: room sun-light bits filled in (the PC file has none)")
         for key, c in list(ch.items()):
             t = deref(c) if isinstance(c, Ref) else None
             if t is not None and any(t is m for m in self.moved_images):
