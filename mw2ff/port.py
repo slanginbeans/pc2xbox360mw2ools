@@ -746,6 +746,7 @@ class Porter:
         self.stock_fx_used = []
         self.stock_models = {}          # model name -> (a stock map's model, its file) (stock_models)
         self.model_swap = {}            # id() of a converted model -> the stock model's list entry
+        self.swapped_rows = set()       # light grid row data already put in 360 byte order
         self.stock_aliases = {}         # sound alias name -> (stock alias list, resident?) (stock_sounds)
         for name, root in x_refs:
             idx = asset_index(root)
@@ -1782,6 +1783,28 @@ class Porter:
                 dens.append(max(1, min(255, round(26 * w / math.sqrt(world_area / uv_area)))))
             struct.pack_into(bounds.E + "I", out, k * size + 24, radius << 16 | dens[0] << 8 | dens[1])
         bounds.raw = bytes(out)
+
+    def post_GfxLightGrid(self, d, tx):
+        """rawRowData is plain bytes in the definitions but holds one row per rowDataStart entry
+        (at 4 * that, in bytes): colStart, colCount, zStart, zCount (16-bit), firstEntry (32-bit),
+        then a byte lookup table. The row headers need the 360's byte order: copied as they were,
+        every model lit from the grid read garbage rows. With them swapped, PC mp_rust's row data
+        matches stock 360 mp_rust's exactly (21,356 bytes, 1,096 rows)."""
+        ch = d.get("@", {})
+        starts, raw = ch.get(("rowDataStart", ())), ch.get(("rawRowData", ()))
+        starts = starts.target if isinstance(starts, Ref) else starts
+        raw = raw.target if isinstance(raw, Ref) else raw
+        if not (isinstance(starts, Leaf) and isinstance(raw, Leaf)) or id(raw) in self.swapped_rows:
+            return
+        self.swapped_rows.add(id(raw))
+        rows = struct.unpack(starts.E + "%dH" % starts.n, starts.raw[:2 * starts.n])
+        src = raw.raw
+        out = bytearray(src)
+        for s in sorted(set(rows)):
+            o = 4 * s
+            if o + 12 <= len(src):
+                struct.pack_into(">4HI", out, o, *struct.unpack_from("<4HI", src, o))
+        raw.raw = bytes(out)
 
     def post_FxElemVisualState(self, d, tx):
         """An effect element's color: the PC keeps it as a D3DCOLOR (bytes B, G, R, A), the 360
