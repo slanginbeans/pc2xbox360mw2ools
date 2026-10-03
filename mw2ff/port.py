@@ -66,8 +66,8 @@ FIXES = [
      "(mp_backlot ran out of memory without it, and froze on the loading screen at 80 MB)."),
     ("stock_effects", "Stock 360 effects",
      "Effects a stock 360 map also has (dust, car glass, fires) come from it instead of being "
-     "converted: the converted dust drew a yellow haze. Off by default: mp_backlot never loaded "
-     "with it (MT_GetSize: max allocation exceeded ... for script usage)."),
+     "converted: the converted dust drew a yellow haze. (An early mp_backlot test didn't load "
+     "with it: MT_GetSize: max allocation exceeded ... for script usage.)"),
     ("pc_sort_keys", "Keep the PC's draw order (sort keys)",
      "Each material keeps its own sort key (which pass it draws in: opaque, decal layers, glass, "
      "effects), which means the same on the 360: all 271 materials PC mp_rust shares with stock "
@@ -125,11 +125,11 @@ FIXES = [
      "switch distance becomes 0, so the next level shows from up close. Off by default. For "
      "testing whether LOD0 is what the 360 fails to draw (mp_backlot's cover vanishes within its "
      "LOD0 range, 250-900 units, and shows further away)."),
-    ("stock_models", "Stock 360 models where available (test)",
+    ("stock_models", "Stock 360 models where available",
      "Static models a stock 360 file also has (mp_backlot: about 98 kinds, every flickering cover "
      "type among them) are drawn with Infinity Ward's own 360 copy instead of the converted one. "
-     "Off by default. If they still flicker, the models are fine and the map's visibility data "
-     "is at fault; if not, the converted models are."),
+     "Untick to draw the converted models instead (if they then flicker and the stock ones "
+     "didn't, the converted models are at fault)."),
     ("stock_world", "Stock 360 world (test)",
      "For a PC copy of a stock map (PC mp_rust): the world assets (drawn world, collision, map "
      "entities, effects placement, game world) come from the stock 360 map of the same name, "
@@ -146,21 +146,22 @@ FIXES = [
      "becomes a plain 16x16 one instead of being converted: white for colors, flat for normal "
      "maps, black for specular. Off by default. If flicker or missing textures stop, the picture "
      "conversion (tiling, mip levels, headers) is at fault."),
-    ("surface_order", "Surfaces in 360 draw order (test)",
+    ("surface_order", "Surfaces in 360 draw order",
      "Lay the world's surfaces out as the 360 tools do: solid ones (sort key below 6) first, then "
      "decals and see-through ones, then shadow casters, with the opaque / transparent / shadow "
      "caster ranges set to match (stock mp_rust: 5,230 / 101 / 1). IW4x maps list every surface "
      "as opaque (mp_backlot: about 2,400 decals among them), which can make decals flicker and "
-     "hide things behind them. Off by default until tried on a console."),
+     "hide things behind them."),
     ("hide_tool_surfaces", "Hide tool surfaces",
      "Radiant tool shaders (clip, caulk, ...) get a see-through stand-in so they draw nothing."),
     ("portal_multiply", "HDR portals as multiply",
      "The white HDR portal sheets in doorways and windows (wc_unlit_distfalloff_*) use a "
-     "multiply shader that leaves the picture as it is. Off: they are hidden like tool surfaces."),
+     "multiply shader that leaves the picture as it is. Off (the default): they are hidden like "
+     "tool surfaces."),
 ]
-# Off unless switched on: stock_effects (mp_backlot never loaded with it).
-DEFAULT_OFF = {"stock_effects", "hide_foliage", "draw_distance_cap", "skip_lod0", "stock_models",
-               "one_room", "plain_pictures", "surface_order", "stock_world"}
+# Off unless switched on: the test switches, and portal_multiply (HDR portals are hidden instead).
+DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "skip_lod0", "one_room", "plain_pictures",
+               "stock_world", "portal_multiply"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 

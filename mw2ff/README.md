@@ -108,7 +108,7 @@ console as converted maps, the writer is at fault; if it plays like the stock ma
 
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
 Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
-with `--fix-off NAME` (repeatable). All are on by default except `stock_effects` and the test switches `hide_foliage`, `draw_distance_cap`, `skip_lod0`, `stock_models`, `one_room`, `plain_pictures` and `surface_order` (`--fix-on NAME`):
+with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `hide_foliage`, `draw_distance_cap`, `skip_lod0`, `one_room`, `plain_pictures` and `stock_world` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
 
 | Fix | What it does |
 |---|---|
@@ -127,10 +127,10 @@ with `--fix-off NAME` (repeatable). All are on by default except `stock_effects`
 | `hide_foliage` | Test, off by default: foliage static models never show (to test whether too many models in view make the 360 drop some) |
 | `draw_distance_cap` | Test, off by default: every static model's draw distance capped at 1,200 units (same test) |
 | `skip_lod0` | Test, off by default: models with several detail levels never use the closest one (LOD0), to test whether LOD0 is what the 360 fails to draw |
-| `stock_models` | Test, off by default: static models a stock 360 file also has are drawn with the stock copy (do the converted models cause a problem?) |
+| `stock_models` | Static models a stock 360 file also has are drawn with the stock copy (do the converted models cause a problem?) |
 | `one_room` | Test, off by default: the map is treated as one room (each room's culling tree lists everything, no portals) |
 | `plain_pictures` | Test, off by default: the map's own 2D pictures become plain 16x16 ones (white / flat normal / black specular), to test the picture conversion |
-| `surface_order` | Test, off by default: the world's surfaces laid out as the 360 tools do (solid, then decals / see-through, then shadow casters) with the draw ranges to match; IW4x maps list every surface as opaque |
+| `surface_order` | The world's surfaces laid out as the 360 tools do (solid, then decals / see-through, then shadow casters) with the draw ranges to match; IW4x maps list every surface as opaque |
 | `hide_tool_surfaces` | Radiant tool shaders (clip, caulk, ...) draw nothing |
 | `portal_multiply` | HDR portal sheets drawn with a multiply shader (off: hidden like tool surfaces) |
 
