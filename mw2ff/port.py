@@ -30,6 +30,7 @@ import re
 import struct
 import sys
 import zipfile
+from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -281,6 +282,24 @@ def _has_ptr(m):
     return isinstance(m.type, Compound) and any(_has_ptr(x) for x in m.type.members)
 
 
+def _ptr_array_value(r):
+    """If alias r points at one pointer of an array of pointers inside an element of a struct
+    array (not at the array's start), what that pointer holds, else None."""
+    t, tgt, rel = r.t, r.target, r.rel
+    if not (isinstance(tgt, list) and isinstance(t, Compound) and t.kind == "struct" and rel % t.size):
+        return None
+    el = tgt[rel // t.size] if rel // t.size < len(tgt) else None
+    off = rel % t.size
+    for m in t.members:
+        if m.mods and m.mods[-1] == PTR and len(m.mods) > 1 and m.offset < off < m.offset + m.size \
+                and isinstance(el, dict):
+            lst = el.get("@", {}).get((tree.mkey(t, m), ()))
+            k = (off - m.offset) // 4
+            if isinstance(lst, list) and k < len(lst) and lst[k] is not None:
+                return lst[k]
+    return None
+
+
 def _asset_in_slot(r):
     """If alias r points at a pointer member (inside a struct or array of structs) that holds
     an asset, that asset (or Ref), else None."""
@@ -310,6 +329,15 @@ def _asset_in_member(t, tgt, rel):
     for m in t.members:
         if m.offset == rel and m.mods and m.mods[0] == PTR:
             c = tgt.get("@", {}).get((tree.mkey(t, m), ()))
+            if (isinstance(c, dict) and "_asset" in c) or isinstance(c, Ref):
+                return c
+        elif m.mods and m.mods[-1] == PTR and len(m.mods) > 1 and m.offset <= rel < m.offset + m.size \
+                and (rel - m.offset) % 4 == 0:
+            # One pointer of an array of them (FxElemMarkVisuals.materials[2], which effects
+            # share: "the same material as that element's").
+            lst = tgt.get("@", {}).get((tree.mkey(t, m), ()))
+            k = (rel - m.offset) // 4
+            c = lst[k] if isinstance(lst, list) and k < len(lst) else None
             if (isinstance(c, dict) and "_asset" in c) or isinstance(c, Ref):
                 return c
         elif (not m.mods and isinstance(m.type, Compound)
@@ -382,11 +410,13 @@ def alias_index(root):
 
 
 def asset_index(root):
-    """{(struct name, asset name bytes): dict} for every asset in a tree, top-level or inline."""
+    """{(struct name, asset name bytes): dict} for every asset in a tree, top-level or inline.
+    Stock files name some assets through a string another asset holds (a pointer to it): those
+    count too (without them every world asset, and many models and pictures, went unfound)."""
     out = {}
     for o in iter_objects(root):
         if isinstance(o, dict) and "_asset" in o:
-            n = asset_name(o)
+            n = asset_name(o) or _name(o)
             if n is not None:
                 out.setdefault((o["_asset"], n), o)
     return out
@@ -1492,6 +1522,30 @@ class Porter:
         writer ("a pointer refers to ... before it is written")."""
         count = 0
         self.ref_copy_types = {}
+        # A pointer into another element's pointer array (effects share a mark material:
+        # FxElemMarkVisuals.materials[1] "the same as that one's"): the writer would take it for
+        # the element. Point it at the material itself (its slot), or copy a name-only one.
+        shared = 0
+        for o in list(iter_objects(ents)):
+            items = o.get("@", {}).items() if isinstance(o, dict) else (
+                enumerate(o) if isinstance(o, PtrList) else ())
+            for k, c in list(items):
+                v = _ptr_array_value(c) if isinstance(c, Ref) else None
+                if v is None:
+                    continue
+                if isinstance(v, dict) and "_slot" in v:
+                    v = Ref(0)
+                    v.target, v.rel = _ptr_array_value(c)["_slot"], 0
+                elif isinstance(v, dict) and (_name(v) or b"").startswith(b","):
+                    v = {kk: vv for kk, vv in v.items() if kk not in ("_slot", "_forward")}
+                    self.done.add(id(v))
+                if isinstance(o, dict):
+                    o["@"][k] = v
+                else:
+                    o[k] = v
+                shared += 1
+        if shared:
+            self.log("  %d pointers into another element's material list pointed at the material" % shared)
         for o in list(iter_objects(ents)):
             if not isinstance(o, dict):
                 continue
@@ -2017,8 +2071,13 @@ class Porter:
                     if isinstance(o, dict) and "halfThickness" in o and "texVecs" in o and any(o.get("unknown") or [0]):
                         sm = deref(o.get("@", {}).get(("material", ())))
                         if isinstance(sm, dict):
-                            self.stock_glass.setdefault((_name(sm) or b"").lstrip(b","), list(o["unknown"]))
-        d["unknown"] = list(self.stock_glass.get(name) or [986759600, 1053868464])   # 0.001593, 0.4077
+                            mn = (_name(sm) or b"").lstrip(b",")
+                            self.stock_glass.setdefault(mn, list(o["unknown"]))
+                            # The first number also follows the texture scale (mp_terminal's
+                            # la_glass_banister01: 0.0127 to 0.0255 by its texVecs).
+                            self.stock_glass.setdefault((mn, _glass_key(o)), list(o["unknown"]))
+        d["unknown"] = list(self.stock_glass.get((name, _glass_key(d))) or self.stock_glass.get(name)
+                            or [986759600, 1053868464])   # 0.001593, 0.4077
 
     def post_FxGlassSystem(self, d, tx):
         """firstFreePiece is really a 16-bit number (then padding): 0xFFFF, "no free piece",
@@ -2671,6 +2730,18 @@ class Porter:
         def cp(o):
             if isinstance(o, Ref):
                 if o.target is not None and id(o.target) in inside:
+                    # A pointer into a pointer array of an element (FxElemMarkVisuals.materials[1]:
+                    # "the same as that one") is replaced by what it points at even inside: the
+                    # writer would take it for the element itself.
+                    v = _ptr_array_value(o)
+                    if v is not None:
+                        return v
+                    # Likewise an asset pointer that means "the asset that member holds"
+                    # (MaterialTextureDef.u.image of another material: mp_afghan's effect
+                    # models): this file's order can put that member later than the pointer.
+                    a = _asset_in_slot(o)
+                    if isinstance(a, dict) and "_slot" not in a:
+                        return a
                     return o
                 asset = _asset_in_slot(o)
                 if asset is not None:
@@ -2696,10 +2767,25 @@ class Porter:
                     # share a sound file that way): the thing that field points at.
                     el = o.target[o.rel // o.t.size]
                     off = o.rel % o.t.size
-                    m = next((m for m in o.t.members if getattr(m, "offset", None) == off
-                              and m.mods and m.mods[0] == "*"), None)
-                    if m is not None and isinstance(el, dict):
-                        c = el.get("@", {}).get((m.name, ()))
+                    # (or one pointer of an array of them: FxElemMarkVisuals.materials[2], which
+                    # stock effects share the second of)
+                    m = next((m for m in o.t.members if m.mods and m.mods[-1] == "*"
+                              and m.offset <= off < m.offset + m.size and (off - m.offset) % 4 == 0), None)
+                    key = None
+                    if m is not None:
+                        dims = [d for d in m.mods[:-1] if isinstance(d, int)]
+                        flat, idx = (off - m.offset) // 4, []
+                        for dim in reversed(dims):
+                            idx.insert(0, flat % dim)
+                            flat //= dim
+                        key = (m.name, tuple(idx))
+                    if key is not None and isinstance(el, dict):
+                        c = el.get("@", {}).get(key)
+                        if c is None and key[1]:
+                            # (arrays of pointers are kept as one list under the member's name)
+                            lst = el.get("@", {}).get((m.name, ()))
+                            flat = (off - m.offset) // 4
+                            c = lst[flat] if isinstance(lst, list) and flat < len(lst) else None
                         if isinstance(c, Ref):
                             return cp(c)
                         if isinstance(c, dict):
@@ -2946,6 +3032,12 @@ class Porter:
             self.remapped.add(id(lf))
             out = [ours(v) for v in struct.unpack(lf.E + "%dH" % lf.n, lf.raw)]
             lf.raw = struct.pack(lf.E + "%dH" % lf.n, *out)
+
+
+def _glass_key(d):
+    """A glass type's texture vectors, rounded (the key its 360-only numbers follow)."""
+    tv = d.get("texVecs") or []
+    return tuple(round(abs(float(x)), 6) for row in tv for x in (row if isinstance(row, list) else [row]))
 
 
 def _name(d):
@@ -3408,7 +3500,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     w.map_rel = lambda r: map_rel(r, porter.P, porter.X)
     out = w.write()
     out = reserve_callback_block(out, porter)
-    _write_x360(out, out_path, pak_table(out, out_path, porter.root, w.starts))
+    _write_x360(out, out_path, pak_table(out, out_path, porter.root, w.starts, w.written))
     log("wrote %s (%d bytes of zone)" % (out_path, len(out)))
     return out, porter
 
@@ -3563,7 +3655,7 @@ def rewrite_stock(path, out_path, log=print):
     out = w.write()
     holder = type("Root", (), {"root": root})()
     out = reserve_callback_block(out, holder)
-    _write_x360(out, out_path, pak_table(out, out_path, root, w.starts))
+    _write_x360(out, out_path, pak_table(out, out_path, root, w.starts, w.written))
     log("wrote %s (%d bytes of zone; same bytes as the stock zone: %s)"
         % (out_path, len(out), "yes" if out == mw2ff.read_fastfile(path)[1] else "no"))
     return out_path
@@ -3611,17 +3703,42 @@ def _write_x360(zone, path, table=()):
         f.write(head + struct.pack(">II", total, total + extra) + stream)
 
 
-def pak_table(zone, out_path, root, starts):
+def pak_table(zone, out_path, root, starts, written=None):
     """Stock pictures copied in whose pixels live in the disc's imagefile*.pak files: the
     container lists where, 4 entries per picture in the order the zone has them."""
     import mw2tex
-    paks = [o for o in iter_objects(root) if isinstance(o, dict) and "_pak" in o and id(o) in starts]
+    # (Following pointers too: a stock asset copied in can reach its pictures only through them.)
+    seen, paks, todo = set(), [], [root]
+    while todo:
+        x = todo.pop()
+        if isinstance(x, Ref):
+            x = x.target
+        if isinstance(x, tree.InsertSlot):
+            x = x.asset
+        if x is None or id(x) in seen or not isinstance(x, (dict, list)):
+            continue
+        seen.add(id(x))
+        if isinstance(x, dict):
+            if "_pak" in x and id(x) in starts:
+                paks.append(x)
+            todo.extend(v for k, v in x.items() if k != "_slot")
+            todo.extend(x.get("@", {}).values() if isinstance(x.get("@"), dict) else ())
+        else:
+            todo.extend(x)
     paks.sort(key=lambda o: starts[id(o)])
+    if written is not None:
+        # Every written copy, in file order: a stock picture two copied-in models share is
+        # written once for each (stock mp_rust's desertshrubs with stock_models on).
+        paks = [d for _, d in sorted(written, key=lambda t: t[0]) if "_pak" in d]
     _write_x360(zone, out_path)
     with contextlib.redirect_stdout(io.StringIO()):
-        found = sum(1 for i in mw2tex.FastFile(out_path).images if i["pak"])
+        in_file = [i["name"] for i in mw2tex.FastFile(out_path).images if i["pak"]]
+    found = len(in_file)
     if found != len(paks):
-        raise PortError("%d pak pictures written but %d found in the file" % (len(paks), found))
+        ours = Counter((_name(o) or b"").decode("latin-1").lstrip(",") for o in paks)
+        theirs = Counter(n.lstrip(",") for n in in_file)
+        raise PortError("%d pak pictures written but %d found in the file (%s)" % (
+            len(paks), found, ", ".join(sorted((theirs - ours) | (ours - theirs)))[:300]))
     return [t for o in paks for t in o["_pak"]]
 
 

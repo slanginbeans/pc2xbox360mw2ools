@@ -466,6 +466,7 @@ class TreeWriter(zone_mod.Reader):
         self.codec = codec_mod.Codec(self.s)
         self.zone = bytearray(plat.header_bytes)
         self.starts = {}     # id(asset dict) -> where it was written
+        self.written = []    # (where, asset dict) for every asset written, a dict written twice twice
         self.pos = plat.header_bytes
         self.keep_fixes = keep_fixes
         self.reg = {}
@@ -833,6 +834,7 @@ class TreeWriter(zone_mod.Reader):
                         self.loc[id(d["_slot"])] = (VIRTUAL, self._slot)
                 start = self.pos
                 self.starts[id(d)] = start
+                self.written.append((start, d))
                 self._obj = d
                 inst = self.load_struct(info, None, True)
                 self.assets.append((info, inst, start, self.pos))
