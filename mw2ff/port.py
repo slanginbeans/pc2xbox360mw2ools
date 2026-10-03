@@ -2843,12 +2843,27 @@ def strip_fog(text):
 
 
 def _is_builder_signature(d):
-    """The rawfile IW4x ZoneBuilder signs a file with."""
+    """The rawfile IW4x's tools sign a file with: "FastFile built using the IW4x ZoneBuilder"
+    (mp_backlot) or "FastFile built using IW4x ZoneTool!" (mp_ancient), stored as is but marked
+    compressed. Any rawfile marked compressed whose data isn't a zlib stream is treated the same:
+    the 360 would try to inflate it."""
+    import zlib
     ch = d.get("data", {}).get("@", {})
     lf = ch.get(("buffer", ()), ch.get(("compressedBuffer", ())))
     if isinstance(lf, Ref):
         lf = lf.target
-    return isinstance(lf, Leaf) and lf.raw.startswith(b"FastFile built using the IW4x ZoneBuilder")
+    if not isinstance(lf, Leaf):
+        return False
+    if lf.raw.startswith(b"FastFile built using"):
+        return True
+    n = d.get("compressedLen") or 0
+    if not n:
+        return False
+    try:
+        zlib.decompress(lf.raw[:n])
+    except zlib.error:
+        return True
+    return False
 
 
 def _set_rawfile_text(d, data):
