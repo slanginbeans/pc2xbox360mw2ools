@@ -110,7 +110,15 @@ FIXES = [
     ("tree_model_bounds", "Tree boxes enclose their models",
      "Each culling tree node's box grows to enclose every static model it lists, as in stock 360 "
      "maps (mp_rust: all of them). CoD4 ports (mp_backlot: 471 of 3,619 models, up to 537 units "
-     "out) list models that stick out of their node, which the 360 then skips as you turn."),
+     "out) list models that stick out of their node, which the 360 then skips as you turn. Each "
+     "placed model's own box also grows to enclose its vertices (mp_backlot's hanging lights sat "
+     "11 units below theirs)."),
+    ("model_box_bounds", "Model boxes enclose their vertices (test)",
+     "Each placed model's culling box (the one the 360 tests the model against when its tree "
+     "node is partly in view) grows to enclose the model's vertices as placed. Stock maps' boxes "
+     "cover every vertex (mp_rust: 3,356 of 3,356); mp_backlot's hanging fluorescent lights sat 11 "
+     "units below theirs. Off by default: for testing models that vanish depending on the "
+     "angle you look at them from."),
     ("map_effects", "Map effects",
      "Keep the effects the map's createfx script places (mp_backlot: 32, its blowing dust among "
      "them). Off: they are left out of the script (its ambient sounds stay), to see whether "
@@ -191,7 +199,7 @@ FIXES = [
 # Off unless switched on: the test switches, and portal_multiply (HDR portals are hidden instead).
 DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "skip_lod0", "one_room", "plain_pictures",
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
-               "merge_duplicates"}
+               "merge_duplicates", "model_box_bounds"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
@@ -2048,6 +2056,8 @@ class Porter:
             self.order_surfaces(d)
         if self.fixes["surface_bounds"]:
             self.fill_surface_bounds(d)
+        if self.fixes["model_box_bounds"]:
+            self.grow_model_boxes(d)
         if self.fixes["tree_model_bounds"]:
             self.grow_tree_bounds(d)
         if self.fixes["one_room"]:
@@ -2147,6 +2157,80 @@ class Porter:
                     shadowCasterSurfsBegin=b, shadowCasterSurfsEnd=c, emissiveSurfsBegin=c, emissiveSurfsEnd=c)
         self.log("  test: surfaces in 360 order: %d solid, %d decals / see-through, %d shadow casters%s"
                  % (a, b - a, c - b, "" if new_of else " (already in order)"))
+
+    def grow_model_boxes(self, world):
+        """Grow each placed model's box (GfxStaticModelInst.bounds) to enclose the model's
+        vertices as placed. The 360 tests a model against it whenever its culling tree leaf is
+        partly in view; stock maps' boxes cover every vertex (mp_rust: 3,356 of 3,356), maps
+        ported from CoD4 don't always (mp_backlot's hanging fluorescent lights: 11 units low)."""
+        def tgt(c):
+            return c.target if isinstance(c, Ref) else c
+        dpvs = world.get("dpvs") or {}
+        ch = dpvs.get("@", {})
+        insts = tgt(ch.get(("smodelInsts", ())))
+        draws = tgt(ch.get(("smodelDrawInsts", ())))
+        if not isinstance(insts, Leaf) or not isinstance(draws, list):
+            return
+        E = insts.E
+        raw = bytearray(insts.raw)
+        cache = {}
+
+        def model_points(m):
+            if id(m) in cache:
+                return cache[id(m)]
+            pts = []
+            for lod in (m.get("lodInfo") or [])[:m.get("numLods") or 0]:
+                ms = deref(lod.get("@", {}).get(("modelSurfs", ()))) if isinstance(lod, dict) else None
+                if isinstance(ms, tree.InsertSlot):
+                    ms = ms.asset
+                c = lod.get("@", {}).get(("modelSurfs", ())) if isinstance(lod, dict) else None
+                if isinstance(c, Ref) and isinstance(c.target, tree.InsertSlot):
+                    ms = c.target.asset
+                surfs = tgt(ms.get("@", {}).get(("surfs", ()))) if isinstance(ms, dict) else None
+                for sf in surfs if isinstance(surfs, list) else []:
+                    v = tgt(sf.get("@", {}).get(("verts0", ()))) if isinstance(sf, dict) else None
+                    if isinstance(v, Leaf) and v.raw:
+                        size = getattr(v.t, "size", 32) or 32
+                        pts += [struct.unpack_from(v.E + "3f", v.raw, size * i) for i in range(len(v.raw) // size)]
+            cache[id(m)] = pts
+            return pts
+
+        grown, far = 0, 0.0
+        for i, d in enumerate(draws):
+            if 36 * (i + 1) > len(raw) or not isinstance(d, dict) or not d.get("packedAxis"):
+                continue
+            c = d.get("@", {}).get(("model", ()))
+            m = deref(c) if isinstance(c, Ref) else c
+            pts = model_points(m) if isinstance(m, dict) else []
+            if not pts:
+                continue
+            ax = []
+            for v in d["packedAxis"][:3]:
+                ax.append([(((v >> (10 * k)) & 0x3FF) - (0x400 if (v >> (10 * k)) & 0x200 else 0)) / 511.0
+                           for k in range(3)])
+            scale = struct.unpack("<f", struct.pack("<I", d["packedAxis"][3]))[0]
+            o = d["origin"]
+            lo, hi = [1e30] * 3, [-1e30] * 3
+            for p in pts:
+                for k in range(3):
+                    w = o[k] + scale * (p[0] * ax[0][k] + p[1] * ax[1][k] + p[2] * ax[2][k])
+                    lo[k] = min(lo[k], w)
+                    hi[k] = max(hi[k], w)
+            box = struct.unpack_from(E + "6f", raw, 36 * i)
+            blo = [box[k] - box[3 + k] for k in range(3)]
+            bhi = [box[k] + box[3 + k] for k in range(3)]
+            out = max(max(blo[k] - lo[k], hi[k] - bhi[k]) for k in range(3))
+            if out <= 0.5:
+                continue
+            far = max(far, out)
+            lo = [min(lo[k], blo[k]) for k in range(3)]
+            hi = [max(hi[k], bhi[k]) for k in range(3)]
+            struct.pack_into(E + "6f", raw, 36 * i, *([(lo[k] + hi[k]) / 2 for k in range(3)]
+                                                      + [(hi[k] - lo[k]) / 2 for k in range(3)]))
+            grown += 1
+        insts.raw = bytes(raw)
+        if grown:
+            self.log("  %d placed model boxes grown to enclose their models (up to %.0f units)" % (grown, far))
 
     def grow_tree_bounds(self, world):
         """Grow every culling tree node's box (GfxAabbTree.bounds) to enclose the static models
