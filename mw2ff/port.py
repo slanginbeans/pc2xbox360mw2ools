@@ -1874,6 +1874,10 @@ class Porter:
         d["himipRadii"] = "follow" if n else None
         if n:
             d["@"][("himipRadii", ())] = Leaf(m.type, n, struct.pack(">%dH" % n, *[HIMIP_RADIUS] * n), ">")
+        # Every one of the 8,241 models in the stock 360 files has lodRampType 0; the PC marks
+        # skinned ones (characters, view hands) 1.
+        if d.get("lodRampType"):
+            d["lodRampType"] = 0
         if self.fixes["skip_lod0"] and (d.get("numLods") or 0) > 1 and d.get("lodInfo"):
             # The game takes the first detail level whose distance is beyond the camera's.
             d["lodInfo"][0]["dist"] = 0.0
