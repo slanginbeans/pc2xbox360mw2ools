@@ -2332,12 +2332,13 @@ class Porter:
         d["packedAxis"] = packed
         # Ground-lit models (grass): the PC marks them 0x20, stock 360 rust marks the same 299
         # models 0x02, and the 360 holds their ground color with its bytes the other way round.
+        # Placed-model flags (from PC mp_rust, mp_terminal and mp_afghan against stock 360 ones,
+        # 15,000 models): the PC's 0x20 (ground lighting) is the 360's 0x02, the PC's 0x10 the
+        # 360's 0x01, and the PC's low bits (0x01, 0x02, 0x04: afghan's poppies, pines and
+        # boulders) have no 360 counterpart (stock holds 0 for them). The ground color is kept
+        # with its bytes the other way round on the 360.
         f = d.get("flags") or 0
-        if f & 0x20:
-            f = (f & ~0x20) | 0x02
-        # Stock 360 maps only ever use 0x01 and 0x02 (119,000 placed models). PC mp_raid also
-        # sets 0x10 (no shadow casting on the PC), which has no 360 bit: left out.
-        d["flags"] = f & 0x03
+        d["flags"] = (0x02 if f & 0x20 else 0) | (0x01 if f & 0x10 else 0)
         gl = d.get("groundLighting")
         if isinstance(gl, dict) and isinstance(gl.get("union"), str):
             gl["union"] = bytes.fromhex(gl["union"])[::-1].hex()
