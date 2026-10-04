@@ -544,3 +544,90 @@ class DecalMerger:
 
 def merge_decal_layers(porter, world, deref, asset_name):
     DecalMerger(porter, world, deref, asset_name).run()
+
+
+def relay_surfaces(porter, world, deref, asset_name):
+    """The 360 draws a run of neighbouring surfaces with the same material (and lightmap,
+    probe, light) as one draw: from the first one's first index to the last one's last, in the
+    first one's vertex block (TU6 0x823FABB0). Stock files lay the index buffer out in surface
+    order (mp_rust: 5,331 of 5,331 neighbours back to back) and keep such runs in one vertex
+    block. After merging decals (split surfaces, new blocks at the end) that no longer held:
+    a run whose next surface's indices came earlier drew a negative count, a GPU hang. So:
+    runs in more than one block get one block together (and their layer records), then the
+    whole index buffer is written again in surface order."""
+    dpvs = world.get("dpvs") or {}
+    dch = dpvs.get("@", {})
+    draw = world.get("draw") or {}
+    surfs = _tgt(dch.get(("surfaces", ())))
+    n = dpvs.get("staticSurfaceCount") or 0
+    V = _tgt((draw.get("vd") or {}).get("@", {}).get(("vertices", ())))
+    I = _tgt(draw.get("@", {}).get(("indices", ())))
+    LD = _tgt((draw.get("vld") or {}).get("@", {}).get(("data", ())))
+    if not (isinstance(surfs, list) and isinstance(V, Leaf) and isinstance(I, Leaf) and isinstance(LD, Leaf)):
+        return
+    idx = struct.unpack(I.E + "%dH" % (len(I.raw) // 2), I.raw)
+
+    def key(s):
+        m = deref(s.get("@", {}).get(("material", ())))
+        return id(m), (s.get("laf") or {}).get("union")
+
+    def layer_bytes(s):
+        """Bytes of layer data per vertex for surface s's material (0 for a plain one)."""
+        m = deref(s.get("@", {}).get(("material", ())))
+        ts = deref(m.get("@", {}).get(("techniqueSet", ()))) if isinstance(m, dict) else None
+        name = (asset_name(ts) or b"").lstrip(b",") if isinstance(ts, dict) else b""
+        if not (asset_name(m) or b"").startswith(b"*"):
+            return 0
+        layers = re.findall(rb"_([bmt][123][a-z0-9]*?)(?=_|p0|$)", name)
+        return 8 * len(layers) + 4 * sum(1 for c in layers if b"n" in c[2:])
+
+    vout, lout = bytearray(V.raw), bytearray(LD.raw)
+    nverts = len(V.raw) // VERTEX
+    rel = {}                    # id(surface) -> index offset to add (its block moved into a run's)
+    joined = 0
+    i = 0
+    while i < n:
+        j = i
+        while j + 1 < n and key(surfs[j + 1]) == key(surfs[i]):
+            j += 1
+        run = surfs[i:j + 1]
+        blocks = []
+        for s in run:
+            b = (s["tris"]["firstVertex"], s["tris"]["vertexCount"], s["tris"]["vertexLayerData"])
+            if b not in blocks:
+                blocks.append(b)
+        if len(blocks) > 1:
+            total = sum(b[1] for b in blocks)
+            if total > 0xFFFF:
+                porter.warn("decal layers: %d neighbouring surfaces with one material need more than "
+                            "65,535 vertices together" % len(run))
+            else:
+                bpv = layer_bytes(run[0])
+                at, layer_at, off = nverts, len(lout), {}
+                for fv, cnt, lay in blocks:
+                    off[(fv, cnt, lay)] = nverts - at
+                    vout += V.raw[VERTEX * fv:VERTEX * (fv + cnt)]
+                    if bpv:
+                        lout += LD.raw[lay:lay + bpv * cnt]
+                    nverts += cnt
+                for s in run:
+                    t = s["tris"]
+                    rel[id(s)] = off[(t["firstVertex"], t["vertexCount"], t["vertexLayerData"])]
+                    t["firstVertex"], t["vertexCount"] = at, total
+                    t["vertexLayerData"] = layer_at if bpv else 0
+                joined += 1
+        i = j + 1
+    out = []
+    for s in surfs:
+        t = s["tris"]
+        b, k = t["baseIndex"], rel.get(id(s), 0)
+        t["baseIndex"] = len(out)
+        out.extend(x + k for x in idx[b:b + 3 * t["triCount"]])
+    V.raw, V.n = bytes(vout), nverts
+    I.raw, I.n = struct.pack(I.E + "%dH" % len(out), *out), len(out)
+    if len(lout) > len(LD.raw):
+        LD.raw, LD.n = bytes(lout), len(lout)
+    draw["vertexCount"], draw["indexCount"] = nverts, len(out)
+    draw["vertexLayerDataSize"] = len(LD.raw)
+    porter.log("  decal layers: index buffer laid out in surface order, %d runs of one material "
+               "put in one vertex block" % joined)
