@@ -2131,10 +2131,19 @@ class Porter:
                         continue
                     if null_sf is None:
                         null_sf = sf
-                    else:
-                        r = tree.Ref(0)
-                        r.target, r.rel = null_sf, 0
-                        h["@"][("soundFile", ())] = r
+                        continue
+                    # Each keeps its own sound file record (inside its own alias list) and
+                    # shares the first one's silent sound through that sound's slot. Pointing
+                    # at the first one's record pointed into another asset's temporary data,
+                    # which the 360 reuses once that asset is loaded (converted mp_rust: two
+                    # ambient emitters pointed at whatever was loaded there next).
+                    first = (null_sf.get("u") or {}).get("@", {}).get(("loadSnd", ()))
+                    u = sf.get("u")
+                    if isinstance(first, dict) and "_slot" in first and isinstance(u, dict) \
+                            and isinstance(u.get("@", {}).get(("loadSnd", ())), dict):
+                        r = tree.Ref(1)
+                        r.target, r.rel = first["_slot"], 0
+                        u["@"][("loadSnd", ())] = r
             self._replace(d, new)
             silent.append(name)
         # The PC's sound files (each only a name) are pointed at by nothing now.
