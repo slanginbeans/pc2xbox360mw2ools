@@ -108,7 +108,7 @@ console as converted maps, the writer is at fault; if it plays like the stock ma
 
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
 Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
-with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `no_cull_distance`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials`, `stock_pictures`, `merge_duplicates`, `model_box_bounds` and `rebuild_trees` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
+with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `no_cull_distance`, `room_box_bounds`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials`, `stock_pictures`, `merge_duplicates`, `model_box_bounds` and `rebuild_trees` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
 
 | Fix | What it does |
 |---|---|
@@ -130,6 +130,7 @@ with `--fix-off NAME` (repeatable). All are on by default except `portal_multipl
 | `hide_foliage` | Test, off by default: foliage static models never show (to test whether too many models in view make the 360 drop some) |
 | `draw_distance_cap` | Test, off by default: every static model's draw distance capped at 1,200 units (same test) |
 | `no_cull_distance` | Test, off by default: every static model's cull distance becomes 0, which the 360 reads as never hidden by distance (stock mp_terminal has 0 for 206 models the PC gives 2,800-5,250; mp_ancient keeps 2,000 for 206), for models that vanish |
+| `room_box_bounds` | Test, off by default: each room's box grows to enclose every static model and surface its culling tree lists; the 360's shadow pass skips rooms whose box is outside the shadow view, so whatever sticks out loses its shadow (mp_backlot: 520 items, up to 537 units; stock mp_terminal: 64, up to 349) |
 | `skip_lod0` | Test, off by default: models with several detail levels never use the closest one (LOD0), to test whether LOD0 is what the 360 fails to draw |
 | `stock_models` | Static models a stock 360 file also has are drawn with the stock copy (do the converted models cause a problem?) |
 | `stream_pictures` | Test, off by default: the map's own pictures stream from `imagefile9.pak` as stock maps' do (full size, no map memory: converted mp_rust 106 MB -> 82 MB, stock 64 MB). The pak, `mw2port_out\imagefile9.pak`, is shared by every map converted this way and only grows (a picture already in it is reused); copy it to the game folder next to `default_mp.xex`, like `imagefile8.pak` |

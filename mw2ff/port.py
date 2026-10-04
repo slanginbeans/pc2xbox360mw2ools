@@ -144,6 +144,12 @@ FIXES = [
      "distance. Stock mp_terminal has 0 for 206 models whose PC cull distance is 2,800-5,250; "
      "the converter keeps the PC values (mp_ancient: 206 models at 2,000). Off by default: for "
      "testing whether models vanish because of their cull distance."),
+    ("room_box_bounds", "Room boxes enclose their contents (test)",
+     "Each room's box (GfxCell.bounds) grows to enclose every static model and surface its "
+     "culling tree lists. The 360's shadow pass tests each room's box against the shadow view "
+     "and skips the whole room when it's outside, so whatever sticks out loses its shadow. "
+     "mp_backlot: 520 of 14,568 stick out, up to 537 units (stock mp_terminal: 64, up to 349). "
+     "Off by default."),
     ("skip_lod0", "Skip closest detail level (test)",
      "Converted models with more than one detail level never use their closest one (LOD0): its "
      "switch distance becomes 0, so the next level shows from up close. Off by default. For "
@@ -213,7 +219,7 @@ FIXES = [
      "tool surfaces."),
 ]
 # Off unless switched on: the test switches, and portal_multiply (HDR portals are hidden instead).
-DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "skip_lod0", "one_room", "plain_pictures",
+DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_box_bounds", "skip_lod0", "one_room", "plain_pictures",
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
                "merge_duplicates", "model_box_bounds", "rebuild_trees"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
@@ -2218,6 +2224,8 @@ class Porter:
             self.rebuild_trees(d)
         if self.fixes["one_room"]:
             self.one_room(d)
+        if self.fixes["room_box_bounds"]:
+            self.grow_room_boxes(d)
         ch = d["@"]
         # One bit per room ("cell has sun-lit surfaces"), 32 to a word. Stock 360 maps always
         # carry it (all zero in every one checked: mp_rust 1 word, mp_favela 2) and the renderer
@@ -2462,6 +2470,71 @@ class Porter:
         if grown:
             self.log("  culling tree: %d node boxes grown to enclose their static models (up to %.0f "
                      "units)" % (grown, far))
+
+    def grow_room_boxes(self, world):
+        """Grow each room's box (GfxCell.bounds) to enclose the static models and surfaces its
+        culling tree's root lists. The shadow pass (TU6 0x823D9080) tests room boxes against
+        the shadow view and walks only the rooms inside it."""
+        def tgt(c):
+            return c.target if isinstance(c, Ref) else c
+        ch = world.get("@", {})
+        dch = (world.get("dpvs") or {}).get("@", {})
+        cells, trees = tgt(ch.get(("cells", ()))), tgt(ch.get(("aabbTrees", ())))
+        insts, sbounds = tgt(dch.get(("smodelInsts", ()))), tgt(dch.get(("surfacesBounds", ())))
+        order = tgt(dch.get(("sortedSurfIndex", ())))
+        if not (isinstance(cells, list) and isinstance(trees, list) and isinstance(insts, Leaf)
+                and isinstance(sbounds, Leaf) and isinstance(order, Leaf)):
+            self.warn("room boxes couldn't be grown (data not found)")
+            return
+        sorted_idx = struct.unpack(order.E + "%dH" % (len(order.raw) // 2), order.raw)
+        ssize = sbounds.t.size
+
+        def get(u):
+            h = bytes.fromhex(u["union"])
+            return list(struct.unpack(">3f", h[:12]))
+
+        grown, far = 0, 0.0
+        for cell, ct in zip(cells, trees):
+            nodes = tgt(ct.get("@", {}).get(("aabbTree", ()))) if isinstance(ct, dict) else None
+            b = cell.get("bounds") if isinstance(cell, dict) else None
+            if not nodes or not isinstance(b, dict) or not all(
+                    isinstance(b.get(k), dict) and isinstance(b[k].get("union"), str)
+                    for k in ("midPoint", "halfSize")):
+                continue
+            root = nodes[0]
+            boxes = []
+            cnt = root.get("smodelIndexCount") or 0
+            c = root.get("@", {}).get(("smodelIndexes", ()))
+            off = 0
+            if isinstance(c, Ref):
+                off, c = c.rel, c.target
+            if cnt and isinstance(c, Leaf):
+                for i in struct.unpack_from(c.E + "%dH" % cnt, c.raw, off):
+                    if 36 * (i + 1) <= len(insts.raw):
+                        boxes.append(struct.unpack_from(insts.E + "6f", insts.raw, 36 * i))
+            start = root.get("startSurfIndex") or 0
+            for k in range(root.get("surfaceCount") or 0):
+                if start + k < len(sorted_idx):
+                    s = sorted_idx[start + k]
+                    if ssize * (s + 1) <= len(sbounds.raw):
+                        boxes.append(struct.unpack_from(sbounds.E + "6f", sbounds.raw, ssize * s))
+            mid, half = get(b["midPoint"]), get(b["halfSize"])
+            lo = [mid[k] - half[k] for k in range(3)]
+            hi = [mid[k] + half[k] for k in range(3)]
+            out = False
+            for bx in boxes:
+                for k in range(3):
+                    if bx[k] - bx[3 + k] < lo[k] or bx[k] + bx[3 + k] > hi[k]:
+                        far = max(far, lo[k] - (bx[k] - bx[3 + k]), (bx[k] + bx[3 + k]) - hi[k])
+                        lo[k] = min(lo[k], bx[k] - bx[3 + k])
+                        hi[k] = max(hi[k], bx[k] + bx[3 + k])
+                        out = True
+            if out:
+                grown += 1
+                b["midPoint"]["union"] = struct.pack(">3f", *[(lo[k] + hi[k]) / 2 for k in range(3)]).hex()
+                b["halfSize"]["union"] = struct.pack(">3f", *[(hi[k] - lo[k]) / 2 for k in range(3)]).hex()
+        self.log("  test: %d of %d room boxes grown to enclose their contents (up to %.0f units)"
+                 % (grown, len(cells), far))
 
     def fill_surface_bounds(self, world):
         """GfxSurfaceBounds has two more words on the 360 (the PC has none of it): the first
