@@ -162,7 +162,7 @@ class DecalMerger:
     @staticmethod
     def pointer_to(asset):
         """An alias to asset, which its first pointer writes (it has no other place)."""
-        r = Ref(0)
+        r = Ref(1)    # (written out as this until the target is placed: not null)
         r.target, r.rel = asset["_slot"], 0
         return r
 
@@ -174,7 +174,7 @@ class DecalMerger:
             r.target, r.rel, r.t = c.target, c.rel, c.t
             return r
         if isinstance(c, dict):
-            r = Ref(0)
+            r = Ref(1)    # (written out as this until the target is placed: not null)
             r.target, r.rel = (c["_slot"], 0) if "_slot" in c else (c, 0)
             return r
         return c
