@@ -37,6 +37,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "mw2tex"))
 
 import codec as codec_mod
+import decals
 import mw2ff
 import schema as schema_mod
 import tree
@@ -144,6 +145,12 @@ FIXES = [
      "distance. Stock mp_terminal has 0 for 206 models whose PC cull distance is 2,800-5,250; "
      "the converter keeps the PC values (mp_ancient: 206 models at 2,000). Off by default: for "
      "testing whether models vanish because of their cull distance."),
+    ("merge_decals", "Merge decal layers into the ground (test)",
+     "Blend decals lying on the ground (dirt, rust, stains) become layers of the ground's "
+     "material, as the 360 map compiler builds them: composite materials drawing the ground and "
+     "up to two decals in one pass, blended per vertex. The PC draws each decal as its own "
+     "see-through surface over the ground (converted mp_rust: 2,291 of them; stock 101). "
+     "Off by default."),
     ("room_box_bounds", "Room boxes enclose their contents (test)",
      "Each room's box (GfxCell.bounds) grows to enclose every static model and surface its "
      "culling tree lists. The 360's shadow pass tests each room's box against the shadow view "
@@ -219,7 +226,7 @@ FIXES = [
      "tool surfaces."),
 ]
 # Off unless switched on: the test switches, and portal_multiply (HDR portals are hidden instead).
-DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_box_bounds", "skip_lod0", "one_room", "plain_pictures",
+DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_box_bounds", "merge_decals", "skip_lod0", "one_room", "plain_pictures",
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
                "merge_duplicates", "model_box_bounds", "rebuild_trees"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
@@ -2210,6 +2217,8 @@ class Porter:
                 self.moved_images.append(c)
 
     def post_GfxWorld(self, d, tx):
+        if self.fixes["merge_decals"]:
+            decals.merge_decal_layers(self, d, deref, asset_name)
         if self.fixes["surface_order"]:
             self.order_surfaces(d)
         if self.fixes["surface_bounds"]:
