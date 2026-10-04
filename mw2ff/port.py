@@ -2237,6 +2237,8 @@ class Porter:
             decals.merge_decal_layers(self, d, deref, asset_name)
         if self.fixes["surface_order"]:
             self.order_surfaces(d)
+        if self.fixes["merge_decals"]:
+            decals.relay_surfaces(self, d, deref, asset_name)
         if self.fixes["surface_bounds"]:
             self.fill_surface_bounds(d)
         if self.fixes["model_box_bounds"]:
