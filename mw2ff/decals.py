@@ -159,9 +159,9 @@ class DecalMerger:
 
     @staticmethod
     def pointer_to(asset):
-        """A pointer to asset, which has no other place: the first one writes it there, the
-        rest point back at it. (At the asset itself: these pointers aren't in the temp block,
-        so the asset is written in place, not through a slot.)"""
+        """A pointer to asset. Composite materials are listed before the world (its surface
+        array is written before what its pointers lead to: pointing there, the later surfaces
+        would point ahead); their shader set is written at the first one that points at it."""
         r = Ref(1)    # (written out as this until the asset is placed: not null)
         r.target, r.rel = asset, 0
         return r
@@ -241,6 +241,7 @@ class DecalMerger:
         if cleaf:
             d["@"][("constantTable", ())] = cleaf
         d["_asset"] = "Material"
+        self.P.extra_assets.append(("material", d))
         self.composites[key] = d
         return d
 

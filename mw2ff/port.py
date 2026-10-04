@@ -1101,6 +1101,7 @@ class Porter:
             if tn is not None:
                 self.material_templates.setdefault(tn.lstrip(b","), v)
         self.warnings = []
+        self.extra_assets = []          # (type, asset) made while converting, listed before the world
         self.moved_images = []
         self.picked = {}        # stock file -> its asset list entries to copy in
         self.stock_entry_ids = set()    # id() of asset list entries copied whole from stock (teams)
@@ -1499,6 +1500,11 @@ class Porter:
         for a in orphans:
             self.conv_asset(a)
             a["_forward"] = True
+        if self.extra_assets:
+            # Assets made here (merge_decals' composite materials): before the world, whose
+            # pointers to them must point back.
+            at = next((i for i, e in enumerate(ents) if e[0] == "gfx_map"), len(ents))
+            ents[at:at] = [tree.AssetEntry([typ, a]) for typ, a in self.extra_assets]
         if self.from_game:
             self.log("  %d pictures come from the PC game's own .iwd files" % self.from_game)
         if self.two_sided:
