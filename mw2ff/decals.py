@@ -24,6 +24,8 @@ import re
 import struct
 from collections import defaultdict
 
+import tree
+
 from tree import Leaf, Ref, Str
 
 VERTEX = 44                 # GfxWorldVertex: xyz, binormal sign, colour, uv, lightmap uv, normal, tangent
@@ -154,16 +156,23 @@ class DecalMerger:
                 d = P.stock_copy(P.library[key])
             d["_asset"] = "MaterialTechniqueSet"
             d.pop("_slot", None)
-            self.techsets[name] = d
+            self.techsets[name] = self.listed("techset", d)
         return self.pointer_to(self.techsets[name])
 
+    def listed(self, typ, asset):
+        """asset as an entry of its own in the file's asset list (port.py puts them before the
+        world): the world's surfaces are written before what their pointers lead to, so
+        pointing at an asset written there, later surfaces would point ahead."""
+        e = tree.AssetEntry([typ, asset])
+        self.P.extra_assets.append(e)
+        return e
+
     @staticmethod
-    def pointer_to(asset):
-        """A pointer to asset. Composite materials are listed before the world (its surface
-        array is written before what its pointers lead to: pointing there, the later surfaces
-        would point ahead); their shader set is written at the first one that points at it."""
-        r = Ref(1)    # (written out as this until the asset is placed: not null)
-        r.target, r.rel = asset, 0
+    def pointer_to(entry):
+        """A pointer to a listed asset, through its list entry (as stock files point from one
+        asset at another: each asset's temporary data is reused once it is loaded)."""
+        r = Ref(1)
+        r.target, r.rel = entry, 4
         return r
 
     @staticmethod
@@ -241,8 +250,7 @@ class DecalMerger:
         if cleaf:
             d["@"][("constantTable", ())] = cleaf
         d["_asset"] = "Material"
-        self.P.extra_assets.append(("material", d))
-        self.composites[key] = d
+        self.composites[key] = self.listed("material", d)
         return d
 
     # ------------------------------------------------------------ geometry
