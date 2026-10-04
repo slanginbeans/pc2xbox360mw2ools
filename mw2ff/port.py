@@ -62,6 +62,7 @@ TILING_PAD = 1.28
 LEVELS = 4      # pak table entries per picture
 # Fixes that can be switched off, to find out on the console which one helps or hurts:
 # (name, short label, what it does). All on by default.
+SWAP_MODELS = (60, 62)          # placed static models swapped by the swap_models_test switch
 FIXES = [
     ("texture_budget", "Picture budget",
      "Pictures over the budget (40 MB) lose their top mip levels, so big maps fit in memory "
@@ -213,6 +214,13 @@ FIXES = [
      "Every culling tree node's box grows by %d units on each side. Off by default. If that is "
      "enough to stop the vanishing, the 360 misjudges node boxes by a small margin; if not, by a "
      "lot (as if it read another box)." % 64),
+    ("swap_models_test", "Swap placed models #%d and #%d (test)" % SWAP_MODELS,
+     "Placed static models #%d and #%d trade numbers: each keeps its place, model, box and "
+     "lighting, and every list that names them by number (culling tree nodes, shadow lists) "
+     "follows. mp_ancient: #60 is a boulder that vanishes, #62 the same boulder that doesn't. "
+     "If the vanishing stays at #60's spot, it goes with the place; if it moves to #62's spot, "
+     "with the number. Only for maps where both are the same model; off by default."
+     % SWAP_MODELS),
     ("ground_lit_flag", "Ground-lit flag from ground colour (test)",
      "A placed model with a ground colour gets the 360's ground-lit flag (0x02), as in every "
      "stock 360 map (16 maps: 35,119 of 35,119 placements with a ground colour have it, none "
@@ -253,7 +261,8 @@ FIXES = [
 DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_box_bounds", "merge_decals", "skip_lod0", "one_room", "plain_pictures",
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
                "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes", "ground_lit_flag",
-               "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin"}
+               "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin",
+               "swap_models_test"}
 TREE_BOX_MARGIN = 64            # units, for the tree_box_margin test switch
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
@@ -1838,6 +1847,49 @@ class Porter:
                         n += 1
         self.log("  test: %d culling tree node boxes grown by %d units" % (n, margin))
 
+    def swap_models(self, world, a, b):
+        """Test switch swap_models_test: placed static models a and b trade numbers. Their
+        smodelDrawInsts and smodelInsts records swap places, and every index list naming them
+        (culling tree nodes' smodelIndexes, shadowGeom smodelIndex) swaps a and b, so each model
+        still draws where it stood; only its number changes."""
+        def tgt(c):
+            return c.target if isinstance(c, Ref) else c
+        dpvs = world.get("dpvs") or {}
+        ch = dpvs.get("@", {})
+        draws = tgt(ch.get(("smodelDrawInsts", ())))
+        insts = tgt(ch.get(("smodelInsts", ())))
+        if not (isinstance(draws, list) and isinstance(insts, Leaf) and max(a, b) < len(draws)
+                and 36 * (max(a, b) + 1) <= len(insts.raw)):
+            self.warn("placed models #%d and #%d couldn't be swapped (not in this map)" % (a, b))
+            return
+        name = lambda i: (_name(deref(draws[i].get("@", {}).get(("model", ())))) or b"").lstrip(b",")
+        if name(a) != name(b):
+            self.warn("placed models #%d and #%d weren't swapped (different models: %s, %s)"
+                      % (a, b, name(a).decode(errors="replace"), name(b).decode(errors="replace")))
+            return
+        draws[a], draws[b] = draws[b], draws[a]
+        raw = bytearray(insts.raw)
+        raw[36 * a:36 * a + 36], raw[36 * b:36 * b + 36] = insts.raw[36 * b:36 * b + 36], insts.raw[36 * a:36 * a + 36]
+        insts.raw = bytes(raw)
+        lists, seen = [], set()
+        for ct in tgt(world.get("@", {}).get(("aabbTrees", ()))) or []:
+            for nd in tgt(ct.get("@", {}).get(("aabbTree", ()))) or []:
+                lists.append(tgt(nd.get("@", {}).get(("smodelIndexes", ()))) if isinstance(nd, dict) else None)
+        for sg in tgt(world.get("@", {}).get(("shadowGeom", ()))) or []:
+            lists.append(tgt(sg.get("@", {}).get(("smodelIndex", ()))) if isinstance(sg, dict) else None)
+        changed = 0
+        for L in lists:
+            if not isinstance(L, Leaf) or id(L) in seen or not L.raw:
+                continue
+            seen.add(id(L))
+            v = list(struct.unpack(L.E + "%dH" % (len(L.raw) // 2), L.raw))
+            w = [b if x == a else a if x == b else x for x in v]
+            if w != v:
+                L.raw = struct.pack(L.E + "%dH" % len(w), *w)
+                changed += 1
+        self.log("  test: placed models #%d and #%d (%s) swapped numbers (%d index lists updated)"
+                 % (a, b, name(a).decode(errors="replace"), changed))
+
     def one_room(self, world):
         """Test switch one_room: every room's culling tree becomes one node listing every surface
         (all of sortedSurfIndex) and static model, and the portals go, so whichever room the
@@ -2327,6 +2379,8 @@ class Porter:
             self.one_room(d)
         if self.fixes["room_box_bounds"]:
             self.grow_room_boxes(d)
+        if self.fixes["swap_models_test"]:
+            self.swap_models(d, *SWAP_MODELS)
         ch = d["@"]
         # One bit per room ("cell has sun-lit surfaces"), 32 to a word. Stock 360 maps always
         # carry it (all zero in every one checked: mp_rust 1 word, mp_favela 2) and the renderer
