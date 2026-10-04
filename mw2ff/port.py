@@ -200,6 +200,19 @@ FIXES = [
      "as out of view; it still tests each model against its own box at the bottom of the tree. "
      "Off by default. If models stop vanishing with it, the 360 is wrongly skipping tree nodes; "
      "if not, the loss is in each model's own test or in how the tree marks models visible."),
+    ("huge_leaf_boxes", "Huge boxes on end nodes only (test)",
+     "Like Huge culling tree boxes, but only culling tree nodes with no children (the ones whose "
+     "models and surfaces the 360 tests one by one) get the whole map's box; nodes with children "
+     "keep theirs. Off by default. Together with Huge boxes on nodes with children, tells which "
+     "level of the tree the 360 misjudges (mp_ancient: huge boxes on every node stopped the "
+     "vanishing)."),
+    ("huge_inner_boxes", "Huge boxes on nodes with children only (test)",
+     "Like Huge culling tree boxes, but only culling tree nodes with children get the whole "
+     "map's box; nodes with no children keep theirs. Off by default."),
+    ("tree_box_margin", "Grow culling tree boxes by %d units (test)" % 64,
+     "Every culling tree node's box grows by %d units on each side. Off by default. If that is "
+     "enough to stop the vanishing, the 360 misjudges node boxes by a small margin; if not, by a "
+     "lot (as if it read another box)." % 64),
     ("ground_lit_flag", "Ground-lit flag from ground colour (test)",
      "A placed model with a ground colour gets the 360's ground-lit flag (0x02), as in every "
      "stock 360 map (16 maps: 35,119 of 35,119 placements with a ground colour have it, none "
@@ -239,7 +252,9 @@ FIXES = [
 # Off unless switched on: the test switches, and portal_multiply (HDR portals are hidden instead).
 DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_box_bounds", "merge_decals", "skip_lod0", "one_room", "plain_pictures",
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
-               "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes", "ground_lit_flag"}
+               "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes", "ground_lit_flag",
+               "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin"}
+TREE_BOX_MARGIN = 64            # units, for the tree_box_margin test switch
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
@@ -1783,7 +1798,7 @@ class Porter:
         counts.raw = struct.pack(counts.E + "%di" % counts.n, *new_counts)
         self.log("  test: culling trees rebuilt (%d rooms, %d nodes)" % (rebuilt, total))
 
-    def huge_tree_boxes(self, world):
+    def huge_tree_boxes(self, world, leaves=True, inner=True):
         """Test switch huge_tree_boxes: every culling tree node's box becomes the world's box, so
         the 360's walk (TU6 0x8240DDA0) never judges a node out of view or wholly in view. It
         goes down every node partly in view and tests a leaf's models and surfaces one by one
@@ -1797,10 +1812,31 @@ class Porter:
         n = 0
         for ct in trees:
             for nd in tgt(ct.get("@", {}).get(("aabbTree", ()))) or []:
-                if isinstance(nd, dict) and "bounds" in nd:
+                if isinstance(nd, dict) and "bounds" in nd and (inner if nd.get("childCount") else leaves):
                     nd["bounds"] = {k: dict(v) for k, v in world["bounds"].items()}
                     n += 1
-        self.log("  test: %d culling tree node boxes set to the whole map's box" % n)
+        which = "" if leaves and inner else " (end nodes only)" if leaves else " (nodes with children only)"
+        self.log("  test: %d culling tree node boxes set to the whole map's box%s" % (n, which))
+
+    def grow_tree_boxes_by(self, world, margin):
+        """Test switch tree_box_margin: every culling tree node's box grows by margin units on
+        each side (its half-size grows by margin, its centre stays)."""
+        def tgt(c):
+            return c.target if isinstance(c, Ref) else c
+        trees = tgt(world.get("@", {}).get(("aabbTrees", ())))
+        if not isinstance(trees, list):
+            self.warn("culling tree boxes couldn't be grown (data not found)")
+            return
+        n = 0
+        for ct in trees:
+            for nd in tgt(ct.get("@", {}).get(("aabbTree", ()))) or []:
+                hs = nd.get("bounds", {}).get("halfSize") if isinstance(nd, dict) else None
+                if isinstance(hs, dict) and isinstance(hs.get("union"), str) and len(hs["union"]) == 24:
+                    h = struct.unpack(">3f", bytes.fromhex(hs["union"]))
+                    if all(math.isfinite(v) and v >= 0 for v in h):
+                        nd["bounds"]["halfSize"] = {"union": struct.pack(">3f", *[v + margin for v in h]).hex()}
+                        n += 1
+        self.log("  test: %d culling tree node boxes grown by %d units" % (n, margin))
 
     def one_room(self, world):
         """Test switch one_room: every room's culling tree becomes one node listing every surface
@@ -2282,8 +2318,11 @@ class Porter:
             self.fill_lighting_origins(d)
         if self.fixes["rebuild_trees"]:
             self.rebuild_trees(d)
-        if self.fixes["huge_tree_boxes"]:
-            self.huge_tree_boxes(d)
+        if self.fixes["huge_tree_boxes"] or self.fixes["huge_leaf_boxes"] or self.fixes["huge_inner_boxes"]:
+            self.huge_tree_boxes(d, leaves=self.fixes["huge_tree_boxes"] or self.fixes["huge_leaf_boxes"],
+                                 inner=self.fixes["huge_tree_boxes"] or self.fixes["huge_inner_boxes"])
+        if self.fixes["tree_box_margin"]:
+            self.grow_tree_boxes_by(d, TREE_BOX_MARGIN)
         if self.fixes["one_room"]:
             self.one_room(d)
         if self.fixes["room_box_bounds"]:
