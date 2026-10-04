@@ -108,7 +108,7 @@ console as converted maps, the writer is at fault; if it plays like the stock ma
 
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
 Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
-with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `no_cull_distance`, `room_box_bounds`, `merge_decals`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials`, `stock_pictures`, `merge_duplicates`, `model_box_bounds`, `rebuild_trees`, `huge_tree_boxes` and `ground_lit_flag` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
+with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `no_cull_distance`, `room_box_bounds`, `merge_decals`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials`, `stock_pictures`, `merge_duplicates`, `model_box_bounds`, `rebuild_trees`, `huge_tree_boxes`, `ground_lit_flag`, `huge_leaf_boxes`, `huge_inner_boxes` and `tree_box_margin` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
 
 | Fix | What it does |
 |---|---|
@@ -141,6 +141,9 @@ with `--fix-off NAME` (repeatable). All are on by default except `portal_multipl
 | `rebuild_trees` | Test, off by default: each room's culling tree is built anew from its surfaces and static models (boxes fitted to contents, split in two down to 16 items, every node listing the models below it); rooms and portals stay. mp_ancient's rocks and foliage vanished by view angle with the converted trees and didn't with `one_room` |
 | `huge_tree_boxes` | Test, off by default: every culling tree node's box becomes the whole map's box, so the 360 never skips a node as out of view and tests each model against its own box; tells whether node skipping or the per-model test loses mp_ancient's foliage |
 | `ground_lit_flag` | Test, off by default: a placed model with a ground colour gets the 360's ground-lit flag (0x02), as in every stock map (35,119 of 35,119); mp_ancient marks foliage ground-lit on the model, so 468 of 474 placements had a colour but no flag |
+| `huge_leaf_boxes` | Test, off by default: `huge_tree_boxes` for culling tree nodes with no children only (nodes with children keep their boxes), to find which level of the tree the 360 misjudges |
+| `huge_inner_boxes` | Test, off by default: `huge_tree_boxes` for culling tree nodes with children only (nodes with no children keep their boxes) |
+| `tree_box_margin` | Test, off by default: every culling tree node's box grows by 64 units on each side; enough to stop the vanishing means the 360 misjudges node boxes by a small margin |
 | `one_room` | Test, off by default: the map is treated as one room (each room's culling tree lists everything, no portals) |
 | `plain_pictures` | Test, off by default: the map's own 2D pictures become plain 16x16 ones (white / flat normal / black specular), to test the picture conversion |
 | `surface_order` | The world's surfaces laid out as the 360 tools do (solid, then decals / see-through, then shadow casters) with the draw ranges to match; IW4x maps list every surface as opaque |
