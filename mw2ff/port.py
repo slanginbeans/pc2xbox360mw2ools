@@ -139,6 +139,11 @@ FIXES = [
     ("draw_distance_cap", "Cap model draw distance (test)",
      "Every static model's draw distance is capped at %d units (mp_backlot: about 960 models in "
      "range from a typical point instead of 2,670). Off by default; for the same test." % 1200),
+    ("no_cull_distance", "No model cull distance (test)",
+     "Every static model's cull distance becomes 0, which the 360 reads as never hidden by "
+     "distance. Stock mp_terminal has 0 for 206 models whose PC cull distance is 2,800-5,250; "
+     "the converter keeps the PC values (mp_ancient: 206 models at 2,000). Off by default: for "
+     "testing whether models vanish because of their cull distance."),
     ("skip_lod0", "Skip closest detail level (test)",
      "Converted models with more than one detail level never use their closest one (LOD0): its "
      "switch distance becomes 0, so the next level shows from up close. Off by default. For "
@@ -208,7 +213,7 @@ FIXES = [
      "tool surfaces."),
 ]
 # Off unless switched on: the test switches, and portal_multiply (HDR portals are hidden instead).
-DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "skip_lod0", "one_room", "plain_pictures",
+DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "skip_lod0", "one_room", "plain_pictures",
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
                "merge_duplicates", "model_box_bounds", "rebuild_trees"}
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
@@ -1541,6 +1546,9 @@ class Porter:
             self.log("  test: %d models skip their closest detail level" % self.test_counts["skip_lod0"])
         if self.test_counts.get("foliage"):
             self.log("  test: %d foliage models hidden" % self.test_counts["foliage"])
+        if self.test_counts.get("no_cull"):
+            self.log("  test: %d static models' cull distance set to 0 (never hidden by distance)"
+                     % self.test_counts["no_cull"])
         if self.test_counts.get("capped"):
             self.log("  test: %d static models' draw distance capped at %d" % (self.test_counts["capped"],
                                                                               DRAW_DISTANCE_CAP))
@@ -2880,6 +2888,9 @@ class Porter:
             elif self.fixes["draw_distance_cap"] and not 0 < d.get("cullDist", 0) <= DRAW_DISTANCE_CAP:
                 d["cullDist"] = DRAW_DISTANCE_CAP
                 self.test_counts["capped"] = self.test_counts.get("capped", 0) + 1
+        if self.fixes["no_cull_distance"] and d.get("cullDist"):
+            d["cullDist"] = 0
+            self.test_counts["no_cull"] = self.test_counts.get("no_cull", 0) + 1
         return None
 
     def pre_water_t(self, d, tp, tx):
