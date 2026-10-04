@@ -251,7 +251,7 @@ class DecalMerger:
             d["@"][("constantTable", ())] = cleaf
         d["_asset"] = "Material"
         self.composites[key] = self.listed("material", d)
-        return d
+        return self.composites[key]
 
     # ------------------------------------------------------------ geometry
 
