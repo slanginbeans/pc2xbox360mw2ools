@@ -55,7 +55,7 @@ class Cancelled(BaseException):
 
 def settings():
     base = {"card_pak": False, "card_pak_copy": True, "card_source": "auto", "variants": False,
-            "profile": False,
+            "profile": False, "measures": True,
             "texture_budget": port_mod.TEXTURE_BUDGET_MB,
             "fixes": dict(port_mod.DEFAULT_FIXES)}
     try:
@@ -70,7 +70,7 @@ def settings():
 
 def save_settings(req):
     s = settings()
-    for k in ("card_pak", "card_pak_copy", "variants", "profile"):
+    for k in ("card_pak", "card_pak_copy", "variants", "profile", "measures"):
         if k in req:
             s[k] = bool(req[k])
     if "texture_budget" in req:
@@ -202,7 +202,8 @@ def _convert_one(pc_path, teams, s):
     def run():
         return make(pc_path, out_dir, stock_files(), teams, _conv_log,
                     port_mod.game_iwd_files(GAME_DIR), texture_budget=s["texture_budget"],
-                    card_ui=ui, fixes=s["fixes"], write_card_pak=s["card_pak_copy"])
+                    card_ui=ui, fixes=s["fixes"], write_card_pak=s["card_pak_copy"],
+                    measures=s["measures"])
 
     try:
         if not s["profile"]:
@@ -552,7 +553,11 @@ which fix is behind a problem. A few minutes per variant.</span></span></label>
 <label class="toggle" style="margin-top:10px"><input type="checkbox" id="profile"><span><b>Time this conversion</b><br>
 <span class="dim">When a map is done, the log lists the parts of the converter that took the longest (copy them to Claude
 to speed it up), and the full timings go in <code>mw2port_out\&lt;map&gt;\&lt;map&gt;.prof</code>. Converting is a little
-slower while it's timed; the files it makes are the same.</span></span></label></section>
+slower while it's timed; the files it makes are the same.</span></span></label>
+<label class="toggle" style="margin-top:10px"><input type="checkbox" id="measures"><span><b>Map measures report</b><br>
+<span class="dim">After writing a map, reads it back and logs its measures (models, decals, pictures, memory) against the
+16 stock 360 maps, flagging what goes past them. Untick to save 10-20 seconds a map while you're only trying
+switches; the files it makes are the same.</span></span></label></section>
 <section><h2>Writer test</h2>
 <p class="dim">Writes a stock 360 map back out through the converter's own writer, converting nothing, into
 <code>mw2port_out\rewrite</code>. Play it on the console: if it flickers or loses textures like converted maps do,
@@ -589,7 +594,7 @@ function renderMaps(){if(!S.maps.length){$("#maps").innerHTML=`<p class="warn">N
 function fixSummary(){const d=S.fixes.filter(f=>!!S.settings.fixes[f.id]!==!!S.fix_defaults[f.id]);$("#fixSummary").textContent=`(${S.fixes.length}; ${d.length?d.length+" changed from the defaults: "+d.map(f=>f.id).join(", "):"all at their defaults"})`}
 function renderFixes(){$("#fixes").innerHTML=S.fixes.map(f=>`<label class="toggle" style="margin:6px 0"><input type="checkbox" class="fix" data-k="${f.id}"${S.settings.fixes[f.id]?" checked":""}><span><b>${esc(f.label)}</b> <code class="dim">${f.id}</code><br><span class="dim">${esc(f.help)}</span></span></label>`).join("");
  document.querySelectorAll(".fix").forEach(c=>c.onchange=async()=>{try{S.settings=await api("/api/settings",{fixes:{[c.dataset.k]:c.checked}});fixSummary()}catch(e){alert(e.message)}});fixSummary();
- $("#variants").checked=!!S.settings.variants;$("#budget").value=S.settings.texture_budget;$("#profile").checked=!!S.settings.profile}
+ $("#variants").checked=!!S.settings.variants;$("#budget").value=S.settings.texture_budget;$("#profile").checked=!!S.settings.profile;$("#measures").checked=S.settings.measures!==false}
 function renderRewrite(){const s=$("#rewriteMap");const keep=s.value;s.innerHTML=(S.stock_map_names||[]).map(n=>`<option${n===keep?" selected":""}>${esc(n)}</option>`).join("")||"<option value=''>no stock mp_*.ff here</option>"}
 function renderCards(){$("#cardPak").checked=!!S.settings.card_pak;$("#cardPakCopy").checked=S.settings.card_pak_copy!==false;$("#cardSource").value=S.settings.card_source||"auto";
  $("#cardInfo").innerHTML=S.ui?`Filled from <code>${esc(S.ui)}</code>.`:`<span class="warn">No ui_mp.ff in the work folder or mw2tex_out yet: copy it from the console.</span>`}
@@ -624,6 +629,7 @@ $("#fixDefaults").onclick=async()=>{try{S.settings=await api("/api/settings",{fi
 $("#budget").onchange=async e=>{try{S.settings=await api("/api/settings",{texture_budget:e.target.value});$("#budget").value=S.settings.texture_budget}catch(err){alert(err.message)}};
 $("#variants").onchange=async e=>{try{S.settings=await api("/api/settings",{variants:e.target.checked})}catch(err){alert(err.message)}};
 $("#profile").onchange=async e=>{try{S.settings=await api("/api/settings",{profile:e.target.checked})}catch(err){alert(err.message)}};
+$("#measures").onchange=async e=>{try{S.settings=await api("/api/settings",{measures:e.target.checked})}catch(err){alert(err.message)}};
 $("#patch").onclick=async()=>{if(!confirm("Write patched copies of every stock map ("+S.stock_maps+") and imagefile8.pak to mw2port_out\\stock?"))return;
  try{await api("/api/patch",{});load(false)}catch(e){alert(e.message)}};
 load();
