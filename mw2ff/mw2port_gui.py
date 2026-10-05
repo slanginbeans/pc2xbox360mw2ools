@@ -17,8 +17,10 @@ only to this program on your own PC.
 import glob
 import json
 import os
+import subprocess
 import sys
 import threading
+import time
 import traceback
 import urllib.parse
 import webbrowser
@@ -184,23 +186,16 @@ def _log(msg):
     job["log"].append(str(msg))
 
 
-def _conv_log(msg):
-    """The log the converter writes to: stops the conversion here once Cancel is pressed. The
-    converter logs at every step, so it stops within moments, before the map's file is written."""
-    if job["cancel"]:
-        raise Cancelled()
-    _log(msg)
-
-
-def _convert_one(pc_path, teams, s):
-    """Converts one map with settings s; returns (files written, error or None)."""
+def _convert(pc_path, teams, s, log, conv_log):
+    """Converts one map with settings s, logging to log (conv_log: the converter's own log, which
+    stops it once Cancel is pressed); returns (files written, error or None)."""
     name = os.path.splitext(os.path.basename(pc_path))[0]
     ui = card_ui(s) if s["card_pak"] else None
     make = port_mod.port_map_variants if s["variants"] else port_mod.port_map
     out_dir = os.path.join(OUT_DIR, name)
 
     def run():
-        return make(pc_path, out_dir, stock_files(), teams, _conv_log,
+        return make(pc_path, out_dir, stock_files(), teams, conv_log,
                     port_mod.game_iwd_files(GAME_DIR), texture_budget=s["texture_budget"],
                     card_ui=ui, fixes=s["fixes"], write_card_pak=s["card_pak_copy"],
                     measures=s["measures"])
@@ -216,22 +211,151 @@ def _convert_one(pc_path, teams, s):
             finally:
                 os.makedirs(out_dir, exist_ok=True)
                 for line in port_mod.profile_report(prof, os.path.join(out_dir, name + ".prof")).splitlines():
-                    _log(line)
+                    log(line)
         return [os.path.relpath(f, FOLDER) for f in files], None
     except Cancelled:
+        log("Cancelled while converting %s. Its files in mw2port_out may be from an earlier "
+            "conversion or only partly new: don't copy them to the console." % name)
+        return [], "cancelled"
+    except port_mod.PortError as e:
+        log("Stopped: %s" % e)
+        return [], str(e)
+    except MemoryError:
+        log("Stopped: ran out of memory (close other programs and try again)")
+        return [], "ran out of memory"
+    except Exception as e:  # noqa: BLE001 - shown to the user, with the details for Claude
+        log(traceback.format_exc())
+        log("Stopped with an error. Send the lines above to Claude.")
+        return [], "%s: %s" % (type(e).__name__, e)
+
+
+# Each map converts in a process of its own (this file run with --worker): a conversion takes
+# a few GB, and Python keeps memory it has used for itself until the process ends, so the app
+# would otherwise stay that big after a map (and grow through a batch). The worker gets its
+# job as one JSON line on stdin and reports one JSON line a message on stdout; "cancel" on
+# stdin (or stdin closing: the app stopped) stops it at the converter's next step.
+CANCEL_GRACE = 10       # seconds a worker gets to stop by itself after Cancel, before it's ended
+
+
+def _python():
+    """The Python to run a worker with: python.exe rather than pythonw.exe (no window either way:
+    it's started with CREATE_NO_WINDOW), so it has a stdout to report on."""
+    exe = sys.executable
+    if os.path.basename(exe).lower() == "pythonw.exe":
+        console = os.path.join(os.path.dirname(exe), "python.exe")
+        if os.path.exists(console):
+            return console
+    return exe
+
+
+def _convert_one(pc_path, teams, s):
+    """Converts one map with settings s in a worker process; returns (files written, error or
+    None)."""
+    name = os.path.splitext(os.path.basename(pc_path))[0]
+    proc = subprocess.Popen([_python(), os.path.abspath(__file__), "--worker"], cwd=FOLDER,
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    result = []
+
+    def read():
+        for raw in proc.stdout:
+            line = raw.decode("utf-8", "replace").rstrip("\r\n")
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                msg = None
+            if isinstance(msg, dict) and "log" in msg:
+                _log(msg["log"])
+            elif isinstance(msg, dict) and "result" in msg:
+                result.append(msg["result"])
+            else:
+                _log(line)      # anything else the worker printed (a crash report, ...)
+
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    try:
+        proc.stdin.write((json.dumps({"path": pc_path, "teams": teams, "settings": s}) + "\n").encode())
+        proc.stdin.flush()
+    except OSError:
+        pass
+    asked = None
+    while proc.poll() is None:
+        if job["cancel"] and asked is None:
+            asked = time.time()
+            try:
+                proc.stdin.write(b"cancel\n")
+                proc.stdin.flush()
+            except OSError:
+                pass
+        if asked is not None and time.time() - asked > CANCEL_GRACE:
+            proc.kill()
+        time.sleep(0.2)
+    reader.join(10)
+    try:
+        proc.stdin.close()
+    except OSError:
+        pass
+    if result:
+        files, error = result[0]
+        return files, error
+    if job["cancel"]:
         _log("Cancelled while converting %s. Its files in mw2port_out may be from an earlier "
              "conversion or only partly new: don't copy them to the console." % name)
         return [], "cancelled"
-    except port_mod.PortError as e:
-        _log("Stopped: %s" % e)
-        return [], str(e)
-    except MemoryError:
-        _log("Stopped: ran out of memory (close other programs and try again)")
-        return [], "ran out of memory"
-    except Exception as e:  # noqa: BLE001 - shown to the user, with the details for Claude
-        _log(traceback.format_exc())
-        _log("Stopped with an error. Send the lines above to Claude.")
-        return [], "%s: %s" % (type(e).__name__, e)
+    _log("Stopped: the conversion's process ended unexpectedly (exit code %s). If it ran out of "
+         "memory, close other programs and try again." % proc.returncode)
+    return [], "the conversion's process ended unexpectedly"
+
+
+def worker():
+    """--worker: converts the one map a job line on stdin asks for (see _convert_one)."""
+    import io
+    proto = io.TextIOWrapper(os.fdopen(os.dup(sys.stdout.fileno()), "wb"), encoding="utf-8",
+                             line_buffering=True)
+    lock = threading.Lock()
+    cancel = threading.Event()
+
+    def send(kind, value):
+        with lock:
+            proto.write(json.dumps({kind: value}) + "\n")
+
+    class Lines:
+        """sys.stdout / sys.stderr: what the converter prints goes to the app's log too."""
+        def __init__(self):
+            self.buf = ""
+
+        def write(self, text):
+            self.buf += text
+            while "\n" in self.buf:
+                line, self.buf = self.buf.split("\n", 1)
+                send("log", line)
+            return len(text)
+
+        def flush(self):
+            pass
+
+    sys.stdout = sys.stderr = Lines()
+    req = json.loads(sys.stdin.readline())
+
+    def listen():
+        for line in sys.stdin:
+            if line.strip() == "cancel":
+                break
+        cancel.set()        # Cancel pressed, or the app stopped
+
+    threading.Thread(target=listen, daemon=True).start()
+
+    def log(msg):
+        send("log", str(msg))
+
+    def conv_log(msg):
+        if cancel.is_set():
+            raise Cancelled()
+        log(msg)
+
+    files, error = _convert(req["path"], req["teams"], req["settings"], log, conv_log)
+    send("result", [files, error])
+    proto.flush()
 
 
 def _run(items, s):
@@ -670,6 +794,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    if "--worker" in sys.argv:
+        worker()
+        return
     os.makedirs(IN_DIR, exist_ok=True)
     os.makedirs(GAME_DIR, exist_ok=True)
     port = PORT

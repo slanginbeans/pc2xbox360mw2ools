@@ -994,10 +994,14 @@ class PakWriter:
     def save(self):
         import json
         os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
-        with open(self.path, "wb") as fh:
+        # Each written whole, then put in place: a conversion ended part way (Cancel) leaves
+        # the pak every earlier map points into as it was.
+        with open(self.path + ".tmp", "wb") as fh:
             fh.write(bytes(self.data))
-        with open(self.index_path, "w") as fh:
+        with open(self.index_path + ".tmp", "w") as fh:
             json.dump({"size": len(self.data), "chunks": self.index}, fh)
+        os.replace(self.path + ".tmp", self.path)
+        os.replace(self.index_path + ".tmp", self.index_path)
 
 
 def stream_levels(width, height, has_mips):
@@ -4694,12 +4698,13 @@ POOL_LIMITS = {
 _pool_cache = {}
 
 
-def pool_names(root, cache=True):
+def pool_names(root, key=None):
     """{asset type: set of names} of the assets a tree brings (named references to assets the
-    game already has, ",name", take no place)."""
-    key = id(root)
-    if cache and key in _pool_cache and _pool_cache[key][0] is root:
-        return _pool_cache[key][1]
+    game already has, ",name", take no place). key: the stock file it was read from (path,
+    size, time), to keep the names for next time (not the tree: that kept every conversion's
+    common_mp and code_post_gfx_mp trees in memory)."""
+    if key is not None and key in _pool_cache:
+        return _pool_cache[key]
     out = {}
     for o in iter_objects(root["assets"]):
         if not (isinstance(o, dict) and o.get("_asset") in POOL_LIMITS):
@@ -4710,8 +4715,8 @@ def pool_names(root, cache=True):
             n = f.b if isinstance(f, Str) else None
         if n and not n.startswith(b","):
             out.setdefault(o["_asset"], set()).add(n.lower())
-    if cache:
-        _pool_cache[key] = (root, out)
+    if key is not None:
+        _pool_cache[key] = out
     return out
 
 
@@ -4851,10 +4856,15 @@ def check_pools(root, refs, log, warn):
     have = {}
     for name, r in refs:
         if os.path.splitext(os.path.basename(name))[0].lower() in RESIDENT + ("patch_mp",):
-            for t, names in pool_names(r).items():
+            try:
+                st = os.stat(name)
+                key = (os.path.abspath(name), st.st_size, st.st_mtime_ns)
+            except OSError:
+                key = None
+            for t, names in pool_names(r, key).items():
                 have.setdefault(t, set()).update(names)
     over, used = [], []
-    for t, names in pool_names(root, cache=False).items():
+    for t, names in pool_names(root).items():
         n = len(names | have.get(t, set()))
         lim = POOL_LIMITS[t]
         used.append((n / float(lim), "%s %d/%d" % (t, n, lim)))
@@ -4872,8 +4882,9 @@ def check_pools(root, refs, log, warn):
 
 def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None,
          game_iwds=(), texture_budget=0, card_pak=False, fx_paths=(), fixes=None, pak_path=None,
-         measures=True, cache_dir=None):
-    """loaded: {path: tree} of stock files already read (load_stock), to reuse.
+         measures=True, cache_dir=None, keep_loaded=True):
+    """loaded: {path: tree} of stock files already read (load_stock), to reuse; with
+    keep_loaded=False they are let go once converting is done (the caller is done with them).
     game_iwds: the PC game's .iwd files, for pictures the map's own .iwd doesn't have.
     fx_paths: stock 360 maps to take the map's effects from (those carrying the most of them
     are read too). fixes: {name: bool} of FIXES (default all on). measures: log a map's
@@ -4886,7 +4897,8 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     if ff.platform != "pc":
         raise PortError("%s is not a PC fastfile" % pc_path)
     refs = []
-    loaded = {} if loaded is None else loaded
+    if loaded is None:
+        loaded, keep_loaded = {}, False
     ref_paths = list(ref_paths)
     if fx_paths and fixes["stock_effects"]:
         for p in ref_paths:
@@ -4937,6 +4949,18 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         if porter.fixes["merge_duplicates"]:
             porter.merge_same_named(root["assets"])
     check_pools(root, refs, log, porter.warn)
+    # Done with the stock files: let them go before writing, so the writer and the measures
+    # read-back reuse their memory (on mp_backlot the peak was about 0.8 GB higher without).
+    # What they lent the map is in root by now; the porter keeps only what's used below.
+    refs = None
+    if not keep_loaded:
+        loaded.clear()
+    keep = {k: porter.__dict__[k] for k in ("root", "P", "X", "log", "warnings", "streamed")}
+    porter.__dict__.clear()
+    porter.__dict__.update(keep)
+    is_map = any(e[0] == "gfx_map" for e in root["assets"])
+    import gc
+    gc.collect()        # (trees point back into themselves: freed only by the collector)
     xs = schema_mod.load("xbox")
     w = tree.TreeWriter(root, xs, keep_fixes=False)
     w.map_rel = lambda r: map_rel(r, porter.P, porter.X)
@@ -4944,8 +4968,11 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     out = reserve_callback_block(out, porter)
     _write_x360(out, out_path, pak_table(out, porter.root, w.starts, w.written))
     log("wrote %s (%d bytes of zone)" % (out_path, len(out)))
-    if measures and any(e[0] == "gfx_map" for e in root["assets"]):
-        # Measured on the file as written (as the console loads it).
+    if measures and is_map:
+        # Measured on the file as written (as the console loads it), with the converted tree
+        # let go first: the read-back is as big again.
+        w = root = porter.root = None
+        gc.collect()
         try:
             with no_gc():
                 written, _ = tree.read_tree(out, xs)
@@ -5029,7 +5056,7 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
     out = os.path.join(out_dir, name + ".ff")
     port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded, game_iwds=game_iwds,
          texture_budget=texture_budget, card_pak=bool(card_ui), fx_paths=maps, fixes=fixes,
-         pak_path=pak_path, measures=measures, cache_dir=cache_dir)
+         pak_path=pak_path, measures=measures, cache_dir=cache_dir, keep_loaded=False)
     written.append(out)
     if fix_set(fixes)["stream_pictures"] and os.path.exists(pak_path):
         written.append(pak_path)

@@ -89,9 +89,13 @@ stock `ui_mp.ff`). Not tried on a console yet.
 `imagefile8.pak` when the box above is ticked, but no new pak is written: use the one already on the console,
 or **Build imagefile8.pak**.
 
-**Cancel** (next to Convert) stops a running conversion at the converter's next step, within about 20 seconds,
+**Cancel** (next to Convert) stops a running conversion at the converter's next step, within about 10 seconds,
 and skips the maps after it in a batch. The map being converted isn't written; files already in its
 `mw2port_out` folder may be from an earlier conversion, so don't copy them.
+
+Each map converts in a process of its own (a second `python` in Task Manager while it runs). A big map
+takes about 2 GB while it converts; when it's done that process ends and all of it goes back to Windows,
+so the converter page itself stays small between maps and through a batch.
 
 From a command prompt: `python port.py <pc map.ff> <out.ff> --iwd <map.iwd> --ref360
 code_post_gfx_mp.ff mp_favela.ff [more stock maps] [--teams ALLIES AXIS]`.
