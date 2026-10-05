@@ -108,17 +108,14 @@ call %PY% -c "import PIL" >nul 2>nul
 if errorlevel 1 (
     echo Installing Pillow, the picture library the tools use...
     call %PY% -m pip install --user pillow
+    if errorlevel 1 (
+        echo Pillow couldn't be installed ^(the reason is above^). Send it to Claude.
+        pause
+    )
 )
-call %PY% -c "import numpy" >nul 2>nul
-if errorlevel 1 (
-    echo Installing numpy, which the map converter uses to encode sounds for the 360...
-    call %PY% -m pip install --user numpy
-)
-call %PY% -c "import miniaudio" >nul 2>nul
-if errorlevel 1 (
-    echo Installing miniaudio, which the map converter uses to read .mp3 sounds...
-    call %PY% -m pip install --user miniaudio
-)
+rem Optional: the map converter's Encode PC sounds switch uses these (see :optional below).
+call :optional numpy
+call :optional miniaudio
 echo.
 echo Your .ff files go in: %HOME_DIR%
 cd /d "%HOME_DIR%"
@@ -143,3 +140,22 @@ call %PY% "%APP%\mw2tools\mw2tools_gui.py" %*
 echo.
 echo mw2tools has stopped. If there's an error above, send it to Claude.
 pause
+exit /b 0
+
+rem ---- an optional package: installed from a ready-made build only (never compiled, which needs
+rem tools most PCs don't have). If that fails, why goes in mw2tools\no_<package>.txt, the window
+rem waits so it can be read, and it isn't tried again until that file is deleted.
+:optional
+call %PY% -c "import %1" >nul 2>nul
+if not errorlevel 1 exit /b 0
+if exist "%HOME_DIR%\no_%1.txt" exit /b 0
+echo Installing %1, which the map converter's Encode PC sounds switch uses...
+call %PY% -m pip install --user --only-binary=:all: %1 > "%HOME_DIR%\install_log.txt" 2>&1
+if not errorlevel 1 exit /b 0
+copy /y "%HOME_DIR%\install_log.txt" "%HOME_DIR%\no_%1.txt" >nul
+echo.
+echo   %1 couldn't be installed for this Python. Why: mw2tools\no_%1.txt
+echo   Everything works without it except Encode PC sounds. To try again, delete that file.
+echo.
+timeout /t 30
+exit /b 0
