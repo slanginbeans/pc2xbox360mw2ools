@@ -146,6 +146,11 @@ FIXES = [
      "Before, a material got the nearest set the files read had: mp_rust without its own stock "
      "file lost a detail map on one material, and most of mp_waw_castle's decals stayed "
      "unmerged because their composite sets were in other stock maps."),
+    ("drop_pc_tables", "PC config string tables left out",
+     "The PC's config string tables (configstrings_pc_<map>_<mode>.csv, 8 per map) are left out: "
+     "the 360 game only ever looks for configStrings_360_<map>_<mode>.csv (a lookup that "
+     "shortens network messages, and a checksum host and players compare; without one, both use "
+     "the same default), so the PC ones only took memory and string table room."),
     ("material_memory", "World material list as the 360 counts it",
      "The world's list of the materials its surfaces draw with (materialMemory) is made as every "
      "stock 360 map has it (1,866 of 1,866 entries in mp_rust, mp_favela and mp_afghan): every "
@@ -5123,6 +5128,23 @@ def map_limits_report(root, log):
             log("    %s: %s" % (name, WHY_HIGH[name]))
 
 
+def drop_pc_tables(root, log):
+    """The PC's config string tables (mp/configstrings/configstrings_pc_<map>_<mode>.csv) go:
+    the 360 game only ever looks for configStrings_360_<map>_<mode>.csv (TU6 0x822F5520), as a
+    lookup that shortens network messages and a checksum host and players compare; without
+    one, both use the same default. The PC ones only took memory and table room."""
+    keep, gone = [], 0
+    for e in root["assets"]:
+        n = (_name(e[1]) or b"").lower() if e[0] == "stringtable" and isinstance(e[1], dict) else b""
+        if n.lstrip(b",").startswith(b"mp/configstrings/configstrings_pc_"):
+            gone += 1
+            continue
+        keep.append(e)
+    if gone:
+        root["assets"][:] = keep
+        log("  %d PC config string tables left out (the 360 never reads them)" % gone)
+
+
 def check_pools(root, refs, log, warn):
     """Stop when the map and the files loaded with it hold more assets of a kind than the game
     has room for; warn when it is close. Each full copy the map carries of an asset those files
@@ -5262,6 +5284,8 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         # The stock team copied in: the PC copy of a stock map carries its own (PC mp_rust).
         if porter.fixes["merge_duplicates"]:
             porter.merge_same_named(root["assets"])
+    if fixes["drop_pc_tables"]:
+        drop_pc_tables(root, log)
     check_pools(root, refs, log, porter.warn)
     # Done with the stock files: let them go before writing, so the writer and the measures
     # read-back reuse their memory (on mp_backlot the peak was about 0.8 GB higher without).
