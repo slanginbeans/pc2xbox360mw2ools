@@ -546,6 +546,78 @@ def merge_decal_layers(porter, world, deref, asset_name):
     DecalMerger(porter, world, deref, asset_name).run()
 
 
+def _layer_bytes(s, deref, asset_name):
+    """Bytes of layer data per vertex for surface s's material (0 for a plain one)."""
+    m = deref(s.get("@", {}).get(("material", ())))
+    ts = deref(m.get("@", {}).get(("techniqueSet", ()))) if isinstance(m, dict) else None
+    name = (asset_name(ts) or b"").lstrip(b",") if isinstance(ts, dict) else b""
+    if not (asset_name(m) or b"").startswith(b"*"):
+        return 0
+    layers = re.findall(rb"_([bmt][123][a-z0-9]*?)(?=_|p0|$)", name)
+    return 8 * len(layers) + 4 * sum(1 for c in layers if b"n" in c[2:])
+
+
+def compact_vertices(porter, world, deref, asset_name):
+    """The world's vertex buffer (and layer data) made again from just the vertices surfaces
+    use, block by block: merging decals and putting runs in one block leave the old copies
+    behind (converted mp_rust: 333,845 vertices, 192,478 used; stock: every one used). Each
+    block keeps the order of what it holds; indices are renumbered to match."""
+    dpvs = world.get("dpvs") or {}
+    dch = dpvs.get("@", {})
+    draw = world.get("draw") or {}
+    surfs = _tgt(dch.get(("surfaces", ())))
+    V = _tgt((draw.get("vd") or {}).get("@", {}).get(("vertices", ())))
+    I = _tgt(draw.get("@", {}).get(("indices", ())))
+    LD = _tgt((draw.get("vld") or {}).get("@", {}).get(("data", ())))
+    if not (isinstance(surfs, list) and isinstance(V, Leaf) and isinstance(I, Leaf) and isinstance(LD, Leaf)):
+        return
+    idx = list(struct.unpack(I.E + "%dH" % (len(I.raw) // 2), I.raw))
+    blocks = {}                 # (first vertex, count, layer data) -> {"surfs", "used", "bpv"}
+    empty = []
+    for s in surfs:
+        if not isinstance(s, dict) or "tris" not in s:
+            continue
+        t = s["tris"]
+        if not t.get("triCount"):
+            empty.append(t)         # (draws nothing: pointed at no vertices)
+            continue
+        b = blocks.setdefault((t["firstVertex"], t["vertexCount"], t["vertexLayerData"]),
+                              {"surfs": [], "used": set(), "bpv": set()})
+        b["surfs"].append(s)
+        b["used"].update(idx[t["baseIndex"]:t["baseIndex"] + 3 * t["triCount"]])
+        b["bpv"].add(_layer_bytes(s, deref, asset_name))
+    if any(len(b["bpv"]) > 1 for b in blocks.values()):
+        porter.warn("decal layers: a vertex block shared by surfaces with different layer data; "
+                    "vertices left as they were")
+        return
+    vout, lout = bytearray(), bytearray(LD.raw[:4] if len(LD.raw) >= 4 else LD.raw)
+    before = len(V.raw) // VERTEX
+    for (fv, cnt, lay), b in sorted(blocks.items()):
+        bpv = b["bpv"].pop()
+        keep = sorted(b["used"])
+        new_of = {old: new for new, old in enumerate(keep)}
+        first, layer_at = len(vout) // VERTEX, len(lout)
+        for k in keep:
+            vout += V.raw[VERTEX * (fv + k):VERTEX * (fv + k + 1)]
+            if bpv:
+                lout += LD.raw[lay + bpv * k:lay + bpv * (k + 1)]
+        for s in b["surfs"]:
+            t = s["tris"]
+            for j in range(t["baseIndex"], t["baseIndex"] + 3 * t["triCount"]):
+                idx[j] = new_of[idx[j]]
+            t["firstVertex"], t["vertexCount"] = first, len(keep)
+            t["vertexLayerData"] = layer_at if bpv else 0
+    for t in empty:
+        t["firstVertex"] = t["vertexCount"] = t["vertexLayerData"] = 0
+    V.raw, V.n = bytes(vout), len(vout) // VERTEX
+    I.raw = struct.pack(I.E + "%dH" % len(idx), *idx)
+    LD.raw, LD.n = bytes(lout), len(lout)
+    draw["vertexCount"] = V.n
+    draw["vertexLayerDataSize"] = len(LD.raw)
+    porter.log("  decal layers: vertex buffer holds just what surfaces use (%d vertices, was %d)"
+               % (V.n, before))
+
+
 def relay_surfaces(porter, world, deref, asset_name):
     """The 360 draws a run of neighbouring surfaces with the same material (and lightmap,
     probe, light) as one draw: from the first one's first index to the last one's last, in the
@@ -572,14 +644,7 @@ def relay_surfaces(porter, world, deref, asset_name):
         return id(m), (s.get("laf") or {}).get("union")
 
     def layer_bytes(s):
-        """Bytes of layer data per vertex for surface s's material (0 for a plain one)."""
-        m = deref(s.get("@", {}).get(("material", ())))
-        ts = deref(m.get("@", {}).get(("techniqueSet", ()))) if isinstance(m, dict) else None
-        name = (asset_name(ts) or b"").lstrip(b",") if isinstance(ts, dict) else b""
-        if not (asset_name(m) or b"").startswith(b"*"):
-            return 0
-        layers = re.findall(rb"_([bmt][123][a-z0-9]*?)(?=_|p0|$)", name)
-        return 8 * len(layers) + 4 * sum(1 for c in layers if b"n" in c[2:])
+        return _layer_bytes(s, deref, asset_name)
 
     vout, lout = bytearray(V.raw), bytearray(LD.raw)
     nverts = len(V.raw) // VERTEX
