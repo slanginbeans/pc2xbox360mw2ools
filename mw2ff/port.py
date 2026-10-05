@@ -239,8 +239,9 @@ FIXES = [
      "The map's own pictures stream from a pak as stock maps' do, instead of sitting in the map "
      "file: they come in at full size and take no map memory (converted mp_rust needed about 112 MB "
      "against stock's 67). Writes mw2port_out\\imagefile9.pak, shared by every map converted this "
-     "way (new pictures are added to it): copy it to the game folder (next to default_mp.xex), as "
-     "imagefile8.pak. Off by default until tried on a console."),
+     "way (new pictures are added to it): copy it to the game folder (next to default_mp.xex) as it "
+     "is, imagefile9.pak, beside imagefile8.pak (titles and emblems), not over it. Off by default "
+     "until tried on a console."),
     ("stock_world", "Stock 360 world (test)",
      "For a PC copy of a stock map (PC mp_rust): the world assets (drawn world, collision, map "
      "entities, effects placement, game world) come from the stock 360 map of the same name, "
