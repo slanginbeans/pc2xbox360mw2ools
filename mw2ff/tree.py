@@ -478,6 +478,10 @@ class TreeWriter(zone_mod.Reader):
         self._slot = None
         self._ptr_cache = {}
         self.map_rel = None    # optional f(ref) -> new byte offset inside the target (port.py)
+        self.dedupe = False    # an asset met again after it's written: a pointer to where it's held
+        self.deduped = 0
+        self._first = {}       # id(asset dict) -> alias value of the pointer that first held it
+        self._zps, self._zspans = [], []    # written spans by zone position: (block, offset, n)
 
     # ---------------------------------------------------------------- values
 
@@ -527,6 +531,17 @@ class TreeWriter(zone_mod.Reader):
             a = r.target.asset
             return a if isinstance(a, dict) and a.get("_forward") and id(a) not in self.loc else None
         return r.target
+
+    def _address(self, buf, loc):
+        """(block, offset) byte loc of a written buffer is loaded at, or None."""
+        zp = zone_mod.zpos_of(buf, loc)
+        if zp is None:
+            return None
+        i = bisect.bisect_right(self._zps, zp) - 1
+        if i < 0:
+            return None
+        block, off, n = self._zspans[i]
+        return (block, off + zp - self._zps[i]) if zp < self._zps[i] + n else None
 
     def _patch(self, buf, loc, val):
         struct.pack_into(self.E + "I", buf, loc, val)
@@ -715,6 +730,9 @@ class TreeWriter(zone_mod.Reader):
             self.loc[id(obj)] = where
         if n:
             self.spans.append((self.block, where[1], n, self.cur_asset[0] if self.cur_asset else -1, zp))
+            if zp is not None:
+                self._zps.append(zp)
+                self._zspans.append((self.block, where[1], n))
         self.block_pos[self.block] += n
         if self.block_pos[self.block] > self.block_max[self.block]:
             self.block_max[self.block] = self.block_pos[self.block]
@@ -841,6 +859,21 @@ class TreeWriter(zone_mod.Reader):
             d = self._forward(d, asset=True)
             val = INSERT if in_temp and "_slot" in d else FOLLOWING
             self._patch(buf, loc, val)
+        if self.dedupe and val in (FOLLOWING, INSERT) and isinstance(d, dict) and id(d) in self._first:
+            # Written already (port.py's copy_in puts the asset itself wherever the stock file
+            # pointed back at it): point at the pointer that first held it, which the game sets
+            # to the asset when it loads it, as stock files do, not a copy of its own. Copies
+            # took the game's room for assets (each team picture 120 times over) and memory.
+            val = self._first[id(d)]
+            self._patch(buf, loc, val)
+            super().alias(buf, loc, val)
+            self.deduped += 1
+            return None
+        if self.dedupe and val == FOLLOWING and isinstance(d, dict):
+            at = self._address(buf, loc)
+            if at is not None and at[0] != TEMP:
+                # (Not a pointer in the temporary block: the game reuses that memory.)
+                self._first[id(d)] = ((at[0] << BLOCK_SHIFT) | at[1]) + 1
         if in_temp:
             self.push(TEMP)
         inst = None
@@ -851,6 +884,9 @@ class TreeWriter(zone_mod.Reader):
                     self.insert_pointer()
                     if "_slot" in d:
                         self.loc[id(d["_slot"])] = (VIRTUAL, self._slot)
+                    if self.dedupe and isinstance(d, dict):
+                        # (the asset's own slot, which the game sets to it)
+                        self._first.setdefault(id(d), ((VIRTUAL << BLOCK_SHIFT) | self._slot) + 1)
                 start = self.pos
                 self.starts[id(d)] = start
                 self.written.append((start, d))
