@@ -127,7 +127,7 @@ After each map the converter logs its measures against the 16 stock 360 maps (pl
 
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
 Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
-with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `no_cull_distance`, `room_box_bounds`, `merge_decals`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials`, `stock_pictures`, `merge_duplicates`, `model_box_bounds`, `rebuild_trees`, `huge_tree_boxes`, `ground_lit_flag`, `huge_leaf_boxes`, `huge_inner_boxes`, `tree_box_margin` and `swap_models_test` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
+with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `no_cull_distance`, `room_box_bounds`, `merge_decals`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials`, `stock_pictures`, `merge_duplicates`, `model_box_bounds`, `rebuild_trees`, `huge_tree_boxes`, `ground_lit_flag`, `huge_leaf_boxes`, `huge_inner_boxes`, `tree_box_margin`, `swap_models_test` and `encode_sounds` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
 
 | Fix | What it does |
 |---|---|
@@ -137,6 +137,7 @@ with `--fix-off NAME` (repeatable). All are on by default except `portal_multipl
 | `normal_maps_dxn` | PC normal maps (DXT5, X in alpha, Y in green) become DXN as every stock 360 normal map is (checked against stock mp_rust's in imagefile1.pak: within 2-3 levels of 255) |
 | `stock_scripts` | A script a stock 360 file also has (a stock map's own `maps/mp/<map>.gsc`, effects scripts) comes from it; PC scripts can call functions only later PC patches have (PC mp_rust's `killTrigger`). The teams are still set in it |
 | `stock_sounds` | Sound aliases come from a stock 360 file with the same alias, audio and all; others play the silent stock `null` sound (the PC file only names sound files the 360 doesn't have: a converted PC mp_rust froze on the loading screen) |
+| `encode_sounds` | Test, off by default: a sound alias no stock 360 file has plays the PC's own audio, encoded as XMA (`xma.py`, the only format the 360 plays) instead of the silent `null` sound: the map's own sounds and the PC game's streamed ones (from the `.iwd` files of the PC game folder given), as loaded sounds; sounds the game already has loaded (common_mp) are named only. Up to 12 MB. Needs numpy (`python -m pip install numpy`; mw2tools.bat installs it). PC mp_showdown: 64 of 65 silent aliases get their audio (53 sounds, 4 MB). `xma.py` and `xmatables.py` are LGPL 2.1 or later (derived from FFmpeg's WMA Pro decoder): see `LICENSE.LGPL` |
 | `surface_bounds` | Fills in the 360-only culling radius / texture density of every world surface |
 | `model_lods` | Model detail levels' partBits and surfs written as stock files have them (0 and empty) |
 | `pc_face_culling` | A material the PC draws two-sided (no back-face culling: mp_backlot's market umbrellas, milk cartons, stone blocks) stays two-sided; the stock render state it takes culls back faces, so such models went invisible from one side. Face culling is the same bits on PC and 360 (state word 0, bits 14-15) |
@@ -202,7 +203,7 @@ to find which fix is behind a problem (a few minutes per variant).
 
 ## Commands
 
-Run these from the `tools\mw2ff` folder (Python 3, nothing to install):
+Run these from the `tools\mw2ff` folder (Python 3, nothing to install; numpy only for `encode_sounds`):
 
 ```
 python mw2ff.py list   ui_mp.ff                 every asset in the file, in load order

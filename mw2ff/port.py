@@ -95,6 +95,12 @@ FIXES = [
      "names its sound files (,null.wav: files the PC game loads from disk); the 360 has nothing "
      "under those names, and a converted PC mp_rust froze on the loading screen with them. An "
      "alias no stock file has plays the silent stock \"null\" sound."),
+    ("encode_sounds", "Encode PC sounds for the 360 (test)",
+     "A sound alias no stock 360 file has gets the PC's own audio, encoded as XMA (the only "
+     "sound format the 360 game plays), instead of the silent \"null\" sound: the map's own "
+     "sounds, and the PC game's streamed ones (sound/... in the .iwd files of the PC game folder "
+     "given). Streamed sounds become loaded ones (the 360 streams only from its own disc). "
+     "Needs numpy. Off by default until tried on a console."),
     ("surface_bounds", "Surface culling radius",
      "Fill in the 360-only number every world surface carries (its culling radius and texture "
      "density), worked out from stock mp_rust. Converted maps used to leave it 0."),
@@ -146,6 +152,11 @@ FIXES = [
      "Before, a material got the nearest set the files read had: mp_rust without its own stock "
      "file lost a detail map on one material, and most of mp_waw_castle's decals stayed "
      "unmerged because their composite sets were in other stock maps."),
+    ("drop_pc_tables", "PC config string tables left out",
+     "The PC's config string tables (configstrings_pc_<map>_<mode>.csv, 8 per map) are left out: "
+     "the 360 game only ever looks for configStrings_360_<map>_<mode>.csv (a lookup that "
+     "shortens network messages, and a checksum host and players compare; without one, both use "
+     "the same default), so the PC ones only took memory and string table room."),
     ("material_memory", "World material list as the 360 counts it",
      "The world's list of the materials its surfaces draw with (materialMemory) is made as every "
      "stock 360 map has it (1,866 of 1,866 entries in mp_rust, mp_favela and mp_afghan): every "
@@ -302,8 +313,10 @@ DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_bo
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
                "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes", "ground_lit_flag",
                "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin",
-               "swap_models_test"}
+               "swap_models_test", "encode_sounds"}
 TREE_BOX_MARGIN = 64            # units, for the tree_box_margin test switch
+# MB of XMA the encode_sounds switch makes at most (stock maps carry 4 to 8 MB of sounds).
+ENCODED_SOUND_BUDGET = 12
 DRAW_DISTANCE_CAP = 1200        # units, for the draw_distance_cap test switch
 DEFAULT_FIXES = {k: k not in DEFAULT_OFF for k, _, _ in FIXES}
 
@@ -1211,6 +1224,7 @@ class Porter:
         # The PC game's own .iwd files (iw_00.iwd ...): pictures a map borrows from the game.
         # Later files win, as in the game.
         self.game_pictures = picture_index(game_iwds)
+        self.game_iwds = list(game_iwds)
         self.from_game = 0
         self.techset_swaps = {}
         self.magenta_materials = []     # materials given a magenta picture for one they lack
@@ -2553,14 +2567,162 @@ class Porter:
                             else:
                                 ch[k] = ref
 
+    # Alias head members the PC's alias keeps (the stock "null" alias's head gives the rest).
+    HEAD_FIELDS = ("sequence", "volMin", "volMax", "pitchMin", "pitchMax", "distMin", "distMax",
+                   "velocityMin", "flags", "probability", "lfePercentage", "centerPercentage",
+                   "startDelay", "envelopMin", "envelopMax", "envelopPercentage")
+
+    def sound_files(self):
+        """{lowercase path under sound/: (zipfile, path)} in the PC game's .iwd files and then
+        the map's (later ones win)."""
+        if getattr(self, "_sound_files", None) is None:
+            found = {}
+            for zf in self.game_iwds + self.iwds:
+                for n in zf.namelist():
+                    low = n.replace("\\", "/").lower()
+                    if low.startswith("sound/"):
+                        found[low[6:]] = (zf, n)
+            self._sound_files = found
+        return self._sound_files
+
+    def pc_audio(self, d, ents):
+        """[(PC alias head, XMA-encoded sound, its name)] for the heads of PC alias list d
+        whose audio is here: the map's loaded sounds, and streamed ones found in the .iwd files.
+        Each sound is encoded once."""
+        if not hasattr(self, "_encoded"):
+            self._encoded, self._encoded_bytes, self._no_audio = {}, 0, set()
+            self._pc_loaded = {}
+            for e in ents:
+                if e[0] == "loaded_sound" and isinstance(e[1], dict):
+                    n = _pool_name(e[1])
+                    if n and not n.startswith(b","):
+                        self._pc_loaded.setdefault(n.lower(), e[1])
+        hp = d.get("@", {}).get(("head", ()))
+        hp = hp.target if isinstance(hp, Ref) else hp
+        out = []
+        for h in hp if isinstance(hp, list) else [hp]:
+            sf = h.get("@", {}).get(("soundFile", ())) if isinstance(h, dict) else None
+            if not isinstance(sf, dict):
+                continue
+            u = sf.get("u") if isinstance(sf.get("u"), dict) else {}
+            got, key = None, None
+            if sf.get("type") == 1:
+                ls = u.get("@", {}).get(("loadSnd", ()))
+                if isinstance(ls, Ref):
+                    ls = ls.target.asset if isinstance(ls.target, tree.InsertSlot) else ls.target
+                if isinstance(ls, dict):
+                    key = (_pool_name(ls) or b"").lstrip(b",").lower()
+                    if not _sound_data(ls):
+                        ls = self._pc_loaded.get(key, ls)
+                    raw = _sound_data(ls)
+                    if raw:
+                        got = lambda raw=raw, info=ls.get("sound", {}).get("info"): wav_pcm(raw, info)
+            elif sf.get("type") == 2:
+                ss = u.get("streamSnd")
+                c = ss.get("@", {}) if isinstance(ss, dict) else {}
+                dr, nm = c.get(("dir", ())), c.get(("name", ()))
+                if isinstance(nm, Str):
+                    key = ((dr.b + b"/") if isinstance(dr, Str) and dr.b else b"") + nm.b
+                    key = key.replace(b"\\", b"/").lower()
+                    found = self.sound_files().get(key.decode("latin-1"))
+                    if found:
+                        got = lambda found=found: wav_pcm(found[0].read(found[1]))
+            if not key:
+                continue
+            if key not in self._encoded and ("LoadedSound", _sound_name(key)) in self.loaded:
+                # The game has it loaded already (common_mp): named only, as stock maps do.
+                self._encoded[key] = [RESIDENT_SOUND, None]
+            if key not in self._encoded:
+                enc, pcm = None, got() if got else None
+                if pcm and self._encoded_bytes < ENCODED_SOUND_BUDGET * 1024 * 1024:
+                    enc = self.xma.encode(*pcm)
+                    self._encoded_bytes += len(enc.data)
+                elif not pcm:
+                    self._no_audio.add(key)
+                self._encoded[key] = [enc, None]      # (the 360 sound made from it, once made)
+            if self._encoded[key][0] is not None:
+                out.append((h, key))
+        return out
+
+    def encoded_heads(self, new, audio):
+        """Alias list new (a copy of the stock "null" alias) gets a head for each (PC head, sound)
+        in audio: the null head with the PC's numbers, playing its own 360 sound (a loaded one,
+        as stock aliases' are). A sound used again points at the first copy."""
+        hp = new["@"][("head", ())]
+        hp = hp.target if isinstance(hp, Ref) else hp
+        tmpl = hp[0] if isinstance(hp, list) else hp
+        heads = []
+        for pc, key in audio:
+            h = copy.deepcopy(tmpl)
+            for k in self.HEAD_FIELDS:
+                if k in pc and k in h:
+                    h[k] = pc[k]
+            # Bit 7: a loaded sound, bit 8: streamed (stock: 1,684 and 3,802 of 5,486 heads).
+            h["flags"] = (h["flags"] | 0x80) & ~0x100
+            for k in ("secondaryAliasName", "chainAliasName"):
+                s = pc.get("@", {}).get((k, ()))
+                if isinstance(s, Str) and k in h:
+                    h[k] = "follow"
+                    h.setdefault("@", {})[(k, ())] = Str(s.b)
+            u = h["@"][("soundFile", ())]["u"]
+            enc, first = self._encoded[key]
+            if enc is RESIDENT_SOUND:
+                ref = self.reference("LoadedSound", _sound_name(key))
+                self.done.add(id(ref))
+                u["@"][("loadSnd", ())] = ref
+            elif first is not None:
+                r = tree.Ref(1)
+                r.target, r.rel = first["_slot"], 0
+                u["@"][("loadSnd", ())] = r
+            else:
+                ls = u["@"][("loadSnd", ())]
+                self._encoded[key][1] = ls
+                ls.setdefault("_slot", tree.InsertSlot(ls))
+                ls["_slot"].asset = ls
+                ls["@"][("name", ())] = Str(_sound_name(key))
+                s = ls["sound"]
+                info = s["info"]
+                lf = info["@"][("data", ())]
+                info["@"][("data", ())] = Leaf(lf.t, len(enc.data), enc.data, lf.E)
+                info["dataSize"] = len(enc.data)
+                # Where the audio starts and ends (in bits), and which quarter of its last
+                # frame it ends in (3: the whole frame plays).
+                info["unknown"] = [0xFFFFFFFF, 32, enc.end_bit, (3 << 24) | (3 << 16)] \
+                    + [0] * (len(info["unknown"]) - 4)
+                # XMA, one stream, its rate, one channel, its length in ms.
+                su = [0] * len(s["unknown"])
+                su[0], su[1], su[2], su[3], su[-1] = 0x04000000, 0x01000000, enc.rate, \
+                    0x01000000, enc.ms
+                s["unknown"] = su
+                st = s["seekTable"]
+                lf = st["@"][("data", ())]
+                words = [1, len(enc.seek)] + enc.seek
+                st["size"] = len(words)
+                st["@"][("data", ())] = Leaf(lf.t, len(words), struct.pack(lf.E + "%dI" % len(words),
+                                                                           *words), lf.E)
+            heads.append(h)
+        if isinstance(hp, list):
+            hp[:] = heads
+        else:
+            new["@"][("head", ())] = heads
+        new["count"] = len(heads)
+
     def stock_sounds(self, ents):
         """Sound alias lists come from a stock 360 file with the same alias (stock mp_rust has
         all 143 of PC mp_rust's), audio and all, as stock maps carry them. The PC file only
         names its sound files (",null.wav", read from the PC game's own files), which the 360
         has nothing under. An alias no stock file has gets the stock "null" alias's silent
         sound under its own name. The PC's sound file assets then go."""
-        swapped, silent, missing = 0, [], []
+        swapped, silent, missing, encoded = 0, [], [], []
         null = self.stock_aliases.get(b"null")
+        self.xma = None
+        if self.fixes["encode_sounds"]:
+            try:
+                import xma
+                self.xma = xma
+            except ImportError:
+                self.warn("Encode PC sounds is on, but numpy isn't installed (pip install numpy, or "
+                          "start mw2tools.bat again): the sounds stay silent")
         ours = [o for o in iter_objects(ents) if isinstance(o, dict)
                 and o.get("_asset") == "snd_alias_list_t" and id(o) not in self.done]
         # Stock aliases share sound files (one alias's points into another's): those taken from
@@ -2603,6 +2765,9 @@ class Porter:
                 missing.append(name)
                 continue
             new = copy.deepcopy(self.copy_in(null[0]))
+            audio = self.pc_audio(d, ents) if self.xma else None
+            if audio:
+                self.encoded_heads(new, audio)
             self.name_loaded_curves(new)
             new["@"][("aliasName", ())] = Str(name)
             head = new["@"].get(("head", ()))
@@ -2612,7 +2777,7 @@ class Porter:
                     h.setdefault("@", {})[("aliasName", ())] = Str(name)
                     h["aliasName"] = "follow"
                     sf = h["@"].get(("soundFile", ()))
-                    if not isinstance(sf, dict):
+                    if not isinstance(sf, dict) or audio:
                         continue
                     if null_sf is None:
                         null_sf = sf
@@ -2630,7 +2795,7 @@ class Porter:
                         r.target, r.rel = first["_slot"], 0
                         u["@"][("loadSnd", ())] = r
             self._replace(d, new)
-            silent.append(name)
+            (encoded if audio else silent).append(name)
         # The PC's sound files (each only a name) are pointed at by nothing now.
         held = set()
         for e in ents:
@@ -2650,6 +2815,18 @@ class Porter:
                                            and id(e[1]) not in held)]
         self.log("  sounds: %d aliases from the stock 360 files, %d silent (no stock copy), "
                  "%d PC sound files left out" % (swapped, len(silent), before - len(ents)))
+        if encoded:
+            sounds = [v[0] for v in self._encoded.values() if hasattr(v[0], "data")]
+            resident = sum(1 for v in self._encoded.values() if v[0] is RESIDENT_SOUND)
+            self.log("  test: %d aliases play the PC's audio, encoded for the 360 (%d sounds, %.1f MB; "
+                     "%d more the game has loaded)" % (len(encoded), len(sounds),
+                                                       sum(len(e.data) for e in sounds) / 1048576.0, resident))
+        if self.xma and getattr(self, "_encoded_bytes", 0) >= ENCODED_SOUND_BUDGET * 1048576:
+            self.warn("encoded sounds reached %d MB: the rest stay silent" % ENCODED_SOUND_BUDGET)
+        if self.xma and getattr(self, "_no_audio", None):
+            self.log("    no audio found for %d sound files%s" % (
+                len(self._no_audio), "" if self.game_iwds else
+                " (give the PC game folder for its streamed sounds)"))
         if silent:
             self.log("    silent: " + ", ".join(n.decode("latin-1") for n in silent[:20])
                      + (" ..." if len(silent) > 20 else ""))
@@ -4761,6 +4938,50 @@ def stock_cache_save(path, root, log=None):
                 % (os.path.basename(path), type(e).__name__, e))
 
 
+RESIDENT_SOUND = "resident"     # Porter._encoded: a sound the always-loaded files have
+
+
+def _sound_name(path):
+    """The 360 name of a PC sound file (dir/name.wav): stock 360 sounds have no extension."""
+    return path[:-4] if path.lower().endswith(b".wav") else path
+
+
+def _sound_data(ls):
+    """A PC LoadedSound's audio bytes, or None (one that only names its sound)."""
+    s = ls.get("sound") if isinstance(ls, dict) else None
+    d = s.get("@", {}).get(("data", ())) if isinstance(s, dict) else None
+    d = d.target if isinstance(d, Ref) else d
+    return bytes(d.raw) if isinstance(d, Leaf) and d.raw else None
+
+
+def wav_pcm(raw, info=None):
+    """(16-bit PCM bytes, rate, channels) of a .wav file, or of plain PCM described by a PC
+    LoadedSound's info; None for any other format (ADPCM, 8-bit, ...)."""
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WAVE":
+        fmt = data = None
+        i = 12
+        while i + 8 <= len(raw):
+            cid, ln = raw[i:i + 4], struct.unpack_from("<I", raw, i + 4)[0]
+            if cid == b"fmt ":
+                fmt = raw[i + 8:i + 8 + ln]
+            elif cid == b"data":
+                data = raw[i + 8:i + 8 + ln]
+            i += 8 + ln + (ln & 1)
+        if fmt is None or data is None or len(fmt) < 16:
+            return None
+        tag, ch, rate, _, _, bits = struct.unpack_from("<HHIIHH", fmt)
+        if tag == 0xFFFE and len(fmt) >= 26:            # WAVE_FORMAT_EXTENSIBLE: its subformat
+            tag = struct.unpack_from("<H", fmt, 24)[0]
+        if tag != 1 or bits != 16 or ch not in (1, 2) or not rate or len(data) < 2 * ch:
+            return None
+        return data[:len(data) // (2 * ch) * 2 * ch], rate, ch
+    if isinstance(info, dict) and info.get("format") == 1 and info.get("bits") == 16 \
+            and info.get("channels") in (1, 2) and info.get("rate"):
+        ch = info["channels"]
+        return raw[:len(raw) // (2 * ch) * 2 * ch], info["rate"], ch
+    return None
+
+
 def picture_index(iwds):
     """{lowercase picture name: (zipfile, path)} for the images/*.iwi in the .iwd files given;
     later files win. Paths are matched without caring about case or slash direction, as the
@@ -5123,6 +5344,23 @@ def map_limits_report(root, log):
             log("    %s: %s" % (name, WHY_HIGH[name]))
 
 
+def drop_pc_tables(root, log):
+    """The PC's config string tables (mp/configstrings/configstrings_pc_<map>_<mode>.csv) go:
+    the 360 game only ever looks for configStrings_360_<map>_<mode>.csv (TU6 0x822F5520), as a
+    lookup that shortens network messages and a checksum host and players compare; without
+    one, both use the same default. The PC ones only took memory and table room."""
+    keep, gone = [], 0
+    for e in root["assets"]:
+        n = (_name(e[1]) or b"").lower() if e[0] == "stringtable" and isinstance(e[1], dict) else b""
+        if n.lstrip(b",").startswith(b"mp/configstrings/configstrings_pc_"):
+            gone += 1
+            continue
+        keep.append(e)
+    if gone:
+        root["assets"][:] = keep
+        log("  %d PC config string tables left out (the 360 never reads them)" % gone)
+
+
 def check_pools(root, refs, log, warn):
     """Stop when the map and the files loaded with it hold more assets of a kind than the game
     has room for; warn when it is close. Each full copy the map carries of an asset those files
@@ -5262,6 +5500,8 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         # The stock team copied in: the PC copy of a stock map carries its own (PC mp_rust).
         if porter.fixes["merge_duplicates"]:
             porter.merge_same_named(root["assets"])
+    if fixes["drop_pc_tables"]:
+        drop_pc_tables(root, log)
     check_pools(root, refs, log, porter.warn)
     # Done with the stock files: let them go before writing, so the writer and the measures
     # read-back reuse their memory (on mp_backlot the peak was about 0.8 GB higher without).
