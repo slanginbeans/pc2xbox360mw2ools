@@ -4743,7 +4743,8 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
 
 
 def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
-             texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None, pak_path=None):
+             texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None, pak_path=None,
+             write_card_pak=True):
     """Convert a PC map (its .ff, and _load.ff / .iwd / .arena next to it when there) into
     out_dir, picking what it needs from the stock 360 files given: code_post_gfx_mp.ff, a
     stock map (render settings, shaders) and the stock maps that carry the map's teams.
@@ -4813,22 +4814,26 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
     written.append(out)
     if fix_set(fixes)["stream_pictures"] and os.path.exists(pak_path):
         written.append(pak_path)
-    if card_ui:
+    if card_ui and write_card_pak:
         # card_ui: a ui_mp.ff (mw2tex's built one, or the stock one) to fill the slots from.
         import mw2tex
         written.append(mw2tex.write_card_pak(card_ui, out_dir, log=log))
+    elif card_ui:
+        log("  imagefile8.pak isn't written with this map (titles and emblems still come from "
+            "it): use the one already on the console, or Build imagefile8.pak")
     return written
 
 
 def port_map_variants(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
-                      texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None):
+                      texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None,
+                      write_card_pak=True):
     """The map as port_map makes it with the fixes given, plus one test variant per fix that
     is on, with just that fix switched off: out_dir/variants/no_<fix>/. One batch of files to
     try on the console, to find which fix helps or hurts. Returns the paths written; a
     variant that fails to convert doesn't stop the others."""
     fixes = fix_set(fixes)
     written = port_map(pc_path, out_dir, stock_paths, teams, log, game_iwds, texture_budget,
-                       card_ui, fixes)
+                       card_ui, fixes, write_card_pak=write_card_pak)
     main_pak = os.path.join(os.path.dirname(os.path.normpath(os.path.abspath(out_dir))),
                             "imagefile%d.pak" % STREAM_PAK)
     labels = {k: label for k, label, _ in FIXES}

@@ -80,6 +80,14 @@ their picture table changes; the copies go in `mw2port_out\stock`). **Build imag
 the pak to `mw2port_out`, without converting anything. "Fill imagefile8.pak from" picks the source: your
 titles and emblems (mw2tex's built `ui_mp.ff`, else the stock one) or always the game's default ones (the
 stock `ui_mp.ff`). Not tried on a console yet.
+**Write imagefile8.pak with each conversion** (in the Convert box, ticked by default) writes a copy of
+`imagefile8.pak` next to every converted map. Unticked, maps still take titles and emblems from
+`imagefile8.pak` when the box above is ticked, but no new pak is written: use the one already on the console,
+or **Build imagefile8.pak**.
+
+**Cancel** (next to Convert) stops a running conversion at the converter's next step, within about 20 seconds,
+and skips the maps after it in a batch. The map being converted isn't written; files already in its
+`mw2port_out` folder may be from an earlier conversion, so don't copy them.
 
 From a command prompt: `python port.py <pc map.ff> <out.ff> --iwd <map.iwd> --ref360
 code_post_gfx_mp.ff mp_favela.ff [more stock maps] [--teams ALLIES AXIS]`.

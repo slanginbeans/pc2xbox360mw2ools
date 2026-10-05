@@ -44,11 +44,18 @@ TEAM_NAMES = {
 }
 
 lock = threading.Lock()
-job = {"running": False, "map": None, "log": [], "done": False, "error": None, "files": []}
+job = {"running": False, "map": None, "log": [], "done": False, "error": None, "files": [],
+       "cancel": False, "kind": None}
+
+
+class Cancelled(BaseException):
+    """Raised from the converter's log calls once Cancel is pressed (BaseException, so the
+    converter's own error handling doesn't catch it)."""
 
 
 def settings():
-    base = {"card_pak": False, "card_source": "auto", "variants": False, "profile": False,
+    base = {"card_pak": False, "card_pak_copy": True, "card_source": "auto", "variants": False,
+            "profile": False,
             "texture_budget": port_mod.TEXTURE_BUDGET_MB,
             "fixes": dict(port_mod.DEFAULT_FIXES)}
     try:
@@ -63,7 +70,7 @@ def settings():
 
 def save_settings(req):
     s = settings()
-    for k in ("card_pak", "variants", "profile"):
+    for k in ("card_pak", "card_pak_copy", "variants", "profile"):
         if k in req:
             s[k] = bool(req[k])
     if "texture_budget" in req:
@@ -167,7 +174,7 @@ def status():
             "fix_defaults": dict(port_mod.DEFAULT_FIXES),
             "ui": os.path.relpath(ui, FOLDER) if ui else None, "stock_maps": len(stock_maps()),
             "maps": pc_maps(), "teams": team_list(stock),
-            "job": {k: job[k] for k in ("running", "map", "done", "error", "files")},
+            "job": {k: job[k] for k in ("running", "map", "done", "error", "files", "cancel", "kind")},
             "log": job["log"][-400:]}
 
 
@@ -175,6 +182,14 @@ def status():
 
 def _log(msg):
     job["log"].append(str(msg))
+
+
+def _conv_log(msg):
+    """The log the converter writes to: stops the conversion here once Cancel is pressed. The
+    converter logs at every step, so it stops within moments, before the map's file is written."""
+    if job["cancel"]:
+        raise Cancelled()
+    _log(msg)
 
 
 def _convert_one(pc_path, teams, s):
@@ -185,9 +200,9 @@ def _convert_one(pc_path, teams, s):
     out_dir = os.path.join(OUT_DIR, name)
 
     def run():
-        return make(pc_path, out_dir, stock_files(), teams, _log,
+        return make(pc_path, out_dir, stock_files(), teams, _conv_log,
                     port_mod.game_iwd_files(GAME_DIR), texture_budget=s["texture_budget"],
-                    card_ui=ui, fixes=s["fixes"])
+                    card_ui=ui, fixes=s["fixes"], write_card_pak=s["card_pak_copy"])
 
     try:
         if not s["profile"]:
@@ -202,6 +217,10 @@ def _convert_one(pc_path, teams, s):
                 for line in port_mod.profile_report(prof, os.path.join(out_dir, name + ".prof")).splitlines():
                     _log(line)
         return [os.path.relpath(f, FOLDER) for f in files], None
+    except Cancelled:
+        _log("Cancelled while converting %s. Its files in mw2port_out may be from an earlier "
+             "conversion or only partly new: don't copy them to the console." % name)
+        return [], "cancelled"
     except port_mod.PortError as e:
         _log("Stopped: %s" % e)
         return [], str(e)
@@ -221,6 +240,9 @@ def _run(items, s):
     failed = []
     try:
         for i, (m, teams) in enumerate(items):
+            if job["cancel"]:
+                _log("Cancelled: %d map%s not converted." % (len(items) - i, "" if len(items) - i == 1 else "s"))
+                break
             job["map"] = m["name"] if len(items) == 1 else "%s (%d of %d)" % (m["name"], i + 1, len(items))
             if len(items) > 1:
                 _log("")
@@ -229,6 +251,8 @@ def _run(items, s):
                                                             TEAM_NAMES.get(teams[1], teams[1])))
             files, error = _convert_one(m["path"], teams, s)
             job["files"] += files
+            if error == "cancelled":
+                continue
             if error:
                 failed.append((m["name"], error))
         _log("")
@@ -242,6 +266,8 @@ def _run(items, s):
             for name, error in failed:
                 _log("  %s: %s" % (name, error))
             job["error"] = failed[0][1] if len(items) == 1 else "%d of %d maps stopped" % (len(failed), len(items))
+        if job["cancel"] and not job["error"]:
+            job["error"] = "cancelled"
     finally:
         job["running"] = False
         job["done"] = True
@@ -305,7 +331,7 @@ def _build_card_pak():
 def build_card_pak(req):
     if job["running"]:
         raise ValueError("something is already running")
-    job.update(running=True, map="imagefile8.pak", log=[], done=False, error=None, files=[])
+    job.update(running=True, map="imagefile8.pak", log=[], done=False, error=None, files=[], cancel=False, kind=None)
     threading.Thread(target=_build_card_pak, daemon=True).start()
     return {"ok": True}
 
@@ -336,7 +362,7 @@ def rewrite(req):
     path = maps.get(req.get("map") or "")
     if path is None:
         raise ValueError("pick a stock map")
-    job.update(running=True, map="rewrite " + os.path.basename(path), log=[], done=False, error=None, files=[])
+    job.update(running=True, map="rewrite " + os.path.basename(path), log=[], done=False, error=None, files=[], cancel=False, kind=None)
     _log("Writing %s back out through the converter's writer (a few minutes)..." % os.path.basename(path))
     threading.Thread(target=_rewrite, args=(path,), daemon=True).start()
     return {"ok": True}
@@ -347,7 +373,7 @@ def patch_stock(req):
         raise ValueError("something is already running")
     if not stock_maps():
         raise ValueError("no stock mp_*.ff maps in the work folder")
-    job.update(running=True, map="stock maps", log=[], done=False, error=None, files=[])
+    job.update(running=True, map="stock maps", log=[], done=False, error=None, files=[], cancel=False, kind=None)
     _log("Patching %d stock maps to take titles and emblems from imagefile8.pak..." % len(stock_maps()))
     threading.Thread(target=_patch_stock, daemon=True).start()
     return {"ok": True}
@@ -369,7 +395,8 @@ def convert(req):
         items.append((m, teams))
     if not items:
         raise ValueError("pick a map")
-    job.update(running=True, map=items[0][0]["name"], log=[], done=False, error=None, files=[])
+    job.update(running=True, map=items[0][0]["name"], log=[], done=False, error=None, files=[],
+               cancel=False, kind="convert")
     if len(items) == 1:
         m, teams = items[0]
         _log("Converting %s (%s vs %s). This takes a few minutes; keep this page open." % (
@@ -387,9 +414,24 @@ def convert(req):
         _log("Also building a test variant per fix that is on (with just that fix off), in "
              "mw2port_out\\<map>\\variants. That takes a few minutes per variant.")
     if s["card_pak"]:
-        _log("Titles and emblems: from imagefile8.pak (filled from %s)." % (
-            os.path.relpath(card_ui(s), FOLDER) if card_ui(s) else "nothing: no ui_mp.ff in the work folder"))
+        if s["card_pak_copy"]:
+            _log("Titles and emblems: from imagefile8.pak (filled from %s), written with each map." % (
+                os.path.relpath(card_ui(s), FOLDER) if card_ui(s) else "nothing: no ui_mp.ff in the work folder"))
+        else:
+            _log("Titles and emblems: from imagefile8.pak; no new imagefile8.pak is written with the "
+                 "maps (use the one already on the console, or Build imagefile8.pak).")
     threading.Thread(target=_run, args=(items, s), daemon=True).start()
+    return {"ok": True}
+
+
+def cancel(req):
+    """Stops the running conversion at its next step (and the maps after it in a batch)."""
+    if not job["running"] or job.get("kind") != "convert":
+        raise ValueError("nothing is converting")
+    if not job["cancel"]:
+        job["cancel"] = True
+        _log("")
+        _log("Cancelling... (stops at the converter's next step, within about 20 seconds)")
     return {"ok": True}
 
 
@@ -415,6 +457,8 @@ def handle(method, path, body):
             if path == "/api/convert":
                 with lock:
                     return 200, convert(req), None
+            if path == "/api/cancel":
+                return 200, cancel(req), None
             if path == "/api/open":
                 return 200, open_folder(req.get("which")), None
             if path == "/api/settings":
@@ -515,7 +559,11 @@ slower while it's timed; the files it makes are the same.</span></span></label><
 the writer is at fault; if it plays like the stock map, the writer is fine.</p>
 <p><select id="rewriteMap"></select> <button id="rewriteBtn">Rewrite stock map (test)</button></p></section>
 <section><h2>3. Convert</h2>
-<p><button id="convert" class="primary" disabled>Convert</button> <button id="openOut">Open mw2port_out</button> <span id="state" class="dim"></span></p>
+<p><label class="toggle"><input type="checkbox" id="cardPakCopy"><span><b>Write imagefile8.pak with each conversion</b><br>
+<span class="dim">Ticked: every converted map comes with its own copy of <code>imagefile8.pak</code>, filled with the
+titles and emblems. Unticked: maps still take titles and emblems from <code>imagefile8.pak</code> when the box under
+Titles and emblems is ticked, but no new pak is written; use the one already on the console, or Build imagefile8.pak.</span></span></label></p>
+<p><button id="convert" class="primary" disabled>Convert</button> <button id="cancel" disabled>Cancel</button> <button id="openOut">Open mw2port_out</button> <span id="state" class="dim"></span></p>
 <pre id="log" class="dim">Nothing converted yet.</pre></section>
 </div>
 <script>
@@ -543,15 +591,15 @@ function renderFixes(){$("#fixes").innerHTML=S.fixes.map(f=>`<label class="toggl
  document.querySelectorAll(".fix").forEach(c=>c.onchange=async()=>{try{S.settings=await api("/api/settings",{fixes:{[c.dataset.k]:c.checked}});fixSummary()}catch(e){alert(e.message)}});fixSummary();
  $("#variants").checked=!!S.settings.variants;$("#budget").value=S.settings.texture_budget;$("#profile").checked=!!S.settings.profile}
 function renderRewrite(){const s=$("#rewriteMap");const keep=s.value;s.innerHTML=(S.stock_map_names||[]).map(n=>`<option${n===keep?" selected":""}>${esc(n)}</option>`).join("")||"<option value=''>no stock mp_*.ff here</option>"}
-function renderCards(){$("#cardPak").checked=!!S.settings.card_pak;$("#cardSource").value=S.settings.card_source||"auto";
+function renderCards(){$("#cardPak").checked=!!S.settings.card_pak;$("#cardPakCopy").checked=S.settings.card_pak_copy!==false;$("#cardSource").value=S.settings.card_source||"auto";
  $("#cardInfo").innerHTML=S.ui?`Filled from <code>${esc(S.ui)}</code>.`:`<span class="warn">No ui_mp.ff in the work folder or mw2tex_out yet: copy it from the console.</span>`}
 function renderTeams(){const m=S.maps.find(x=>x.path===pick);if(!m){$("#teams").innerHTML=`<span class="dim">Pick a map first.</span>`;return}
  const c=chosen[m.path]||m.teams;
  $("#teams").innerHTML=`<label>Allies</label><select id="allies">${teamOpts(c[0])}</select><label>Axis</label><select id="axis">${teamOpts(c[1])}</select>`;
  const save=()=>chosen[m.path]=[$("#allies").value,$("#axis").value];$("#allies").onchange=save;$("#axis").onchange=save}
 function renderJob(){const j=S.job;const n=ticked.size;$("#convert").textContent=n>1?"Convert "+n+" maps":"Convert";
- $("#convert").disabled=j.running||(!pick&&!n)||S.missing.length>0;$("#patch").disabled=j.running||!S.ui||!S.stock_maps;$("#rewriteBtn").disabled=j.running||!S.stock_maps;$("#cardPakBuild").disabled=j.running||!S.ui;
- $("#state").textContent=j.running?"Converting "+j.map+"...":(j.error?"Stopped.":(j.done?"Done.":""));
+ $("#convert").disabled=j.running||(!pick&&!n)||S.missing.length>0;$("#patch").disabled=j.running||!S.ui||!S.stock_maps;$("#rewriteBtn").disabled=j.running||!S.stock_maps;$("#cancel").disabled=!j.running||j.kind!=="convert"||!!j.cancel;$("#cardPakBuild").disabled=j.running||!S.ui;
+ $("#state").textContent=j.running?(j.cancel?"Cancelling...":"Converting "+j.map+"..."):(j.error==="cancelled"?"Cancelled.":(j.error?"Stopped.":(j.done?"Done.":"")));
  $("#state").className=j.error?"bad":(j.done&&!j.running?"ok":"dim");
  if(S.log.length){const l=$("#log");const end=l.scrollTop+l.clientHeight>=l.scrollHeight-8;l.textContent=S.log.join("\n");l.className="";if(end)l.scrollTop=l.scrollHeight}
  clearTimeout(timer);if(j.running)timer=setTimeout(()=>load(false),1500)}
@@ -565,6 +613,8 @@ $("#convert").onclick=async()=>{const list=ticked.size?S.maps.filter(x=>ticked.h
 $("#tickAll").onclick=()=>{S.maps.forEach(m=>ticked.add(m.path));renderMaps();renderJob()};
 $("#tickNone").onclick=()=>{ticked.clear();renderMaps();renderJob()};
 $("#cardPak").onchange=async e=>{try{S.settings=await api("/api/settings",{card_pak:e.target.checked})}catch(err){alert(err.message)}};
+$("#cardPakCopy").onchange=async e=>{try{S.settings=await api("/api/settings",{card_pak_copy:e.target.checked})}catch(err){alert(err.message)}};
+$("#cancel").onclick=async()=>{try{await api("/api/cancel",{});load(false)}catch(e){alert(e.message)}};
 $("#cardSource").onchange=async e=>{try{S.settings=await api("/api/settings",{card_source:e.target.value});load()}catch(err){alert(err.message)}};
 $("#cardPakBuild").onclick=async()=>{try{await api("/api/cardpak",{});load(false)}catch(e){alert(e.message)}};
 $("#rewriteBtn").onclick=async()=>{const m=$("#rewriteMap").value;if(!m)return;try{await api("/api/rewrite",{map:m});load(false)}catch(e){alert(e.message)}};
