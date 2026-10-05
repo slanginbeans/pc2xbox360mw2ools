@@ -62,7 +62,7 @@ TILING_PAD = 1.28
 LEVELS = 4      # pak table entries per picture
 # Fixes that can be switched off, to find out on the console which one helps or hurts:
 # (name, short label, what it does). All on by default.
-SWAP_MODELS = (60, 62)          # placed static models swapped by the swap_models_test switch
+SWAP_MODELS = (60, 487)          # placed static models swapped by the swap_models_test switch
 FIXES = [
     ("texture_budget", "Picture budget",
      "Pictures over the budget (40 MB) lose their top mip levels, so big maps fit in memory "
@@ -217,9 +217,9 @@ FIXES = [
     ("swap_models_test", "Swap placed models #%d and #%d (test)" % SWAP_MODELS,
      "Placed static models #%d and #%d trade numbers: each keeps its place, model, box and "
      "lighting, and every list that names them by number (culling tree nodes, shadow lists) "
-     "follows. mp_ancient: #60 is a boulder that vanishes, #62 the same boulder that doesn't. "
-     "If the vanishing stays at #60's spot, it goes with the place; if it moves to #62's spot, "
-     "with the number. Only for maps where both are the same model; off by default."
+     "follows. mp_ancient: #60 is a boulder that vanishes, #487 a boulder that doesn't. "
+     "If the vanishing stays at #60's spot, it goes with the place; if it moves to #487's spot, "
+     "with the number. Off by default."
      % SWAP_MODELS),
     ("ground_lit_flag", "Ground-lit flag from ground colour (test)",
      "A placed model with a ground colour gets the 360's ground-lit flag (0x02), as in every "
@@ -1851,7 +1851,8 @@ class Porter:
         """Test switch swap_models_test: placed static models a and b trade numbers. Their
         smodelDrawInsts and smodelInsts records swap places, and every index list naming them
         (culling tree nodes' smodelIndexes, shadowGeom smodelIndex) swaps a and b, so each model
-        still draws where it stood; only its number changes."""
+        still draws where it stood (its record, model included, moves with it); only its number
+        changes."""
         def tgt(c):
             return c.target if isinstance(c, Ref) else c
         dpvs = world.get("dpvs") or {}
@@ -1862,11 +1863,7 @@ class Porter:
                 and 36 * (max(a, b) + 1) <= len(insts.raw)):
             self.warn("placed models #%d and #%d couldn't be swapped (not in this map)" % (a, b))
             return
-        name = lambda i: (_name(deref(draws[i].get("@", {}).get(("model", ())))) or b"").lstrip(b",")
-        if name(a) != name(b):
-            self.warn("placed models #%d and #%d weren't swapped (different models: %s, %s)"
-                      % (a, b, name(a).decode(errors="replace"), name(b).decode(errors="replace")))
-            return
+        name = lambda i: (_name(deref(draws[i].get("@", {}).get(("model", ())))) or b"?").lstrip(b",").decode(errors="replace")
         draws[a], draws[b] = draws[b], draws[a]
         raw = bytearray(insts.raw)
         raw[36 * a:36 * a + 36], raw[36 * b:36 * b + 36] = insts.raw[36 * b:36 * b + 36], insts.raw[36 * a:36 * a + 36]
@@ -1887,8 +1884,8 @@ class Porter:
             if w != v:
                 L.raw = struct.pack(L.E + "%dH" % len(w), *w)
                 changed += 1
-        self.log("  test: placed models #%d and #%d (%s) swapped numbers (%d index lists updated)"
-                 % (a, b, name(a).decode(errors="replace"), changed))
+        self.log("  test: placed models #%d (now %s) and #%d (now %s) swapped numbers (%d index lists updated)"
+                 % (a, name(a), b, name(b), changed))
 
     def one_room(self, world):
         """Test switch one_room: every room's culling tree becomes one node listing every surface

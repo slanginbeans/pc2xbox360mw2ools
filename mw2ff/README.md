@@ -144,7 +144,7 @@ with `--fix-off NAME` (repeatable). All are on by default except `portal_multipl
 | `huge_leaf_boxes` | Test, off by default: `huge_tree_boxes` for culling tree nodes with no children only (nodes with children keep their boxes), to find which level of the tree the 360 misjudges |
 | `huge_inner_boxes` | Test, off by default: `huge_tree_boxes` for culling tree nodes with children only (nodes with no children keep their boxes) |
 | `tree_box_margin` | Test, off by default: every culling tree node's box grows by 64 units on each side; enough to stop the vanishing means the 360 misjudges node boxes by a small margin |
-| `swap_models_test` | Test, off by default: placed static models #60 and #62 (on mp_ancient the same boulder; #60 vanishes, #62 doesn't) trade numbers while staying where they are, with every list naming them updated; tells whether the vanishing goes with the place or the number |
+| `swap_models_test` | Test, off by default: placed static models #60 and #487 (on mp_ancient two boulders; #60 vanishes, #487 doesn't) trade numbers while staying where they are, with every list naming them updated; tells whether the vanishing goes with the place or the number |
 | `one_room` | Test, off by default: the map is treated as one room (each room's culling tree lists everything, no portals) |
 | `plain_pictures` | Test, off by default: the map's own 2D pictures become plain 16x16 ones (white / flat normal / black specular), to test the picture conversion |
 | `surface_order` | The world's surfaces laid out as the 360 tools do (solid, then decals / see-through, then shadow casters) with the draw ranges to match; IW4x maps list every surface as opaque |
