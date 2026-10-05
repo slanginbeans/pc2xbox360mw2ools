@@ -126,6 +126,12 @@ FIXES = [
      "instead, as stock 360 maps have it (mp_terminal: 4,032 of 4,032). The 360 lights each "
      "static model from the light grid at that point; custom-compiled maps (mp_ancient: all "
      "488) leave it at the world origin, so every model was lit as if it stood there."),
+    ("bone_bounds", "Model bone boxes from their vertices",
+     "A model whose bone box (XBoneInfo: centre, half-size, radius squared) is broken gets it "
+     "rebuilt from its vertices, as every stock 360 model has it: the box around all its detail "
+     "levels' vertices, radius squared its half-diagonal squared (16 stock maps: 6,466 of 6,466). "
+     "mp_ancient's PC file has every model's half-size negative on two axes, and its boulders, "
+     "bushes and grass vanished depending on where they were seen from. Single-bone models only."),
     ("map_effects", "Map effects",
      "Keep the effects the map's createfx script places (mp_backlot: 32, its blowing dust among "
      "them). Off: they are left out of the script (its ambient sounds stay), to see whether "
@@ -1604,6 +1610,9 @@ class Porter:
         if self.test_counts.get("no_cull"):
             self.log("  test: %d static models' cull distance set to 0 (never hidden by distance)"
                      % self.test_counts["no_cull"])
+        if self.test_counts.get("bone_bounds"):
+            self.log("  %d models' bone boxes rebuilt from their vertices (as stock 360 models have them)"
+                     % self.test_counts["bone_bounds"])
         if self.test_counts.get("ground_lit"):
             self.log("  test: %d placed models with a ground colour given the ground-lit flag"
                      % self.test_counts["ground_lit"])
@@ -2892,6 +2901,8 @@ class Porter:
         # skinned ones (characters, view hands) 1.
         if d.get("lodRampType"):
             d["lodRampType"] = 0
+        if self.fixes["bone_bounds"]:
+            self.fix_bone_bounds(d)
         if self.fixes["skip_lod0"] and (d.get("numLods") or 0) > 1 and d.get("lodInfo"):
             # The game takes the first detail level whose distance is beyond the camera's.
             d["lodInfo"][0]["dist"] = 0.0
@@ -2906,6 +2917,46 @@ class Porter:
             if c is None or isinstance(c, Ref):
                 li.get("@", {}).pop(("surfs", ()), None)
                 li["surfs"] = None
+
+    def fix_bone_bounds(self, d):
+        """bone_bounds: a single-bone model's XBoneInfo rebuilt from its vertices when it is
+        broken (a negative half-size, a box that misses vertices, or a radius squared that isn't
+        the half-diagonal's), as stock 360 models have it."""
+        if d.get("numBones") != 1:
+            return
+        L = d.get("@", {}).get(("boneInfo", ()))
+        L = L.target if isinstance(L, Ref) else L
+        if not isinstance(L, Leaf) or len(L.raw) < 28:
+            return
+        pts = []
+        for lod in (d.get("lodInfo") or [])[:d.get("numLods") or 0]:
+            c = lod.get("@", {}).get(("modelSurfs", ())) if isinstance(lod, dict) else None
+            ms = c.target if isinstance(c, Ref) else c
+            if isinstance(ms, tree.InsertSlot):
+                ms = ms.asset
+            surfs = ms.get("@", {}).get(("surfs", ())) if isinstance(ms, dict) else None
+            surfs = surfs.target if isinstance(surfs, Ref) else surfs
+            for sf in surfs if isinstance(surfs, list) else []:
+                v = sf.get("@", {}).get(("verts0", ())) if isinstance(sf, dict) else None
+                v = v.target if isinstance(v, Ref) else v
+                if isinstance(v, Leaf) and v.raw:
+                    size = getattr(v.t, "size", 32) or 32
+                    pts += [struct.unpack_from(v.E + "3f", v.raw, size * i) for i in range(len(v.raw) // size)]
+        if not pts:
+            return
+        lo = [min(p[k] for p in pts) for k in range(3)]
+        hi = [max(p[k] for p in pts) for k in range(3)]
+        mid = [(lo[k] + hi[k]) / 2 for k in range(3)]
+        half = [(hi[k] - lo[k]) / 2 for k in range(3)]
+        old = struct.unpack_from(L.E + "7f", L.raw, 0)
+        oh = old[3:6]
+        broken = (any(not math.isfinite(x) for x in old) or any(h < 0 for h in oh)
+                  or any(old[k] - oh[k] > lo[k] + 0.5 or old[k] + oh[k] < hi[k] - 0.5 for k in range(3))
+                  or abs(sum(h * h for h in oh) - old[6]) > max(1.0, 0.01 * old[6]))
+        if not broken:
+            return
+        L.raw = struct.pack(L.E + "7f", *(mid + half + [sum(h * h for h in half)])) + L.raw[28:]
+        self.test_counts["bone_bounds"] = self.test_counts.get("bone_bounds", 0) + 1
 
     def stock_copy(self, src):
         """A copy of stock asset src (with what it points at), left as it is (stock_materials,
