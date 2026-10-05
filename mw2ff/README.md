@@ -180,8 +180,11 @@ with `--fix-off NAME` (repeatable). All are on by default except `portal_multipl
 pictures, 4,096 materials, 1,536 models, 768 shader sets, 600 effects, 1,350 loaded sounds, ...),
 shared by the map and the files that stay loaded with it (common_mp, code_post_gfx_mp). Over one,
 the map stops loading part way. The converter counts them (named references to assets the game
-already has take no room), logs the four kinds closest to their limit, warns above 95% and stops
-with an error when one is over.
+already has take no room, but each full copy of one takes a place of its own), logs the four kinds
+closest to their limit, warns above 95% and stops with an error when one is over. Stock maps never
+carry a copy of an asset the game already has: silent sounds the converter makes for aliases no
+stock file has name the game's `$default` volume curve (65 copies of it stopped PC mp_showdown
+with "Exceeded limit of 64 'sndcurve' assets").
 
 **Rust crash tests.** To find which part of a converted PC copy of a stock map (PC mp_rust) makes it
 crash or flicker, convert it once per test: **Restore default switches**, then change one switch,

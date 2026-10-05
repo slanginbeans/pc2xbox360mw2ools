@@ -1205,6 +1205,7 @@ class Porter:
         # Assets stock maps only name (",name"): the game has them loaded from its always-loaded
         # files (common_mp, ...) whenever a map loads, so a ported map can name them too.
         self.named = set()
+        self.loaded = set()     # (type, lower-case name) of every asset the always-loaded files have
         self.common_materials = {}      # common_mp's materials: render state templates only
         self.stock_fx = {}              # effect name -> a stock map's effect (stock_effects)
         self.stock_fx_used = []
@@ -1222,6 +1223,9 @@ class Porter:
         for name, root in x_refs:
             idx, aliases = asset_indexes(root)
             base = os.path.splitext(os.path.basename(name))[0]
+            if base in RESIDENT:
+                for t, names in pool_names(root, _file_key(name)).items():
+                    self.loaded.update((t, n) for n in names)
             order = {id(e[1]): i for i, e in enumerate(root["assets"])}
             for k, v in aliases.items():
                 if k.startswith(b","):
@@ -2508,6 +2512,28 @@ class Porter:
             self.warn("%d animations left out (no stock 360 copy, and PC animations can't be converted "
                       "yet): %s" % (len(dropped), ", ".join(dropped[:8]) + (" ..." if len(dropped) > 8 else "")))
 
+    def name_loaded_curves(self, alias):
+        """Volume and other curves (SndCurve) in an alias list made here that the game already
+        has loaded ($default) only name them (",$default"), as stock maps do. A copy of its own
+        in each took one of the game's 64 curve slots apiece: PC mp_showdown's 65 silent aliases
+        stopped the load ("Exceeded limit of 64 'sndcurve' assets")."""
+        for o in list(iter_objects(alias)):
+            if not isinstance(o, dict):
+                continue
+            ch = o.get("@", {})
+            for k, c in list(ch.items()):
+                held = c if isinstance(c, list) else [c]     # (a pointer array holds it in a list)
+                for i, x in enumerate(held):
+                    if isinstance(x, dict) and x.get("_asset") == "SndCurve":
+                        n = _pool_name(x) or b""
+                        if n and not n.startswith(b",") and ("SndCurve", n.lower()) in self.loaded:
+                            ref = self.reference("SndCurve", n)
+                            self.done.add(id(ref))
+                            if held is c:
+                                c[i] = ref
+                            else:
+                                ch[k] = ref
+
     def stock_sounds(self, ents):
         """Sound alias lists come from a stock 360 file with the same alias (stock mp_rust has
         all 143 of PC mp_rust's), audio and all, as stock maps carry them. The PC file only
@@ -2558,6 +2584,7 @@ class Porter:
                 missing.append(name)
                 continue
             new = copy.deepcopy(self.copy_in(null[0]))
+            self.name_loaded_curves(new)
             new["@"][("aliasName", ())] = Str(name)
             head = new["@"].get(("head", ()))
             head = head.target if isinstance(head, Ref) else head
@@ -3303,8 +3330,10 @@ class Porter:
             d["info"]["name"] = "follow"
             d["info"]["@"] = {("name", ()): Str(b"," + name)}
         else:
-            d["name"] = "follow"
-            d["@"] = {("name", ()): Str(b"," + name)}
+            # (Its name member: "name", or "filename" for a few kinds such as SndCurve.)
+            m = "name" if any(x.name == "name" for x in tx.members) else "filename"
+            d[m] = "follow"
+            d["@"] = {(m, ()): Str(b"," + name)}
         d["_asset"] = typ
         return d
 
@@ -4698,6 +4727,24 @@ POOL_LIMITS = {
 _pool_cache = {}
 
 
+def _file_key(path):
+    """(path, size, time) of a file, to keep what's worked out from it; None if it isn't there."""
+    try:
+        st = os.stat(path)
+        return (os.path.abspath(path), st.st_size, st.st_mtime_ns)
+    except OSError:
+        return None
+
+
+def _pool_name(o):
+    """The name an asset takes a place in the game's pool under."""
+    n = alias_name(o) if o["_asset"] == "snd_alias_list_t" else (asset_name(o) or _name(o))
+    if n is None:
+        f = o.get("@", {}).get(("filename", ()))
+        n = f.b if isinstance(f, Str) else None
+    return n
+
+
 def pool_names(root, key=None):
     """{asset type: set of names} of the assets a tree brings (named references to assets the
     game already has, ",name", take no place). key: the stock file it was read from (path,
@@ -4709,10 +4756,7 @@ def pool_names(root, key=None):
     for o in iter_objects(root["assets"]):
         if not (isinstance(o, dict) and o.get("_asset") in POOL_LIMITS):
             continue
-        n = alias_name(o) if o["_asset"] == "snd_alias_list_t" else (asset_name(o) or _name(o))
-        if n is None:
-            f = o.get("@", {}).get(("filename", ()))
-            n = f.b if isinstance(f, Str) else None
+        n = _pool_name(o)
         if n and not n.startswith(b","):
             out.setdefault(o["_asset"], set()).add(n.lower())
     if key is not None:
@@ -4852,20 +4896,23 @@ def map_limits_report(root, log):
 
 def check_pools(root, refs, log, warn):
     """Stop when the map and the files loaded with it hold more assets of a kind than the game
-    has room for; warn when it is close."""
+    has room for; warn when it is close. Each full copy the map carries of an asset those files
+    already have takes a place of its own (65 copies of $default stopped converted mp_showdown
+    with "Exceeded limit of 64 'sndcurve' assets"); stock maps carry none, only names."""
     have = {}
     for name, r in refs:
         if os.path.splitext(os.path.basename(name))[0].lower() in RESIDENT + ("patch_mp",):
-            try:
-                st = os.stat(name)
-                key = (os.path.abspath(name), st.st_size, st.st_mtime_ns)
-            except OSError:
-                key = None
-            for t, names in pool_names(r, key).items():
+            for t, names in pool_names(r, _file_key(name)).items():
                 have.setdefault(t, set()).update(names)
+    copies = Counter()
+    for o in iter_objects(root["assets"]):
+        if isinstance(o, dict) and o.get("_asset") in POOL_LIMITS:
+            n = _pool_name(o)
+            if n and not n.startswith(b",") and n.lower() in have.get(o["_asset"], ()):
+                copies[o["_asset"]] += 1
     over, used = [], []
     for t, names in pool_names(root).items():
-        n = len(names | have.get(t, set()))
+        n = len(names | have.get(t, set())) + copies[t]
         lim = POOL_LIMITS[t]
         used.append((n / float(lim), "%s %d/%d" % (t, n, lim)))
         if n > lim:
