@@ -126,6 +126,14 @@ FIXES = [
      "instead, as stock 360 maps have it (mp_terminal: 4,032 of 4,032). The 360 lights each "
      "static model from the light grid at that point; custom-compiled maps (mp_ancient: all "
      "488) leave it at the world origin, so every model was lit as if it stood there."),
+    ("tree_list_slices", "Culling tree model lists inside the room's list",
+     "Every culling tree node's list of static models becomes a slice of its room's root list, "
+     "as in every stock 360 map (16,017 of 16,017 lists): the root list is laid out so each node's "
+     "models are next to each other, and each node points into it. When a map loads, the 360 "
+     "reorders the placed models and renumbers each room's root list to match; a node list kept "
+     "apart from it keeps the old numbers and names other models (mp_ancient on the console: "
+     "2,884 of 3,368 entries), so models vanish depending on which nodes are in view. "
+     "mp_ancient: 213 of 215 lists were apart; mp_backlot 1,811 of 1,854."),
     ("bone_bounds", "Model bone boxes from their vertices",
      "A model whose bone box (XBoneInfo: centre, half-size, radius squared) is broken gets it "
      "rebuilt from its vertices, as every stock 360 model has it: the box around all its detail "
@@ -1856,6 +1864,104 @@ class Porter:
                         n += 1
         self.log("  test: %d culling tree node boxes grown by %d units" % (n, margin))
 
+    def slice_tree_lists(self, world):
+        """tree_list_slices: each room's culling tree keeps its nodes and the set of static models
+        each node lists, but the lists are laid out as stock 360 maps have them: the root's list
+        holds every model of the room in depth-first order (a node's own models, then each
+        child's in turn), and every other node's list is the run of it that is its subtree.
+        The 360 renumbers only the root lists after it reorders the placed models on load."""
+        def tgt(c):
+            return c.target if isinstance(c, Ref) else c
+
+        def read(nd):
+            c = nd.get("@", {}).get(("smodelIndexes", ()))
+            off = 0
+            if isinstance(c, Ref):
+                off, c = c.rel, c.target
+            n = nd.get("smodelIndexCount") or 0
+            if not n:
+                return []
+            if not isinstance(c, Leaf) or off + 2 * n > len(c.raw):
+                return None
+            return list(struct.unpack_from(c.E + "%dH" % n, c.raw, off))
+
+        rooms = done = 0
+        for ct in tgt(world.get("@", {}).get(("aabbTrees", ()))) or []:
+            nodes = tgt(ct.get("@", {}).get(("aabbTree", ())))
+            if not isinstance(nodes, list) or not nodes:
+                continue
+            lists = [read(nd) for nd in nodes]
+            if any(l is None for l in lists) or not lists[0]:
+                continue
+            kids = []
+            for i, nd in enumerate(nodes):
+                f = i + (nd.get("childrenOffset") or 0) // 40
+                kids.append(list(range(f, f + nd["childCount"])) if nd.get("childCount") else [])
+            sub = {}
+
+            def subtree(i, depth=0):
+                if depth > 64:
+                    raise ValueError("tree too deep")
+                if i not in sub:
+                    s_ = set(lists[i])
+                    for k in kids[i]:
+                        s_ |= subtree(k, depth + 1)
+                    sub[i] = s_
+                return sub[i]
+            try:
+                subtree(0)
+            except (ValueError, IndexError, RecursionError):
+                self.warn("a culling tree's model lists couldn't be laid out (tree not as expected)")
+                continue
+            # Only when each node lists exactly its subtree and no model sits under two children
+            # does every node get one run of the root list.
+            ok = all(set(lists[i]) == sub[i] for i in sub)
+            for i in sub:
+                seen = set()
+                for k in kids[i]:
+                    if sub[k] & seen:
+                        ok = False
+                    seen |= sub[k]
+            if not ok or len(lists[0]) != len(sub[0]):
+                self.warn("a culling tree's model lists weren't laid out (a model listed twice, or a "
+                          "node not listing what is below it)")
+                continue
+            order, span = [], {}
+
+            def lay(i):
+                start = len(order)
+                below = set()
+                for k in kids[i]:
+                    below |= sub[k]
+                order.extend(sorted(m for m in lists[i] if m not in below))
+                for k in kids[i]:
+                    lay(k)
+                span[i] = (start, len(order) - start)
+            lay(0)
+            c0 = nodes[0].get("@", {}).get(("smodelIndexes", ()))
+            base = tgt(c0)
+            root = Leaf(base.t, len(order), struct.pack(base.E + "%dH" % len(order), *order), base.E)
+            for i, nd in sorted(span.items()):
+                nd_ = nodes[i]
+                start, n = nd
+                nd_["smodelIndexCount"] = n
+                if i == 0:
+                    nd_["@"][("smodelIndexes", ())] = root
+                    nd_["smodelIndexes"] = "follow"
+                elif n:
+                    r = tree.Ref(1)     # non-null until the writer knows where the root list lands
+                    r.target, r.rel, r.t = root, 2 * start, root.t
+                    nd_.setdefault("@", {})[("smodelIndexes", ())] = r
+                    nd_["smodelIndexes"] = "0x00000001"     # any non-null value: an alias, set on writing
+                else:
+                    nd_.get("@", {}).pop(("smodelIndexes", ()), None)
+                    nd_["smodelIndexes"] = None
+            rooms += 1
+            done += len(span)
+        if rooms:
+            self.log("  culling tree model lists laid out inside each room's list (%d rooms, %d nodes)"
+                     % (rooms, done))
+
     def swap_models(self, world, a, b):
         """Test switch swap_models_test: placed static models a and b trade numbers. Their
         smodelDrawInsts and smodelInsts records swap places, and every index list naming them
@@ -2387,6 +2493,8 @@ class Porter:
             self.grow_room_boxes(d)
         if self.fixes["swap_models_test"]:
             self.swap_models(d, *SWAP_MODELS)
+        if self.fixes["tree_list_slices"]:
+            self.slice_tree_lists(d)
         ch = d["@"]
         # One bit per room ("cell has sun-lit surfaces"), 32 to a word. Stock 360 maps always
         # carry it (all zero in every one checked: mp_rust 1 word, mp_favela 2) and the renderer
