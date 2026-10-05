@@ -4178,7 +4178,7 @@ class Porter:
                         a = x.target if isinstance(x.target, tree.AssetEntry) else _asset_in_slot(x)
                         j = None
                         if isinstance(a, tree.AssetEntry):
-                            j = pos[id(a)]
+                            j = pos.get(id(a))      # (None: in a world drop_world let go)
                         elif isinstance(a, dict):
                             j = owner.get(id(a))
                         if j is not None and j not in sel:
@@ -4880,11 +4880,38 @@ def check_pools(root, refs, log, warn):
                         "loading part way" % ", ".join(over))
 
 
+# The big parts of a stock map's own world: its drawn geometry and its collision, about 70% of
+# its tree (some 160 MB). Of a stock map read only for its teams' models or for effects, the
+# converter uses neither (the template map's world is kept whole).
+BIG_WORLD = ("gfx_map", "col_map_mp")
+
+
+def drop_world(root):
+    """Let a donor stock map's drawn geometry and collision go, freeing their memory for what's
+    read next. The named assets inside them (lightmaps, reflection probes, ...) stay, in the
+    same place in the asset list and in the same order, so every look-up by name finds what it
+    did before."""
+    import gc
+    ents = []
+    for e in root["assets"]:
+        if e[0] in BIG_WORLD and isinstance(e[1], dict):
+            inner = [o for o in iter_objects(e[1]) if isinstance(o, dict) and "_asset" in o
+                     and o is not e[1]]
+            inner.reverse()     # (iter_objects takes a list's last item first)
+            e = tree.AssetEntry(["world_parts", inner])
+        ents.append(e)
+    root["assets"] = ents
+    gc.collect()        # (the parts point back into each other: freed only by the collector)
+
+
 def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None,
          game_iwds=(), texture_budget=0, card_pak=False, fx_paths=(), fixes=None, pak_path=None,
-         measures=True, cache_dir=None, keep_loaded=True):
+         measures=True, cache_dir=None, keep_loaded=True, donors=()):
     """loaded: {path: tree} of stock files already read (load_stock), to reuse; with
     keep_loaded=False they are let go once converting is done (the caller is done with them).
+    donors: stock maps of ref_paths read only for their teams (or effects); their own world is
+    drawn geometry and collision are let go as soon as they're read (drop_world), as are those
+    of the effect maps read here.
     game_iwds: the PC game's .iwd files, for pictures the map's own .iwd doesn't have.
     fx_paths: stock 360 maps to take the map's effects from (those carrying the most of them
     are read too). fixes: {name: bool} of FIXES (default all on). measures: log a map's
@@ -4900,20 +4927,26 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     if loaded is None:
         loaded, keep_loaded = {}, False
     ref_paths = list(ref_paths)
+    donors = set(donors)
+
+    def read(p):
+        if p not in loaded:
+            log("reading stock 360 file %s" % os.path.basename(p))
+            loaded[p] = load_stock(p, log)
+            if p in donors:
+                drop_world(loaded[p])
+        return loaded[p]
+
     if fx_paths and fixes["stock_effects"]:
         for p in ref_paths:
-            if p not in loaded:
-                log("reading stock 360 file %s" % os.path.basename(p))
-                loaded[p] = load_stock(p, log)
+            read(p)
         extra = effect_donors(root, [loaded[p] for p in ref_paths if os.path.splitext(
             os.path.basename(p))[0].lower() not in RESIDENT],
                               [p for p in fx_paths if p not in ref_paths], log)
         ref_paths += extra
+        donors.update(extra)
     for p in ref_paths:
-        if p not in loaded:
-            log("reading stock 360 file %s" % os.path.basename(p))
-            loaded[p] = load_stock(p, log)
-        refs.append((p, loaded[p]))
+        refs.append((p, read(p)))
     if not iwd_path:
         iwd_path = []
     elif isinstance(iwd_path, str):
@@ -5029,11 +5062,13 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
     if not teams and not os.path.exists(base + ".arena") and _arena_teams(arena, name.lower()):
         want = _arena_teams(arena, name.lower())
     refs = [cpg] + ([common] if common else []) + ([same] if same and same != template else []) + [template]
+    donors = []
     for team in want:
         carriers = set(_team_maps(arena, team.lower()))
         donor = next((p for p in maps if os.path.splitext(os.path.basename(p))[0].lower() in carriers), None)
         if donor and donor not in refs:
             refs.append(donor)
+            donors.append(donor)
     written = []
     if os.path.exists(base + "_load.ff"):
         tpl_load = os.path.splitext(template)[0] + "_load.ff"
@@ -5056,7 +5091,8 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
     out = os.path.join(out_dir, name + ".ff")
     port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded, game_iwds=game_iwds,
          texture_budget=texture_budget, card_pak=bool(card_ui), fx_paths=maps, fixes=fixes,
-         pak_path=pak_path, measures=measures, cache_dir=cache_dir, keep_loaded=False)
+         pak_path=pak_path, measures=measures, cache_dir=cache_dir, keep_loaded=False,
+         donors=donors)
     written.append(out)
     if fix_set(fixes)["stream_pictures"] and os.path.exists(pak_path):
         written.append(pak_path)
