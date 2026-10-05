@@ -139,6 +139,12 @@ FIXES = [
      "(the teams' models, effects) were written again wherever the stock file pointed back at "
      "them: each team body picture 120 times over, which took the game's room for assets and "
      "its memory."),
+    ("material_memory", "World material list as the 360 counts it",
+     "The world's list of the materials its surfaces draw with (materialMemory) is made as every "
+     "stock 360 map has it (1,866 of 1,866 entries in mp_rust, mp_favela and mp_afghan): every "
+     "material on a surface, sorted by name, with 44 bytes a vertex + 6 a triangle + 40 a "
+     "surface. The PC counts differently, and the composite materials of Merge decal layers "
+     "were missing from it (converted mp_rust: 76 entries, stock 177)."),
     ("tree_list_slices", "Culling tree model lists inside the room's list",
      "Every culling tree node's list of static models becomes a slice of its room's root list, "
      "as in every stock 360 map (16,017 of 16,017 lists): the root list is laid out so each node's "
@@ -2704,6 +2710,66 @@ class Porter:
                 # The picture was written here first; later pointers to it now get it instead.
                 self.moved_images.append(c)
 
+    def world_material_memory(self, world):
+        """The world's materialMemory list as every stock 360 map has it (mp_rust, mp_favela,
+        mp_afghan: 1,866 of 1,866 entries): one entry for every material its surfaces draw with,
+        sorted by name, each with 44 bytes a vertex of its vertex runs + 6 a triangle + 40 a
+        surface. The PC's list counts differently, and the composite materials Merge decal
+        layers makes were left out of it (converted mp_rust: 76 entries, stock 177)."""
+        ch = world.get("@", {})
+        lst = ch.get(("materialMemory", ()))
+        lst = lst.target if isinstance(lst, Ref) else lst
+        surfs = world["dpvs"]["@"].get(("surfaces", ()))
+        surfs = surfs.target if isinstance(surfs, Ref) else surfs
+        if not isinstance(lst, list) or not lst or not isinstance(lst[0], dict) or not isinstance(surfs, list):
+            return
+        tmpl = lst[0]
+        # The PC's own entries are kept (re-ordered, with the 360's count): the list is
+        # written before the surfaces, so it may hold a material itself, written there first,
+        # with the surfaces pointing back at it. Materials it lacks (decals' composite ones)
+        # are pointed at through the asset list, where they're written before the world.
+        listed = {}
+        for ent in lst:
+            c = ent.get("@", {}).get(("material", ())) if isinstance(ent, dict) else None
+            m = c if isinstance(c, dict) else deref(c) if c is not None else None
+            if isinstance(m, dict):
+                listed.setdefault(id(m), ent)
+        per = {}
+        for sf in surfs[:world.get("surfaceCount") or len(surfs)]:
+            c = sf.get("@", {}).get(("material", ())) if isinstance(sf, dict) else None
+            m = deref(c) if c is not None else None
+            if not isinstance(m, dict) or not isinstance(c, Ref):
+                return      # (a surface whose material isn't pointed at as usual: list kept)
+            name = asset_name(m) or _name(m) or b""
+            e = per.setdefault(id(m), {"name": name, "ref": c, "runs": set(), "tris": 0, "surfs": 0})
+            t = sf["tris"]
+            e["runs"].add((t["firstVertex"], t["vertexCount"]))
+            e["tris"] += t["triCount"]
+            e["surfs"] += 1
+        new = []
+        for mid, e in sorted(per.items(), key=lambda kv: kv[1]["name"]):
+            old = listed.get(mid)
+            if old is not None:
+                ent = dict(old)
+            elif isinstance(e["ref"].target, tree.AssetEntry):
+                r = Ref(1)
+                r.target, r.rel, r.t = e["ref"].target, e["ref"].rel, e["ref"].t
+                ent = {k: v for k, v in tmpl.items() if k != "@"}
+                ent["@"] = {("material", ()): r}
+                ent["material"] = "0x00000001"      # (an alias: a non-null placeholder)
+            else:
+                self.warn("world material list left as the PC file has it (material %s isn't "
+                          "pointed at as expected)" % e["name"].decode("latin-1"))
+                return
+            ent["memory"] = 44 * sum(v for _, v in e["runs"]) + 6 * e["tris"] + 40 * e["surfs"]
+            new.append(ent)
+        before = len(lst)
+        lst[:] = new
+        world["materialMemoryCount"] = len(new)
+        if len(new) != before:
+            self.log("  world material list: %d materials as the 360 counts them (the PC file "
+                     "listed %d)" % (len(new), before))
+
     def post_GfxWorld(self, d, tx):
         if self.fixes["merge_decals"]:
             decals.merge_decal_layers(self, d, deref, asset_name)
@@ -2711,6 +2777,7 @@ class Porter:
             self.order_surfaces(d)
         if self.fixes["merge_decals"]:
             decals.relay_surfaces(self, d, deref, asset_name)
+            decals.compact_vertices(self, d, deref, asset_name)
         if self.fixes["surface_bounds"]:
             self.fill_surface_bounds(d)
         if self.fixes["model_box_bounds"]:
@@ -2736,6 +2803,8 @@ class Porter:
             self.slice_tree_lists(d)
         if self.fixes["probe_brightness"]:
             self.dim_standin_probes(d)
+        if self.fixes["material_memory"]:
+            self.world_material_memory(d)
         ch = d["@"]
         # One bit per room ("cell has sun-lit surfaces"), 32 to a word. Stock 360 maps always
         # carry it (all zero in every one checked: mp_rust 1 word, mp_favela 2) and the renderer
@@ -2759,6 +2828,68 @@ class Porter:
                 self.moved_images = [m for m in self.moved_images if m is not t]
         if self.moved_images:
             raise PortError("a picture from the lightmap override is still needed elsewhere")
+
+    def solid_runs(self, surfs, order, groups, group):
+        """With merge_decals: the solid surfaces sorted so those with one material (and lighting)
+        are neighbours, which the 360 draws as one (0x823FABB0); solid surfaces depth-test, so
+        their order doesn't change the picture. Decals and see-through ones keep their order.
+        A run takes at most 65,535 vertices (16-bit indices): bigger ones are cut in chunks,
+        and chunks of one material are kept apart by other materials' surfaces (a sort key
+        with no other material keeps its surfaces as they were). Converted mp_rust: 4,646
+        draws after merging decals (stock 949)."""
+        solid = [i for i in order if groups[i] == 0]
+        rest = [i for i in order if groups[i] != 0]
+
+        def key(i):
+            s = surfs[i]
+            m = deref(s.get("@", {}).get(("material", ())))
+            return id(m), (s.get("laf") or {}).get("union")
+
+        by_sort = {}
+        for i in solid:
+            by_sort.setdefault(group(surfs[i])[1], []).append(i)
+        out = []
+        for sk in sorted(by_sort):
+            idx = by_sort[sk]
+            keys = {}
+            for i in idx:
+                keys.setdefault(key(i), []).append(i)
+            chunks = []             # (chunk number, first position, surfaces)
+            for k, members in keys.items():
+                blocks, total, cur, c = set(), 0, [], 0
+                for i in members:
+                    t = surfs[i]["tris"]
+                    b = (t["firstVertex"], t["vertexCount"])
+                    add = 0 if b in blocks else b[1]
+                    if cur and total + add > 0xFFFF:
+                        chunks.append((c, idx.index(members[0]), cur))
+                        blocks, total, cur, c = set(), 0, [], c + 1
+                        add = b[1]
+                    blocks.add(b)
+                    total += add
+                    cur.append(i)
+                chunks.append((c, idx.index(members[0]), cur))
+            if len(keys) == 1 and len(chunks) > 1:
+                out += idx      # nothing to keep its chunks apart: as it was
+                continue
+            # Chunk 0 of every material (in the order they first appear), then chunk 1 of those
+            # that have one, ...; a round doesn't start with the material the one before ended
+            # with (it's rotated), so no two chunks of one material meet.
+            rounds = {}
+            for c, first, members in chunks:
+                rounds.setdefault(c, []).append((first, members))
+            flat = []
+            for c in sorted(rounds):
+                part = [m for _, m in sorted(rounds[c])]
+                if flat and key(part[0][0]) == key(flat[-1][0]):
+                    part = part[1:] + part[:1]
+                flat += part
+            if any(key(flat[j][0]) == key(flat[j + 1][0]) for j in range(len(flat) - 1)):
+                out += idx      # (only one material left with chunks: as it was)
+                continue
+            for members in flat:
+                out += members
+        return out + rest
 
     def order_surfaces(self, world):
         """Test switch surface_order: the static surfaces in the 360 tools' order (solid, sort key
@@ -2789,6 +2920,8 @@ class Porter:
 
         groups = [group(s)[0] for s in surfs[:n]]
         order = sorted(range(n), key=lambda i: groups[i])     # stable: each group keeps its order
+        if self.fixes["merge_decals"]:
+            order = self.solid_runs(surfs, order, groups, group)
         if order == list(range(n)):
             new_of = None
         else:
