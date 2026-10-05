@@ -26,6 +26,19 @@ An alias must point at something already written earlier in the zone. Checks:
 - pointers between assets go through the target's asset-list entry (`Ref` target = the
   `AssetEntry`, rel 4), because temp-block data is reused per asset.
 
+## Never alias into the temporary block
+
+Temp-block data (materials, pictures, sounds, model surfaces written inline) is reused for the
+next asset, so an alias into the temp block names whatever comes next. A temp asset that other
+places point at must be written with `INSERT` (it reserves a slot in the virtual block), and
+those places must alias the **slot**. Stock files have no temp aliases at all (mp_rust 0 of
+68,943). merge_decals once broke this: a composite material held a picture inline with
+`FOLLOWING` (no slot), so 341 later composite pictures and 115 world material-memory entries
+aliased stale temp data and the console crashed as mp_waw_castle loaded. The writer now gives a
+`_forward` temp asset written inline a slot, and points later pointers at that slot.
+`scripts/check_aliases.py OUT.ff` checks both forward and temp aliases; run it on every
+converted file before a PR.
+
 ## Something must be written before its first pointer, but lives later
 
 Mark the asset `_forward = True`, make sure nothing holds it inline any more (replace inline

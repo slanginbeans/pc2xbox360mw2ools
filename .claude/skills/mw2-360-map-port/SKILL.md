@@ -51,8 +51,9 @@ Convert the affected maps (at least one small one like mp_ancient and one large 
 mp_backlot or mp_waw_castle) with the relevant switches, then:
 
 1. **Read the file back** with `port.load_tree` — it must parse to the end.
-2. **No forward pointers**: every alias must point at something already written. A forward
-   alias is fatal on the console even though the PC-side reader copes.
+2. **No forward or temp-block aliases**: every alias must point at something already written,
+   and never into the temporary block (reused per asset). Both are fatal on the console even
+   though the PC-side reader copes. Run `scripts/check_aliases.py OUT.ff` (exit 0 = clean).
 3. **Check the specific change** in the read-back data (not the in-memory tree): counts, values,
    that only the intended things changed, and that maps the change shouldn't touch are identical.
 4. **Compare against stock**: the 16 stock 360 maps are the ground truth. When unsure what a
