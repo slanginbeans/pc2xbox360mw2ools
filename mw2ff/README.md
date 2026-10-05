@@ -95,7 +95,7 @@ and skips the maps after it in a batch. The map being converted isn't written; f
 
 Each map converts in a process of its own (a second `python` in Task Manager while it runs). The stock
 maps read only for their teams or effects are kept without their drawn geometry and collision (the
-converter doesn't use them; about 160 MB each). A big map takes about 1.5 GB while it converts; when it's done that process ends and all of it goes back to Windows,
+converter doesn't use them; about 160 MB each). A big map takes about 1.7 GB while it converts; when it's done that process ends and all of it goes back to Windows,
 so the converter page itself stays small between maps and through a batch.
 
 From a command prompt: `python port.py <pc map.ff> <out.ff> --iwd <map.iwd> --ref360
