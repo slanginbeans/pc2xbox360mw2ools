@@ -135,6 +135,15 @@ class FastFile:
         if scan:
             self._scan()
 
+    @classmethod
+    def from_zone(cls, zone):
+        """A FastFile over a zone already in memory (no container, no pak table), to list its
+        textures without writing and re-reading a file."""
+        ff = cls.__new__(cls)
+        ff.path, ff.raw, ff.count, ff.table = None, None, 0, []
+        ff.zone, ff.zone_changed, ff._images = bytearray(zone), False, None
+        return ff
+
     @property
     def images(self):
         """Every texture record in the zone (found the first time they're asked for)."""
@@ -290,6 +299,19 @@ def _block_offset(x, y, sw, bpb):
     return (off >> l2) * bpb
 
 
+_OFFSETS = {}
+
+
+def _offsets(wb, hb, ox, oy, sw, bpb):
+    """Tiled byte offset of every block of a mip, row by row (kept: many pictures share a size)."""
+    key = (wb, hb, ox, oy, sw, bpb)
+    offs = _OFFSETS.get(key)
+    if offs is None:
+        offs = _OFFSETS[key] = [_block_offset(x + ox, y + oy, sw, bpb)
+                                for y in range(hb) for x in range(wb)]
+    return offs
+
+
 def _mip_count(width, height):
     return _log2ceil(max(width, height)) + 1
 
@@ -351,11 +373,11 @@ def untile(blob, width, height, fmt, single=False):
     for mip, base, sw, ox, oy in plan:
         wb, hb, _, _ = _layout(width, height, mip, fmt)
         out = bytearray(wb * hb * bpb)
-        for y in range(hb):
-            for x in range(wb):
-                src = base + _block_offset(x + ox, y + oy, sw, bpb)
-                dst = (y * wb + x) * bpb
-                out[dst:dst + bpb] = blob[src:src + bpb]
+        src = memoryview(blob)
+        dst = 0
+        for off in _offsets(wb, hb, ox, oy, sw, bpb):
+            out[dst:dst + bpb] = src[base + off:base + off + bpb]
+            dst += bpb
         mips.append(bytes(out))
     return mips
 
@@ -367,11 +389,12 @@ def tile(mips, width, height, fmt, single=False):
     blob = bytearray(total)
     for (mip, base, sw, ox, oy), data in zip(plan, mips):
         wb, hb, _, _ = _layout(width, height, mip, fmt)
-        for y in range(hb):
-            for x in range(wb):
-                dst = base + _block_offset(x + ox, y + oy, sw, bpb)
-                src = (y * wb + x) * bpb
-                blob[dst:dst + bpb] = data[src:src + bpb]
+        data = memoryview(data)
+        src = 0
+        for off in _offsets(wb, hb, ox, oy, sw, bpb):
+            dst = base + off
+            blob[dst:dst + bpb] = data[src:src + bpb]
+            src += bpb
     return _swap(bytes(blob), fmt)
 
 

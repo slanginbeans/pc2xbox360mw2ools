@@ -526,24 +526,41 @@ def with_cull(table, cull):
     return out
 
 
+class _Kinds(dict):
+    """What iter_objects does with an object of a type: 0 skip it (None, names, pointers,
+    numbers), 1 a dict, 2 a list, 3 a Leaf, 4 anything else (yielded, not looked into)."""
+    def __missing__(self, t):
+        k = self[t] = (0 if t is type(None) or issubclass(t, (Str, Ref, str, int, float)) else
+                       1 if issubclass(t, dict) else 2 if issubclass(t, list) else
+                       3 if issubclass(t, Leaf) else 4)
+        return k
+
+
+_KINDS = _Kinds()
+
+
 def iter_objects(root):
     """Every dict/list/Leaf in a tree, once."""
+    kinds = _KINDS
     seen = set()
-    stack = [root]
+    stack = [root] if kinds[type(root)] else []
+    pop, push, extend, mark = stack.pop, stack.append, stack.extend, seen.add
     while stack:
-        o = stack.pop()
-        if id(o) in seen or o is None or isinstance(o, (Str, Ref, str, int, float)):
+        o = pop()
+        i = id(o)
+        if i in seen:
             continue
-        seen.add(id(o))
+        mark(i)
         yield o
-        if isinstance(o, dict):
-            for k, v in o.items():
-                if k == "@":
-                    stack.extend(v.values())
-                elif isinstance(v, (dict, list, Leaf)):
-                    stack.append(v)
-        elif isinstance(o, list):
-            stack.extend(o)
+        k = kinds[type(o)]
+        if k == 1:
+            for key, v in o.items():
+                if key == "@":
+                    extend([x for x in v.values() if kinds[type(x)]])
+                elif 0 < kinds[type(v)] < 4:
+                    push(v)
+        elif k == 2:
+            extend([x for x in o if kinds[type(x)]])
 
 
 def alias_name(d):
@@ -554,28 +571,22 @@ def alias_name(d):
     return c.b if isinstance(c, Str) else None
 
 
-def alias_index(root):
-    """{alias name: snd_alias_list_t dict} for every sound alias list in a tree."""
-    out = {}
-    for o in iter_objects(root):
-        if isinstance(o, dict) and o.get("_asset") == "snd_alias_list_t":
-            n = alias_name(o)
-            if n is not None:
-                out.setdefault(n, o)
-    return out
-
-
-def asset_index(root):
-    """{(struct name, asset name bytes): dict} for every asset in a tree, top-level or inline.
+def asset_indexes(root):
+    """({(struct name, asset name bytes): dict} for every asset in a tree, top-level or inline,
+    {alias name: snd_alias_list_t dict} for every sound alias list), in one walk of the tree.
     Stock files name some assets through a string another asset holds (a pointer to it): those
     count too (without them every world asset, and many models and pictures, went unfound)."""
-    out = {}
+    assets, aliases = {}, {}
     for o in iter_objects(root):
         if isinstance(o, dict) and "_asset" in o:
             n = asset_name(o) or _name(o)
             if n is not None:
-                out.setdefault((o["_asset"], n), o)
-    return out
+                assets.setdefault((o["_asset"], n), o)
+            if o["_asset"] == "snd_alias_list_t":
+                n = alias_name(o)
+                if n is not None:
+                    aliases.setdefault(n, o)
+    return assets, aliases
 
 
 # ================================================================ vertices
@@ -817,24 +828,43 @@ def dxt5_normal_to_dxn(mip):
     is, then green as a second block. Stock 360 normal maps are laid out this way: their first
     block is the PC's alpha block (byte for byte in most), the second the PC's green channel."""
     out = bytearray(len(mip))
+    done = _DXN_GREEN       # green block -> its DXN block (normal maps repeat many blocks)
+    if len(done) > 1 << 20:
+        done.clear()
     for o in range(0, len(mip) - 15, 16):
-        c0, c1, bits = struct.unpack_from("<HHI", mip, o + 8)
-        g0, g1 = ((c0 >> 5) & 63) * 255 // 63, ((c1 >> 5) & 63) * 255 // 63
-        pal = [g0, g1, (2 * g0 + g1) // 3, (g0 + 2 * g1) // 3] if c0 > c1 else [g0, g1, (g0 + g1) // 2, 0]
+        key = mip[o + 8:o + 16]
+        block = done.get(key)
+        if block is None:
+            c0, c1, bits = struct.unpack_from("<HHI", key)
+            g0, g1 = ((c0 >> 5) & 63) * 255 // 63, ((c1 >> 5) & 63) * 255 // 63
+            pal = [g0, g1, (2 * g0 + g1) // 3, (g0 + 2 * g1) // 3] if c0 > c1 else [g0, g1, (g0 + g1) // 2, 0]
+            block = done[key] = _bc4_block([pal[(bits >> (2 * k)) & 3] for k in range(16)])
         out[o:o + 8] = mip[o:o + 8]
-        out[o + 8:o + 16] = _bc4_block([pal[(bits >> (2 * k)) & 3] for k in range(16)])
+        out[o + 8:o + 16] = block
     return bytes(out)
 
 
-def fit_picture(fmt_name, w, h, mips, limit=2048):
-    """Pictures the 360 can't take as they are (sides not a power of two, or too big) are
-    resized: decoded, scaled down to powers of two, and compressed again (top level only)."""
+_DXN_GREEN = {}
+
+
+def normal_maps_to_dxn(mips):
+    return [dxt5_normal_to_dxn(m) for m in mips]
+
+
+def picture_size(w, h, limit=2048):
+    """The size fit_picture gives a picture: each side down to a power of two, at most limit."""
     def p2(v):
         r = 1
         while r * 2 <= v:
             r *= 2
         return min(r, limit)
-    nw, nh = p2(w), p2(h)
+    return p2(w), p2(h)
+
+
+def fit_picture(fmt_name, w, h, mips, limit=2048):
+    """Pictures the 360 can't take as they are (sides not a power of two, or too big) are
+    resized: decoded, scaled down to powers of two, and compressed again (top level only)."""
+    nw, nh = picture_size(w, h, limit)
     if (nw, nh) == (w, h):
         return w, h, mips
     import io
@@ -844,6 +874,83 @@ def fit_picture(fmt_name, w, h, mips, limit=2048):
     pic = Image.open(io.BytesIO(mw2tex.dds_bytes(w, h, gpu, mips[:1]))).convert("RGBA")
     pic = pic.resize((nw, nh), Image.LANCZOS)
     return nw, nh, [mw2tex._encode(pic.tobytes(), nw, nh, gpu)]
+
+
+class PictureCache:
+    """Results of the slow picture steps (resizing a picture, normal maps to DXN) kept in
+    mw2port_cache/pictures between conversions: the same picture always comes out the same,
+    and converting a map again with other switches is the usual case. The least recently used
+    go first once the folder holds more than LIMIT bytes. Never fails a conversion: anything
+    wrong with it and the step is done again."""
+    LIMIT = 2 << 30
+
+    def __init__(self, path):
+        self.path = path
+        self.hits = self.misses = 0
+
+    def get(self, fn, *args):
+        """fn(*args), from the cache when it has it. args: numbers, names and lists of bytes."""
+        import hashlib
+        import pickle
+        h = hashlib.sha1(_picture_tag())
+        h.update(fn.__name__.encode())
+        for a in args:
+            for m in (a if isinstance(a, list) else [repr(a).encode()]):
+                h.update(struct.pack("<Q", len(m)))
+                h.update(m)
+        path = os.path.join(self.path, h.hexdigest() + ".pickle")
+        try:
+            with open(path, "rb") as fh:
+                out = pickle.load(fh)
+            os.utime(path)
+            self.hits += 1
+            return out
+        except Exception:  # noqa: BLE001 - not cached (or unreadable): do the step
+            pass
+        out = fn(*args)
+        self.misses += 1
+        try:
+            os.makedirs(self.path, exist_ok=True)
+            with open(path + ".tmp", "wb") as fh:
+                pickle.dump(out, fh, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(path + ".tmp", path)
+        except OSError:
+            pass
+        return out
+
+    def prune(self):
+        try:
+            files = []
+            for n in os.listdir(self.path):
+                st = os.stat(os.path.join(self.path, n))
+                files.append((st.st_mtime, st.st_size, n))
+            total = sum(f[1] for f in files)
+            for _, size, n in sorted(files):
+                if total <= self.LIMIT:
+                    break
+                os.remove(os.path.join(self.path, n))
+                total -= size
+        except OSError:
+            pass
+
+
+_picture_tag_value = None
+
+
+def _picture_tag():
+    """Changes whenever the code behind the cached picture steps changes."""
+    global _picture_tag_value
+    if _picture_tag_value is None:
+        import hashlib
+        import inspect
+        import mw2tex
+        h = hashlib.sha1(b"%d.%d" % sys.version_info[:2])
+        for f in (picture_size, fit_picture, normal_maps_to_dxn, dxt5_normal_to_dxn, _bc4_block):
+            h.update(inspect.getsource(f).encode())
+        with open(mw2tex.__file__, "rb") as fh:
+            h.update(fh.read())
+        _picture_tag_value = h.digest()
+    return _picture_tag_value
 
 
 STREAM_PAK = 9          # imagefile9.pak: mw2tex uses 7 (textures) and 8 (titles and emblems)
@@ -1109,10 +1216,10 @@ class Porter:
         self.x_refs = x_refs
         self.stock_aliases = {}         # sound alias name -> (stock alias list, resident?) (stock_sounds)
         for name, root in x_refs:
-            idx = asset_index(root)
+            idx, aliases = asset_indexes(root)
             base = os.path.splitext(os.path.basename(name))[0]
             order = {id(e[1]): i for i, e in enumerate(root["assets"])}
-            for k, v in alias_index(root).items():
+            for k, v in aliases.items():
                 if k.startswith(b","):
                     continue
                 old = self.stock_aliases.get(k)
@@ -1163,6 +1270,8 @@ class Porter:
         self.extra_assets = []          # asset list entries made while converting, listed before the world
         self.moved_images = []
         self.picked = {}        # stock file -> its asset list entries to copy in
+        self.owners = {}        # stock file -> {id() of an asset dict: its entry} (_pick)
+        self.picture_cache = None       # PictureCache, set by port()
         self.stock_entry_ids = set()    # id() of asset list entries copied whole from stock (teams)
         self.remapped = set()
         self.report = set()     # (type, "dropped" | "defaulted", member) seen while converting
@@ -3685,6 +3794,15 @@ class Porter:
         self.done.add(id(d))
         return d
 
+    def picture_step(self, fn, *args):
+        """fn(*args), a slow picture step, through the picture cache when there is one."""
+        return self.picture_cache.get(fn, *args) if self.picture_cache else fn(*args)
+
+    def fit_picture(self, fmt, w, h, mips, limit):
+        if picture_size(w, h, limit) == (w, h):
+            return w, h, mips
+        return self.picture_step(fit_picture, fmt, w, h, mips, limit)
+
     def image_from_iwd(self, d, name, iwd, path):
         try:
             data = iwd.read(path)
@@ -3693,10 +3811,10 @@ class Porter:
         fmt, w, h, mips, cube = read_iwi(data)
         limit = 1024 if name.startswith(b"loadscreen") else 2048
         if self.pak is not None and not cube and fmt in STREAMABLE and not name.startswith(b"loadscreen"):
-            w, h, mips = fit_picture(fmt, w, h, mips, limit)
+            w, h, mips = self.fit_picture(fmt, w, h, mips, limit)
             if fmt == "DXT5" and (d.get("semantic") == 5 or name.endswith(b"_nml")) \
                     and self.fixes["normal_maps_dxn"]:
-                mips = [dxt5_normal_to_dxn(m) for m in mips]
+                mips = self.picture_step(normal_maps_to_dxn, mips)
                 fmt = "DXN"
                 self.dxn_count = getattr(self, "dxn_count", 0) + 1
             d["category"] = 3
@@ -3705,7 +3823,7 @@ class Porter:
                 self.done.add(id(d))
                 return d
         if not cube:
-            w, h, mips = fit_picture(fmt, w, h, mips, limit)
+            w, h, mips = self.fit_picture(fmt, w, h, mips, limit)
             k = self.mip_drop.get(name, 0)
             if k and len(mips) > k:
                 mips, w, h = mips[k:], max(1, w >> k), max(1, h >> k)
@@ -3717,7 +3835,7 @@ class Porter:
         # (semantic 5, or named _nml: mp_afghan's wavy_nml, semantic 3, is DXN in stock too)
         if fmt == "DXT5" and not cube and (d.get("semantic") == 5 or name.endswith(b"_nml")) \
                 and self.fixes["normal_maps_dxn"]:
-            mips = [dxt5_normal_to_dxn(m) for m in mips]
+            mips = self.picture_step(normal_maps_to_dxn, mips)
             fmt = "DXN"
             self.dxn_count = getattr(self, "dxn_count", 0) + 1
         self.images.build(d, fmt, w, h, mips, cube)
@@ -4035,11 +4153,14 @@ class Porter:
         """Pick src's asset list entries named (type, name), with every entry they point into."""
         ents = src["assets"]
         pos = {id(e): i for i, e in enumerate(ents)}
-        owner = {}
-        for i, e in enumerate(ents):
-            for o in iter_objects(e[1]):
-                if isinstance(o, dict) and "_asset" in o:
-                    owner.setdefault(id(o), i)
+        owner = self.owners.get(id(src))
+        if owner is None:
+            # (Kept for the next pick from src: both teams and the titles can come from one file.)
+            owner = self.owners[id(src)] = {}
+            for i, e in enumerate(ents):
+                for o in iter_objects(e[1]):
+                    if isinstance(o, dict) and "_asset" in o:
+                        owner.setdefault(id(o), i)
         sel = set(i for i, e in enumerate(ents) if isinstance(e[1], dict) and (e[0], _name(e[1])) in names)
         todo = list(sel)
         while todo:
@@ -4067,6 +4188,7 @@ class Porter:
         sel = self.picked.pop(id(src), None)
         if not sel:
             return
+        self.owners.pop(id(src), None)     # copying changes the entries' pointers
         ents = src["assets"]
         new = [ents[i] for i in sorted(sel)]
         self.stock_entry_ids.update(id(e) for e in new)
@@ -4497,6 +4619,37 @@ def effect_index(root):
     return out
 
 
+_ZONE_NAME = re.compile(rb"[\x20-\x7e]{1,255}")
+
+
+def zone_names(path):
+    """Every name (printable text between two NULs) in a stock file's zone, kept in
+    mw2port_cache next to it: effect_donors looks the map's effects up in every stock map,
+    which otherwise means unpacking all of them for each conversion."""
+    st = os.stat(path)
+    base = os.path.basename(path).lower() + ".names."
+    folder = os.path.join(os.path.dirname(os.path.abspath(path)), STOCK_CACHE_DIR)
+    cache = os.path.join(folder, "%s%x.%x.txt" % (base, st.st_size, st.st_mtime_ns))
+    try:
+        with open(cache, "rb") as fh:
+            return set(fh.read().split(b"\n"))
+    except OSError:
+        pass
+    _, zone = mw2ff.read_fastfile(path)
+    names = set(t for t in zone.split(b"\0")[1:-1] if _ZONE_NAME.fullmatch(t))
+    try:
+        os.makedirs(folder, exist_ok=True)
+        with open(cache + ".tmp", "wb") as fh:
+            fh.write(b"\n".join(sorted(names)))
+        os.replace(cache + ".tmp", cache)
+        for n in os.listdir(folder):
+            if n.startswith(base) and n != os.path.basename(cache):
+                os.remove(os.path.join(folder, n))
+    except OSError:
+        pass
+    return names
+
+
 def effect_donors(root, ref_roots, candidates, log=print, most=2):
     """Stock 360 maps (of candidates) to read as well for the map's effects that the stock
     files already read don't have: at most `most`, those carrying the most of them."""
@@ -4508,8 +4661,12 @@ def effect_donors(root, ref_roots, candidates, log=print, most=2):
     if not want or not candidates:
         return []
     hits = {}
+    plain = all(_ZONE_NAME.fullmatch(n) for n in want)
     for p in candidates:
         try:
+            if plain:
+                hits[p] = want & zone_names(p)
+                continue
             ff, zone = mw2ff.read_fastfile(p)
         except Exception:
             continue
@@ -4713,11 +4870,14 @@ def check_pools(root, refs, log, warn):
 
 
 def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None,
-         game_iwds=(), texture_budget=0, card_pak=False, fx_paths=(), fixes=None, pak_path=None):
+         game_iwds=(), texture_budget=0, card_pak=False, fx_paths=(), fixes=None, pak_path=None,
+         measures=True, cache_dir=None):
     """loaded: {path: tree} of stock files already read (load_stock), to reuse.
     game_iwds: the PC game's .iwd files, for pictures the map's own .iwd doesn't have.
     fx_paths: stock 360 maps to take the map's effects from (those carrying the most of them
-    are read too). fixes: {name: bool} of FIXES (default all on)."""
+    are read too). fixes: {name: bool} of FIXES (default all on). measures: log a map's
+    measures against the stock maps (map_limits_report) after writing it. cache_dir: a
+    mw2port_cache folder to keep slow picture steps in between conversions (PictureCache)."""
     fixes = fix_set(fixes)
     if not fixes["texture_budget"]:
         texture_budget = 0
@@ -4753,6 +4913,8 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
                                                  "imagefile%d.pak" % STREAM_PAK))
     porter = Porter(root, refs, iwd, log, [zipfile.ZipFile(p) for p in game_iwds], texture_budget,
                     fixes, pak)
+    if cache_dir:
+        porter.picture_cache = PictureCache(os.path.join(cache_dir, "pictures"))
     off = [k for k, v in fixes.items() if not v and DEFAULT_FIXES[k]]
     on = [k for k, v in fixes.items() if v and not DEFAULT_FIXES[k]]
     if off:
@@ -4760,6 +4922,12 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     if on:
         log("  switched on (off by default): %s" % ", ".join(on))
     porter.convert()
+    if porter.picture_cache:
+        c = porter.picture_cache
+        if c.hits:
+            log("  %d of %d slow picture steps ready from last time (in %s)"
+                % (c.hits, c.hits + c.misses, STOCK_CACHE_DIR))
+        c.prune()
     if porter.map_name:
         porter.add_teams(refs, map_teams(pc_path, teams))
         if card_pak:
@@ -4773,9 +4941,9 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     w.map_rel = lambda r: map_rel(r, porter.P, porter.X)
     out = w.write()
     out = reserve_callback_block(out, porter)
-    _write_x360(out, out_path, pak_table(out, out_path, porter.root, w.starts, w.written))
+    _write_x360(out, out_path, pak_table(out, porter.root, w.starts, w.written))
     log("wrote %s (%d bytes of zone)" % (out_path, len(out)))
-    if any(e[0] == "gfx_map" for e in root["assets"]):
+    if measures and any(e[0] == "gfx_map" for e in root["assets"]):
         # Measured on the file as written (as the console loads it).
         try:
             with no_gc():
@@ -4793,7 +4961,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
 
 def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
              texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None, pak_path=None,
-             write_card_pak=True):
+             write_card_pak=True, measures=True):
     """Convert a PC map (its .ff, and _load.ff / .iwd / .arena next to it when there) into
     out_dir, picking what it needs from the stock 360 files given: code_post_gfx_mp.ff, a
     stock map (render settings, shaders) and the stock maps that carry the map's teams.
@@ -4806,6 +4974,7 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
     if not maps:
         raise PortError("at least one stock 360 map (for example mp_favela.ff) is needed")
     template = stock.get("mp_favela.ff") or maps[0]
+    cache_dir = os.path.join(os.path.dirname(os.path.abspath(cpg)), STOCK_CACHE_DIR)
     loads = sorted(p for n, p in stock.items() if n.endswith("_load.ff"))
     base = os.path.splitext(pc_path)[0]
     name = os.path.basename(base)
@@ -4847,7 +5016,7 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
             out = os.path.join(out_dir, name + "_load.ff")
             try:
                 port(base + "_load.ff", out, iwd, [cpg, template, load_ref], log, loaded=loaded,
-                     game_iwds=game_iwds, fixes=fixes, pak_path=pak_path)
+                     game_iwds=game_iwds, fixes=fixes, pak_path=pak_path, cache_dir=cache_dir)
                 written.append(out)
             except (ValueError, PortError, mw2ff.zone_mod.ZoneError) as e:
                 # The map works without it: the game shows a plain loading screen.
@@ -4859,7 +5028,7 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
     out = os.path.join(out_dir, name + ".ff")
     port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded, game_iwds=game_iwds,
          texture_budget=texture_budget, card_pak=bool(card_ui), fx_paths=maps, fixes=fixes,
-         pak_path=pak_path)
+         pak_path=pak_path, measures=measures, cache_dir=cache_dir)
     written.append(out)
     if fix_set(fixes)["stream_pictures"] and os.path.exists(pak_path):
         written.append(pak_path)
@@ -4875,14 +5044,14 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
 
 def port_map_variants(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
                       texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None,
-                      write_card_pak=True):
+                      write_card_pak=True, measures=True):
     """The map as port_map makes it with the fixes given, plus one test variant per fix that
     is on, with just that fix switched off: out_dir/variants/no_<fix>/. One batch of files to
     try on the console, to find which fix helps or hurts. Returns the paths written; a
     variant that fails to convert doesn't stop the others."""
     fixes = fix_set(fixes)
     written = port_map(pc_path, out_dir, stock_paths, teams, log, game_iwds, texture_budget,
-                       card_ui, fixes, write_card_pak=write_card_pak)
+                       card_ui, fixes, write_card_pak=write_card_pak, measures=measures)
     main_pak = os.path.join(os.path.dirname(os.path.normpath(os.path.abspath(out_dir))),
                             "imagefile%d.pak" % STREAM_PAK)
     labels = {k: label for k, label, _ in FIXES}
@@ -4894,7 +5063,7 @@ def port_map_variants(pc_path, out_dir, stock_paths, teams=None, log=print, game
             # Titles and emblems: the pak written next to the main file serves every variant.
             files = [f for f in port_map(pc_path, vdir, stock_paths, teams, log, game_iwds,
                                          texture_budget, None, dict(fixes, **{k: False}),
-                                         pak_path=main_pak)
+                                         pak_path=main_pak, measures=measures)
                      if not f.endswith(".pak")]
         except (PortError, mw2ff.zone_mod.ZoneError, ValueError) as e:
             log("  variant no_%s stopped: %s" % (k, e))
@@ -4955,7 +5124,7 @@ def rewrite_stock(path, out_path, log=print):
     out = w.write()
     holder = type("Root", (), {"root": root})()
     out = reserve_callback_block(out, holder)
-    _write_x360(out, out_path, pak_table(out, out_path, root, w.starts, w.written))
+    _write_x360(out, out_path, pak_table(out, root, w.starts, w.written))
     log("wrote %s (%d bytes of zone; same bytes as the stock zone: %s)"
         % (out_path, len(out), "yes" if out == mw2ff.read_fastfile(path)[1] else "no"))
     return out_path
@@ -4994,7 +5163,9 @@ X360_HEAD = bytes.fromhex("49576666753130300000010d0101ca3ec038c2e4a000000001")
 
 def _write_x360(zone, path, table=()):
     import zlib
-    stream = zlib.compress(zone, 9)
+    # Level 6 (zlib's default): several times faster than 9 on a whole map for a file only a
+    # little bigger; the console inflates either.
+    stream = zlib.compress(zone, 6)
     head = X360_HEAD + struct.pack(">I", len(table)) + b"".join(struct.pack(">III", *t) for t in table)
     total = len(head) + 8 + len(stream)
     # The second size also counts the pictures read from imagefile1.pak while loading.
@@ -5003,7 +5174,7 @@ def _write_x360(zone, path, table=()):
         f.write(head + struct.pack(">II", total, total + extra) + stream)
 
 
-def pak_table(zone, out_path, root, starts, written=None):
+def pak_table(zone, root, starts, written=None):
     """Stock pictures copied in whose pixels live in the disc's imagefile*.pak files: the
     container lists where, 4 entries per picture in the order the zone has them."""
     import mw2tex
@@ -5030,9 +5201,8 @@ def pak_table(zone, out_path, root, starts, written=None):
         # Every written copy, in file order: a stock picture two copied-in models share is
         # written once for each (stock mp_rust's desertshrubs with stock_models on).
         paks = [d for _, d in sorted(written, key=lambda t: t[0]) if "_pak" in d]
-    _write_x360(zone, out_path)
     with contextlib.redirect_stdout(io.StringIO()):
-        in_file = [i["name"] for i in mw2tex.FastFile(out_path).images if i["pak"]]
+        in_file = [i["name"] for i in mw2tex.FastFile.from_zone(zone).images if i["pak"]]
     found = len(in_file)
     if found != len(paks):
         ours = Counter((_name(o) or b"").decode("latin-1").lstrip(",") for o in paks)

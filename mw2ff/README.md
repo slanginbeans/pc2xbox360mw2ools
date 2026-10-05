@@ -69,6 +69,10 @@ The first conversion reads every stock file it uses, which takes a while, and ke
 in `mw2port_cache` next to them, so later conversions start much sooner. That folder takes about
 as much room as the stock files unpacked (a few hundred MB). Deleting it is safe: it's made again.
 A stock file that changes, or a tools update that reads files differently, is read again by itself.
+It also keeps the names each stock map holds (for finding the map's effects without unpacking
+every stock map) and, in `mw2port_cache\pictures`, the slow picture steps (resizing pictures,
+normal maps to DXN), so converting a map again, say with other switches, skips them. The
+pictures folder is kept under 2 GB (the least recently used go first).
 
 **Titles and emblems.** In a match the game draws them from the map's own copy, so converted maps carry
 the stock ones. With **Take titles and emblems from imagefile8.pak** ticked, a converted map points them
@@ -114,7 +118,7 @@ console as converted maps, the writer is at fault; if it plays like the stock ma
 
 ### Fixes and test variants
 
-After each map the converter logs its measures against the 16 stock 360 maps (placed models, world surfaces and triangles, see-through/decal surfaces, collision, materials, pictures and their memory, models within draw range of a spot, and more), with the stock highest and median, and flags any measure past the stock highest with what it costs on the console.
+After each map the converter logs its measures against the 16 stock 360 maps (placed models, world surfaces and triangles, see-through/decal surfaces, collision, materials, pictures and their memory, models within draw range of a spot, and more), with the stock highest and median, and flags any measure past the stock highest with what it costs on the console. It reads the written map back to measure it, which takes 10-20 seconds on a big map: untick **Map measures report** on the converter page to skip it while you're only trying switches (the files are the same either way).
 
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
 Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
