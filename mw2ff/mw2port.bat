@@ -82,12 +82,14 @@ if errorlevel 1 (
 call %PY% -c "import numpy" >nul 2>nul
 if errorlevel 1 (
     echo Installing numpy, which the map converter uses to encode sounds for the 360...
-    call %PY% -m pip install --user numpy
+    call %PY% -m pip install --user --only-binary=:all: numpy
+    if errorlevel 1 echo numpy couldn't be installed ^(above^): only Encode PC sounds needs it.
 )
 call %PY% -c "import miniaudio" >nul 2>nul
 if errorlevel 1 (
     echo Installing miniaudio, which the map converter uses to read .mp3 sounds...
-    call %PY% -m pip install --user miniaudio
+    call %PY% -m pip install --user --only-binary=:all: miniaudio
+    if errorlevel 1 echo miniaudio couldn't be installed ^(above^): only Encode PC sounds needs it.
 )
 echo Starting the map converter. Leave this window open while you use it.
 call %PY% "%APP%\mw2ff\mw2port_gui.py" %*
