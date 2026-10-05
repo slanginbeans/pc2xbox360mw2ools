@@ -859,6 +859,12 @@ class TreeWriter(zone_mod.Reader):
             d = self._forward(d, asset=True)
             val = INSERT if in_temp and "_slot" in d else FOLLOWING
             self._patch(buf, loc, val)
+        if val == FOLLOWING and in_temp and isinstance(d, dict) and "_slot" in d and d.get("_forward"):
+            # Pointed at from elsewhere too (written at its first pointer): it keeps a slot, the
+            # place later pointers name (its data is in the temporary block, which the game
+            # reuses for the next asset).
+            val = INSERT
+            self._patch(buf, loc, val)
         if self.dedupe and val in (FOLLOWING, INSERT) and isinstance(d, dict) and id(d) in self._first:
             # Written already (port.py's copy_in puts the asset itself wherever the stock file
             # pointed back at it): point at the pointer that first held it, which the game sets
@@ -894,6 +900,15 @@ class TreeWriter(zone_mod.Reader):
                 inst = self.load_struct(info, None, True)
                 self.assets.append((info, inst, start, self.pos))
             else:
+                if isinstance(d, Ref) and isinstance(d.target, dict) and not d.rel \
+                        and id(d.target.get("_slot")) in self.loc:
+                    # A temp asset written already (where its first pointer took it): point at
+                    # its slot, which the game sets to the asset, not at its data, which sits
+                    # in the temporary block the game reuses for the next asset (mp_waw_castle
+                    # with merge_decals: 341 composite material pictures, crash on load).
+                    r = Ref(d.val)
+                    r.target, r.rel, r.t = d.target["_slot"], 0, None
+                    d = r
                 self._obj = d
                 self.alias(buf, loc, val)
                 self._obj = NONE
