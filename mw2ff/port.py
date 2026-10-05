@@ -220,6 +220,14 @@ FIXES = [
      "type among them) are drawn with Infinity Ward's own 360 copy instead of the converted one. "
      "Untick to draw the converted models instead (if they then flicker and the stock ones "
      "didn't, the converted models are at fault)."),
+    ("destructible_parts", "Breakable car parts (test)",
+     "The parts a destructible car or prop needs when it breaks (its destroyed model, hood, "
+     "doors, wheels, ...: the names the 360's own destructible script asks for) that neither the "
+     "map nor the always-loaded files have come from a stock 360 map that has them; a part no "
+     "stock map has in the car's color is copied in another color and painted with the map's own "
+     "material for its color. CoD4 ports carry other names for these (mp_backlot's silver and "
+     "yellow sedans and brown wagons), so blowing one up showed a stand-in model. mp_backlot: 27 "
+     "parts from mp_checkpoint and mp_invasion. Off by default until tried on a console."),
     ("stock_streamed_pictures", "Pictures the 360 already has, streamed (test)",
      "A picture the map takes from the PC game's files (not its own .iwd) that a stock 360 map "
      "streams under the same name streams from the 360's own picture packs (imagefile1-4.pak, "
@@ -321,7 +329,7 @@ DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_bo
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
                "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes", "ground_lit_flag",
                "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin",
-               "swap_models_test", "encode_sounds", "stock_streamed_pictures"}
+               "swap_models_test", "encode_sounds", "stock_streamed_pictures", "destructible_parts"}
 TREE_BOX_MARGIN = 64            # units, for the tree_box_margin test switch
 # MB of XMA the encode_sounds switch makes at most (stock maps carry 4 to 8 MB of sounds).
 ENCODED_SOUND_BUDGET = 12
@@ -1254,6 +1262,7 @@ class Porter:
         self.model_swap = {}            # id() of a converted model -> the stock model's list entry
         self.stock_copied = Counter()   # materials / pictures copied whole (stock_materials, stock_pictures)
         self.stock_streamed = {}        # picture name -> a stock map's streamed one (stock_streamed_pictures)
+        self.breakables = []            # destructible_plan: models to copy in (destructible_parts)
         self.swapped_rows = set()       # light grid row data already put in 360 byte order
         self.pc_sort = {}               # id() of a material -> the PC's sort key (pc_sort_keys)
         self.pc_cull = {}               # id() of a two-sided PC material -> its culling (pc_face_culling)
@@ -1732,6 +1741,8 @@ class Porter:
             # (Shader sets first: the materials point at them.)
             ents[at:at] = sorted(self.extra_assets, key=lambda e: e[0] != "techset")
             self.pictures_before_composites(ents, at, at + len(self.extra_assets))
+        if self.breakables:
+            self.add_breakables(ents)
         if self.from_game:
             self.log("  %d pictures come from the PC game's own .iwd files" % self.from_game)
         if self.two_sided:
@@ -4572,6 +4583,86 @@ class Porter:
                             todo.append(j)
         self.picked.setdefault(id(src), set()).update(sel)
 
+    def add_breakables(self, ents):
+        """Copy in the models the map's destructible entities need (self.breakables, from
+        destructible_plan), after the map's own assets: each named as the 360's script asks for
+        it, a part taken in another color painted with the map's material for its own color
+        (mc/mtl_80s_econ_red -> mc/mtl_80s_econ_silv), and a material the map has under the same
+        name taken from the map. Copies of one stock model share its materials and geometry."""
+        ours = {}
+        for e in ents:
+            for o in iter_objects(e[1]):
+                if isinstance(o, dict) and o.get("_asset") == "Material":
+                    n = asset_name(o)
+                    if n and not n.startswith(b","):
+                        ours.setdefault(n.lower(), o)
+        roots = dict(self.x_refs)
+        made, painted = [], 0
+        for need, src, path, swap in self.breakables:
+            root = roots.get(path)
+            hit = None
+            for e in (root or {}).get("assets", ()):
+                if e[0] == "xmodel" and isinstance(e[1], dict) and (_name(e[1]) or b"").lower() == src.encode():
+                    hit = e[1]
+                    break
+            if hit is None:
+                continue
+            base = self.copy_in(hit)
+            # A material named through another model's list ("the same as its second")
+            # becomes the material itself, so the copy stands alone.
+            ml = base.get("@", {}).get(("materialHandles", ()))
+            for i, x in enumerate(ml if isinstance(ml, list) else ()):
+                while isinstance(x, Ref) and isinstance(x.target, PtrList):
+                    x = _asset_in_slot(x)
+                if isinstance(x, dict):
+                    ml[i] = x
+            shared = {}
+            for o in iter_objects(base):
+                if isinstance(o, dict) and o.get("_asset") not in (None, "XModel"):
+                    for x in iter_objects(o):
+                        shared[id(x)] = x
+                        if isinstance(x, dict) and "_slot" in x:
+                            shared[id(x["_slot"])] = x["_slot"]
+            m = copy.deepcopy(base, shared)
+            m.pop("_slot", None)
+            self.remap_bones(m, root["script_strings"])
+            _set_name(m, need.encode())
+            painted += self.paint_breakable(m, swap, ours)
+            self.done.add(id(m))
+            made.append(tree.AssetEntry(["xmodel", m]))
+        at = next((i for i, e in enumerate(ents) if e[0] == "gfx_map"), len(ents))
+        ents[at:at] = made
+        if made:
+            self.log("  test: %d breakable parts copied in (%d paint materials the map's own)"
+                     % (len(made), painted))
+
+    def paint_breakable(self, model, swap, ours):
+        """Point model's materials at the map's own: (swap: (stock color, map color)) the one
+        with the map's color, else the same-named one. Returns how many changed."""
+        ml = model.get("@", {}).get(("materialHandles", ()))
+        ml = ml.target if isinstance(ml, Ref) else ml
+        if not isinstance(ml, list):
+            return 0
+        count = 0
+        for i, x in enumerate(ml):
+            m = x
+            if isinstance(m, Ref):
+                m = _ptr_array_value(m) or (m.target if isinstance(m.target, tree.AssetEntry)
+                                            else _asset_in_slot(m))
+                m = m[1] if isinstance(m, tree.AssetEntry) else m
+            n = (asset_name(m) or b"").lower() if isinstance(m, dict) else b""
+            if not n:
+                continue
+            mine = None
+            if swap:
+                a, b = swap
+                mine = ours.get(re.sub(rb"_%s(?=_|$)" % a.encode(), b"_" + b.encode(), n))
+            mine = mine or ours.get(n)
+            if mine is not None and mine is not m:
+                ml[i] = mine
+                count += 1
+        return count
+
     def _copy_picked(self, src):
         """Copy the entries picked from src in their stock order (both teams of one file
         together: a later model can point into an earlier one's parts)."""
@@ -5112,8 +5203,18 @@ def zone_names(path):
 def stock_techset_names(path):
     """The (lower-case) names of the shader sets a stock file has, kept in mw2port_cache next
     to it (worked out once from its tree); empty if it can't be read."""
+    return _stock_names(path, "techsets", "MaterialTechniqueSet")
+
+
+def stock_model_names(path):
+    """The (lower-case) names of the models (XModel) a stock file has, kept like
+    stock_techset_names."""
+    return _stock_names(path, "models", "XModel")
+
+
+def _stock_names(path, tag, typ):
     st = os.stat(path)
-    base = os.path.basename(path).lower() + ".techsets."
+    base = os.path.basename(path).lower() + "." + tag + "."
     folder = os.path.join(os.path.dirname(os.path.abspath(path)), STOCK_CACHE_DIR)
     cache = os.path.join(folder, "%s%x.%x.txt" % (base, st.st_size, st.st_mtime_ns))
     try:
@@ -5123,7 +5224,7 @@ def stock_techset_names(path):
         pass
     try:
         with no_gc():
-            names = set(pool_names(load_stock(path)).get("MaterialTechniqueSet", ()))
+            names = set(pool_names(load_stock(path)).get(typ, ()))
     except Exception:  # noqa: BLE001 - a file that can't be read offers nothing
         return set()
     try:
@@ -5137,6 +5238,109 @@ def stock_techset_names(path):
     except OSError:
         pass
     return names
+
+
+def map_entity_text(root):
+    """The entity string (MapEnts) of a tree, as text ("" if it has none)."""
+    for o in iter_objects(root["assets"]):
+        if isinstance(o, dict) and o.get("_asset") == "MapEnts":
+            lf = o.get("@", {}).get(("entityString", ()))
+            lf = lf.target if isinstance(lf, Ref) else lf
+            if isinstance(lf, Leaf):
+                return lf.raw.split(b"\0", 1)[0].decode("latin-1")
+    return ""
+
+
+def destructible_names(types_script, wanted):
+    """{destructible type: (names its 360 script function uses, colors that function is
+    called with)} for the destructible types wanted, read from the 360's
+    common_scripts/_destructible_types.gsc: the function each type's case calls, with the
+    color it's given put into the names it builds ("vehicle_80s_sedan1_" + color + "_hood")."""
+    text = types_script.decode("latin-1") if isinstance(types_script, bytes) else types_script
+    cases = {}          # type -> (function, its argument)
+    for m in re.finditer(r'case\s+"([^"]+)"\s*:\s*(\w+)\s*\(\s*(?:"([^"]*)")?\s*\)\s*;', text):
+        cases.setdefault(m.group(1).lower(), (m.group(2), m.group(3)))
+    colors = {}
+    for f, arg in cases.values():
+        if arg is not None:
+            colors.setdefault(f, set()).add(arg)
+    out = {}
+    for t in wanted:
+        hit = cases.get(t.lower())
+        if hit is None:
+            continue
+        f, arg = hit
+        m = re.search(r"(?m)^%s\s*\(\s*(\w*)\s*\)\s*\n\{" % re.escape(f), text)
+        if m is None:
+            continue
+        end = text.find("\n}", m.end())
+        body = text[m.end():end if end >= 0 else len(text)]
+        param = m.group(1)
+        names = set()
+        part = r'"[^"\n]*"' + (r"|\b%s\b" % param if param else "")
+        for e in re.finditer(r"(?:%s)(?:\s*\+\s*(?:%s))*" % (part, part), body):
+            pieces = re.findall(part, e.group(0))
+            if not any(p.startswith('"') for p in pieces):
+                continue
+            names.add("".join(p[1:-1] if p.startswith('"') else (arg or "") for p in pieces))
+        out[t] = (names, colors.get(f, set()))
+    return out
+
+
+def destructible_plan(pc_root, types_script, have, stock_paths):
+    """The models the map's destructible entities (destructible_type) need that neither the map
+    nor the always-loaded files have: [(name needed, stock name to copy, stock file,
+    (stock color, map color) or None)]. A model no stock file has is taken in another color the
+    function knows (vehicle_80s_sedan1_red_hood for _silv_hood), its paint then the map's own.
+    have: lower-case model names the map and the always-loaded files have."""
+    types = set(re.findall(r'"destructible_type"\s+"([^"]+)"', map_entity_text(pc_root)))
+    if not types:
+        return [], {}
+    found = {p: stock_model_names(p) for p in stock_paths}
+    plan, missing = [], {}
+    for t, (names, colors) in sorted(destructible_names(types_script, types).items()):
+        own = next((c for c in colors if t.lower().endswith("_" + c.lower())), None)
+        for n in sorted(names):
+            low = n.lower()
+            if low == t.lower() or "/" in low or " " in low or not low.startswith(
+                    t.lower().rsplit("_", 1)[0] if own else t.lower()) or low.encode() in have:
+                continue
+            tries = [(low, None)]
+            if own:
+                tries += [(low.replace("_%s_" % own.lower(), "_%s_" % c.lower(), 1),
+                           (c.lower(), own.lower())) for c in sorted(colors) if c != own]
+            for src, swap in tries:
+                p = next((p for p in stock_paths if src.encode() in found[p]), None)
+                if p is not None and (swap is None or src != low):
+                    plan.append((low, src, p, swap))
+                    break
+            else:
+                if own and "_%s_" % own.lower() in low:
+                    missing.setdefault(t, []).append(low)
+    return plan, missing
+
+
+def destructible_donors(root, ref_paths, stock_paths, read, log=print):
+    """destructible_plan for PC map root, with the 360's destructible script and model names
+    from the always-loaded files among ref_paths (read: path -> tree)."""
+    script, have = None, set(n.lower() for n in pool_names(root).get("XModel", ()))
+    for p in ref_paths:
+        if os.path.splitext(os.path.basename(p))[0].lower() not in RESIDENT:
+            continue
+        have |= stock_model_names(p)
+        for e in read(p)["assets"]:
+            if e[0] == "rawfile" and isinstance(e[1], dict) and \
+                    (_name(e[1]) or b"").lower() == b"common_scripts/_destructible_types.gsc":
+                script = _rawfile_text(e[1])
+    if script is None:
+        return []
+    plan, missing = destructible_plan(root, script, have, list(stock_paths))
+    if plan:
+        log("  breakable parts the map lacks: %d models from %s" % (
+            len(plan), ", ".join(sorted(set(os.path.basename(p) for _, _, p, _ in plan)))))
+    for t, names in sorted(missing.items()):
+        log("  note: no stock map has %s's %s" % (t, ", ".join(names[:6]) + (" ..." if len(names) > 6 else "")))
+    return plan
 
 
 def stock_streamed_images(path):
@@ -5561,6 +5765,12 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
                                fixes["merge_decals"], log)
         ref_paths += extra
         donors.update(extra)
+    breakables = []
+    if fx_paths and fixes["destructible_parts"]:
+        breakables = destructible_donors(root, ref_paths, fx_paths, read, log)
+        extra = sorted(set(p for _, _, p, _ in breakables) - set(ref_paths))
+        ref_paths += extra
+        donors.update(extra)
     for p in ref_paths:
         refs.append((p, read(p)))
     if not iwd_path:
@@ -5577,6 +5787,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
                     fixes, pak)
     if cache_dir:
         porter.picture_cache = PictureCache(os.path.join(cache_dir, "pictures"))
+    porter.breakables = breakables
     if fixes["stock_streamed_pictures"]:
         for p in list(ref_paths) + [p for p in fx_paths if p not in ref_paths]:
             for k, v in stock_streamed_images(p).items():
