@@ -106,6 +106,8 @@ console as converted maps, the writer is at fault; if it plays like the stock ma
 
 ### Fixes and test variants
 
+After each map the converter logs its measures against the 16 stock 360 maps (placed models, world surfaces and triangles, see-through/decal surfaces, collision, materials, pictures and their memory, models within draw range of a spot, and more), with the stock highest and median, and flags any measure past the stock highest with what it costs on the console.
+
 Some conversion steps are fixes for problems seen on the console, and not all of them are proven.
 Each can be switched off on the converter page (**Fixes (for testing)**), or from a command prompt
 with `--fix-off NAME` (repeatable). All are on by default except `portal_multiply` (HDR portals are hidden instead) and the test switches `stream_pictures`, `hide_foliage`, `draw_distance_cap`, `no_cull_distance`, `room_box_bounds`, `merge_decals`, `skip_lod0`, `one_room`, `plain_pictures`, `stock_world`, `stock_materials`, `stock_pictures`, `merge_duplicates`, `model_box_bounds`, `rebuild_trees`, `huge_tree_boxes`, `ground_lit_flag`, `huge_leaf_boxes`, `huge_inner_boxes`, `tree_box_margin` and `swap_models_test` (`--fix-on NAME`). On the converter page the switches fold away under **Switches**, which says how many differ from the defaults:
@@ -127,6 +129,7 @@ with `--fix-off NAME` (repeatable). All are on by default except `portal_multipl
 | `lighting_origin` | A placed model whose lighting origin is empty (0,0,0) takes its box centre, as stock maps have it; the 360 lights each static model from the light grid at that point, and custom-compiled maps (mp_ancient: all 488) leave it at the world origin |
 | `bone_bounds` | On by default: a model whose bone box (XBoneInfo) is broken (negative half-size, misses vertices, or radius squared not its half-diagonal's) gets it rebuilt from its vertices, as all 6,466 stock 360 bone boxes are. mp_ancient's PC file has every model's half-size negative on two axes; its boulders, bushes and grass vanished depending on where they were seen from |
 | `tree_list_slices` | On by default: every culling tree node's list of static models is a slice of its room's root list, as in every stock 360 map (16,017 of 16,017). The 360 reorders placed models on load and renumbers only the root lists; lists kept apart (mp_ancient 213 of 215, mp_backlot 1,811 of 1,854) kept old numbers on the console and named other models, so models vanished depending on the nodes in view |
+| `probe_brightness` | On by default: a map compiled without reflection probes (all probes the same stand-in picture: mp_waw_castle 20, mp_backlot 35) gets them scaled to stock 360 probes' brightness (color level 70; the stand-in converted to 160-190). Shiny surfaces and the player's gun reflect them: sandbags and scopes gleamed and the map looked washed out. Maps with real probes are left as they are |
 | `map_effects` | Keep the effects the map's createfx script places (off: left out, its ambient sounds stay; for testing, e.g. the dust haze) |
 | `map_fog` | Keep the map's distance fog (off: its `setExpFog` calls are commented out) |
 | `hide_foliage` | Test, off by default: foliage static models never show (to test whether too many models in view make the 360 drop some) |

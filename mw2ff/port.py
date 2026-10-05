@@ -126,6 +126,13 @@ FIXES = [
      "instead, as stock 360 maps have it (mp_terminal: 4,032 of 4,032). The 360 lights each "
      "static model from the light grid at that point; custom-compiled maps (mp_ancient: all "
      "488) leave it at the world origin, so every model was lit as if it stood there."),
+    ("probe_brightness", "Stand-in reflection probes at stock brightness",
+     "A map compiled without reflection probes (every probe the same stand-in picture: "
+     "mp_waw_castle's 20, mp_backlot's 35) gets them scaled to the brightness of stock 360 "
+     "probes (an average color level of %d; the stand-in converts to about 160-190). Every "
+     "shiny surface, and the player's gun, reflects the map's probes: too bright, sandbags and "
+     "scopes gleamed and the whole map looked washed out. Maps with real probes are left as "
+     "they are." % 70),
     ("tree_list_slices", "Culling tree model lists inside the room's list",
      "Every culling tree node's list of static models becomes a slice of its room's root list, "
      "as in every stock 360 map (16,017 of 16,017 lists): the root list is laid out so each node's "
@@ -590,6 +597,9 @@ def _dec3n(v):
 # channel is always 255); the 360 stores plain color. color = rgb * alpha / 255 * PROBE_SCALE
 # matches stock 360 probes' brightness (and turns the PC's "no probe" red into the 360's).
 PROBE_SCALE = 2.5
+# Stock 360 probes' average color level (mp_rust, mp_terminal, mp_afghan, mp_estate, mp_quarry:
+# 67, 70, 78, 71, 66), for maps whose probes are all one stand-in picture (probe_brightness).
+PROBE_STOCK_LEVEL = 70
 
 
 def decode_probe(bgra):
@@ -1864,6 +1874,40 @@ class Porter:
                         n += 1
         self.log("  test: %d culling tree node boxes grown by %d units" % (n, margin))
 
+    def dim_standin_probes(self, world):
+        """probe_brightness: when every reflection probe is the same picture (the map was
+        compiled without probes), scale their color to stock 360 probes' average level."""
+        def tgt(c):
+            return c.target if isinstance(c, Ref) else c
+        draw = world.get("draw") or {}
+        probes = tgt(draw.get("@", {}).get(("reflectionProbes", ()))) or []
+        leaves = []
+        for c in probes:
+            im = tgt(c)
+            if isinstance(im, tree.InsertSlot):
+                im = im.asset
+            px = tgt(im.get("@", {}).get(("pixels", ()))) if isinstance(im, dict) else None
+            if not isinstance(px, Leaf) or not px.raw or len(px.raw) % 4:
+                return
+            leaves.append(px)
+        if len(leaves) < 2 or any(l.raw != leaves[0].raw for l in leaves[1:]):
+            return
+        raw = leaves[0].raw          # A8R8G8B8: alpha first, then the color
+        n = len(raw) // 4
+        level = (sum(raw[1::4]) + sum(raw[2::4]) + sum(raw[3::4])) / (3.0 * n)
+        if level <= PROBE_STOCK_LEVEL:
+            return
+        k = PROBE_STOCK_LEVEL / level
+        lut = bytes(min(255, int(v * k + 0.5)) for v in range(256))
+        out = bytearray(raw)
+        for i in (1, 2, 3):
+            out[i::4] = raw[i::4].translate(lut)
+        out = bytes(out)
+        for l in leaves:
+            l.raw = out
+        self.log("  %d stand-in reflection probes (the map has no real ones) dimmed to stock "
+                 "brightness (color level %.0f -> %d)" % (len(leaves), level, PROBE_STOCK_LEVEL))
+
     def slice_tree_lists(self, world):
         """tree_list_slices: each room's culling tree keeps its nodes and the set of static models
         each node lists, but the lists are laid out as stock 360 maps have them: the root's list
@@ -2495,6 +2539,8 @@ class Porter:
             self.swap_models(d, *SWAP_MODELS)
         if self.fixes["tree_list_slices"]:
             self.slice_tree_lists(d)
+        if self.fixes["probe_brightness"]:
+            self.dim_standin_probes(d)
         ch = d["@"]
         # One bit per room ("cell has sun-lit surfaces"), 32 to a word. Stock 360 maps always
         # carry it (all zero in every one checked: mp_rust 1 word, mp_favela 2) and the renderer
@@ -4462,6 +4508,136 @@ def pool_names(root, cache=True):
     return out
 
 
+# The highest and the median of each measure over the 16 stock 360 multiplayer maps (TU6 disc
+# files, measured the way map_measures does), and the map holding the highest.
+STOCK_MAP_HIGHS = [
+    ("placed models", 13755, 7039, "mp_invasion"),
+    ("world surfaces", 15771, 9526, "mp_checkpoint"),
+    ("see-through/decal surfaces", 740, 417, "mp_nightshift"),
+    ("world triangles", 326015, 198531, "mp_nightshift"),
+    ("world vertices", 474713, 274218, "mp_nightshift"),
+    ("lightmaps", 3, 2, "mp_rust"),
+    ("reflection probes", 28, 20, "mp_quarry"),
+    ("rooms", 41, 24, "mp_invasion"),
+    ("portals", 362, 166, "mp_rundown"),
+    ("collision brushes", 29932, 15095, "mp_checkpoint"),
+    ("collision triangles", 154652, 50379, "mp_afghan"),
+    ("model kinds", 732, 523, "mp_estate"),
+    ("materials", 2214, 1579, "mp_favela"),
+    ("effects", 147, 108, "mp_quarry"),
+    ("pictures in the file", 42, 32, "mp_estate"),
+    ("picture memory (MB)", 24.9, 13.7, "mp_checkpoint"),
+    ("models in draw range (mean)", 5571, 3556, "mp_afghan"),
+    ("models in draw range (max)", 7176, 4774, "mp_afghan"),
+]
+# What the 360 can draw in one view (TU6 0x823EE148): the world's see-through surfaces go in a
+# list of 2,048; the rest are left out.
+SEE_THROUGH_LIST = 0x800
+WHY_HIGH = {
+    "see-through/decal surfaces": "blended layers drawn over other surfaces: a frame rate cost; "
+                                  "Merge decal layers into the ground (test) folds ground decals in",
+    "pictures in the file": "stock maps stream most pictures from the game's packs; held in the "
+                            "file they take memory and load time (the picture budget trims them)",
+    "picture memory (MB)": "memory the map's pictures take while it is loaded; a lower picture "
+                           "budget brings it down",
+    "models in draw range (mean)": "models the 360 may have to draw from one spot: frame rate; "
+                                   "Cap model draw distance (test) lowers it",
+    "models in draw range (max)": "the busiest spot",
+}
+
+
+def map_measures(root):
+    """{measure: value} of a map tree, as STOCK_MAP_HIGHS has them for the stock maps."""
+    def first(t):
+        return next((e[1] for e in root["assets"] if e[0] == t and isinstance(e[1], dict)), None)
+    G, C = first("gfx_map"), first("col_map_mp")
+    if G is None:
+        return {}
+
+    def tgt(c):
+        return deref(c) if isinstance(c, Ref) else c
+    m = {}
+    dp = G.get("dpvs") or {}
+    m["placed models"] = dp.get("smodelCount", 0)
+    m["world surfaces"] = dp.get("staticSurfaceCount", 0)
+    m["see-through/decal surfaces"] = max(0, dp.get("litTransSurfsEnd", 0) - dp.get("litTransSurfsBegin", 0))
+    draw = G.get("draw") or {}
+    m["world triangles"] = draw.get("indexCount", 0) // 3
+    m["world vertices"] = draw.get("vertexCount", 0)
+    m["lightmaps"] = draw.get("lightmapCount", 0)
+    m["reflection probes"] = draw.get("reflectionProbeCount", 0)
+    m["rooms"] = (G.get("dpvsPlanes") or {}).get("cellCount", 0)
+    cells = tgt(G.get("@", {}).get(("cells", ()))) or []
+    m["portals"] = sum(c.get("portalCount", 0) for c in cells if isinstance(c, dict))
+    if C:
+        m["collision brushes"] = C.get("numBrushes", 0)
+        m["collision triangles"] = C.get("triCount", 0)
+    kinds, seen, mem, pics = {}, set(), 0, 0
+    for o in iter_objects(root["assets"]):
+        if not isinstance(o, dict) or id(o) in seen:
+            continue
+        seen.add(id(o))
+        a = o.get("_asset")
+        if a and not (_name(o) or b"").startswith(b","):
+            kinds[a] = kinds.get(a, 0) + 1
+        if a == "GfxImage" and not o.get("_pak") and not o.get("streaming") \
+                and isinstance(o.get("cardMemory"), int) and not (_name(o) or b"").startswith(b","):
+            mem += o["cardMemory"]
+            pics += 1
+    m["model kinds"] = kinds.get("XModel", 0)
+    m["materials"] = kinds.get("Material", 0)
+    m["effects"] = kinds.get("FxEffectDef", 0)
+    m["pictures in the file"] = pics
+    m["picture memory (MB)"] = round(mem / 2.0 ** 20, 1)
+    # Models within draw range (cull distance, else the last detail level's) of ground spots:
+    # every placed model's own spot, a sample of up to 150 of them.
+    pts, rng = [], []
+    for d in tgt(dp.get("@", {}).get(("smodelDrawInsts", ()))) or []:
+        if not isinstance(d, dict) or not d.get("origin"):
+            continue
+        mo = tgt(d.get("@", {}).get(("model", ())))
+        if isinstance(mo, tree.InsertSlot):
+            mo = mo.asset
+        lods = [l.get("dist", 0) for l in ((mo.get("lodInfo") or [])[:mo.get("numLods") or 0]
+                                         if isinstance(mo, dict) else []) if isinstance(l, dict)]
+        far = min([x for x in (d.get("cullDist") or 0, max(lods) if lods else 0) if x > 0] or [1e9])
+        pa = d.get("packedAxis")
+        sc = struct.unpack("<f", struct.pack("<I", pa[3] & 0xFFFFFFFF))[0] if pa and len(pa) > 3 else 1.0
+        pts.append(d["origin"])
+        rng.append((far * max(sc, 1e-3)) ** 2)
+    if pts:
+        step = max(1, len(pts) // 150)
+        counts = [sum(1 for p, r in zip(pts, rng)
+                      if (p[0] - s_[0]) ** 2 + (p[1] - s_[1]) ** 2 + (p[2] - s_[2]) ** 2 <= r)
+                  for s_ in pts[::step]]
+        m["models in draw range (mean)"] = int(round(sum(counts) / float(len(counts))))
+        m["models in draw range (max)"] = max(counts)
+    return m
+
+
+def map_limits_report(root, log):
+    """Log the map's measures against the stock 360 maps' highest, flagging what goes past."""
+    m = map_measures(root)
+    if not m:
+        return
+    over = []
+    log("  map measures against the 16 stock 360 maps (value / stock highest / stock median):")
+    for name, high, median, who in STOCK_MAP_HIGHS:
+        if name not in m:
+            continue
+        v = m[name]
+        flag = "  OVER (stock highest: %s)" % who if v > high else ""
+        log("    %-28s %9s / %9s / %9s%s" % (name, v, high, median, flag))
+        if v > high:
+            over.append(name)
+    if m.get("see-through/decal surfaces", 0) > SEE_THROUGH_LIST:
+        log("    note: more see-through/decal surfaces than the %d the 360 draws in one view; "
+            "with most in view, some are left out" % SEE_THROUGH_LIST)
+    for name in over:
+        if name in WHY_HIGH:
+            log("    %s: %s" % (name, WHY_HIGH[name]))
+
+
 def check_pools(root, refs, log, warn):
     """Stop when the map and the files loaded with it hold more assets of a kind than the game
     has room for; warn when it is close."""
@@ -4550,6 +4726,14 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     out = reserve_callback_block(out, porter)
     _write_x360(out, out_path, pak_table(out, out_path, porter.root, w.starts, w.written))
     log("wrote %s (%d bytes of zone)" % (out_path, len(out)))
+    if any(e[0] == "gfx_map" for e in root["assets"]):
+        # Measured on the file as written (as the console loads it).
+        try:
+            with no_gc():
+                written, _ = tree.read_tree(out, xs)
+            map_limits_report(written, log)
+        except Exception as e:      # the report must never stop a conversion
+            porter.warn("map measures couldn't be taken (%s)" % e)
     if pak is not None and porter.streamed:
         pak.save()
         log("  %d pictures stream from %s (%.1f MB added, %.1f MB in all): copy it to the game "
