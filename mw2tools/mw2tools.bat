@@ -114,6 +114,11 @@ if errorlevel 1 (
     echo Installing numpy, which the map converter uses to encode sounds for the 360...
     call %PY% -m pip install --user numpy
 )
+call %PY% -c "import miniaudio" >nul 2>nul
+if errorlevel 1 (
+    echo Installing miniaudio, which the map converter uses to read .mp3 sounds...
+    call %PY% -m pip install --user miniaudio
+)
 echo.
 echo Your .ff files go in: %HOME_DIR%
 cd /d "%HOME_DIR%"
