@@ -100,7 +100,8 @@ FIXES = [
      "sound format the 360 game plays), instead of the silent \"null\" sound: the map's own "
      "sounds, and the PC game's streamed ones (sound/... in the .iwd files of the PC game folder "
      "given). Streamed sounds become loaded ones (the 360 streams only from its own disc). "
-     "Needs numpy. Off by default until tried on a console."),
+     "Needs numpy, and miniaudio for .mp3 sounds (CoD4 maps' ambient tracks). Off by default "
+     "until tried on a console."),
     ("surface_bounds", "Surface culling radius",
      "Fill in the 360-only number every world surface carries (its culling radius and texture "
      "density), worked out from stock mp_rust. Converted maps used to leave it 0."),
@@ -219,6 +220,13 @@ FIXES = [
      "type among them) are drawn with Infinity Ward's own 360 copy instead of the converted one. "
      "Untick to draw the converted models instead (if they then flicker and the stock ones "
      "didn't, the converted models are at fault)."),
+    ("stock_streamed_pictures", "Pictures the 360 already has, streamed (test)",
+     "A picture the map takes from the PC game's files (not its own .iwd) that a stock 360 map "
+     "streams under the same name streams from the 360's own picture packs (imagefile1-4.pak, "
+     "always on the disc) at full size, as in that stock map, instead of sitting in the map file. "
+     "PC mp_showdown: 539 of its 639 pictures (142 of 173 MB), every vehicle among them, so the "
+     "rest fit the picture budget without losing any detail. Off by default until tried on a "
+     "console. Reads every stock map given once to list their pictures (kept in mw2port_cache)."),
     ("stream_pictures", "Stream pictures from imagefile9.pak (test)",
      "The map's own pictures stream from a pak as stock maps' do, instead of sitting in the map "
      "file: they come in at full size and take no map memory (converted mp_rust needed about 112 MB "
@@ -313,7 +321,7 @@ DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_bo
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
                "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes", "ground_lit_flag",
                "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin",
-               "swap_models_test", "encode_sounds"}
+               "swap_models_test", "encode_sounds", "stock_streamed_pictures"}
 TREE_BOX_MARGIN = 64            # units, for the tree_box_margin test switch
 # MB of XMA the encode_sounds switch makes at most (stock maps carry 4 to 8 MB of sounds).
 ENCODED_SOUND_BUDGET = 12
@@ -1245,6 +1253,7 @@ class Porter:
         self.stock_models = {}          # model name -> (a stock map's model, its file) (stock_models)
         self.model_swap = {}            # id() of a converted model -> the stock model's list entry
         self.stock_copied = Counter()   # materials / pictures copied whole (stock_materials, stock_pictures)
+        self.stock_streamed = {}        # picture name -> a stock map's streamed one (stock_streamed_pictures)
         self.swapped_rows = set()       # light grid row data already put in 360 byte order
         self.pc_sort = {}               # id() of a material -> the PC's sort key (pc_sort_keys)
         self.pc_cull = {}               # id() of a two-sided PC material -> its culling (pc_face_culling)
@@ -1559,8 +1568,8 @@ class Porter:
 
     def plan_texture_budget(self):
         """Decide which pictures lose top mip levels so the map's pictures fit the budget:
-        the largest picture goes down a level at a time. Lightmaps, reflection probes and
-        loading screens stay as they are."""
+        the largest picture (shine maps counted double) goes down a level at a time. Lightmaps,
+        reflection probes and loading screens stay as they are."""
         import heapq
         budget = int(self.texture_budget * 1048576 / TILING_PAD)
         fixed, items = 0, {}
@@ -1572,7 +1581,8 @@ class Porter:
                 continue
             if ("GfxImage", name) in self.resident and (name.startswith(b"$") or not self.in_iwd(name)):
                 continue
-            if self.fixes["stock_pictures"] and ("GfxImage", name) in self.library:
+            if (self.fixes["stock_pictures"] and ("GfxImage", name) in self.library) \
+                    or self.streams_from_stock(name):
                 continue        # copied from stock, streamed
             tex = o.get("texture", {})
             ld = tex.get("@", {}).get(("loadDef", ())) if isinstance(tex, dict) else None
@@ -1594,7 +1604,13 @@ class Porter:
             else:
                 items[name] = ([len(m) for m in mips], w, h)
         before = total = fixed + sum(sum(s) for s, w, h in items.values())
-        heap = [(-sum(s), n) for n, (s, w, h) in items.items()]
+        # Specular (shine) maps count double: they go down before color and normal maps of the
+        # same size, whose loss shows far more (IW's combined ones are named ~..spc..&..cos..).
+        def weight(n, size):
+            low = n.lower()
+            spec = low.startswith(b"~") or any(k in low for k in (b"_spc", b"_spec", b"_cos", b"_gloss"))
+            return -size * (2 if spec else 1)
+        heap = [(weight(n, sum(s)), n) for n, (s, w, h) in items.items()]
         heapq.heapify(heap)
         while total > budget and heap:
             _, n = heapq.heappop(heap)
@@ -1604,7 +1620,7 @@ class Porter:
                 continue
             total -= sizes[k]
             self.mip_drop[n] = k + 1
-            heapq.heappush(heap, (-sum(sizes[k + 1:]), n))
+            heapq.heappush(heap, (weight(n, sum(sizes[k + 1:])), n))
         if self.mip_drop:
             self.log("  pictures: about %.0f MB, over the %d MB budget, so %d pictures lose their "
                      "top mip levels (about %.0f MB left)"
@@ -1725,6 +1741,10 @@ class Porter:
         for k in ("materials", "pictures"):
             if self.fixes["stock_" + k]:
                 self.log("  test: %d %s copied from the stock 360 files" % (self.stock_copied[k], k))
+        if self.fixes["stock_streamed_pictures"]:
+            self.log("  test: %d pictures stream from the 360's own picture packs, as stock maps have "
+                     "them (%d stock streamed pictures known)" % (self.stock_copied["streamed pictures"],
+                                                                 len(self.stock_streamed)))
         if self.fixes["stock_world"]:
             self.stock_world_swap(ents)
         self.own_reference_copies(ents)
@@ -2823,6 +2843,9 @@ class Porter:
                                                        sum(len(e.data) for e in sounds) / 1048576.0, resident))
         if self.xma and getattr(self, "_encoded_bytes", 0) >= ENCODED_SOUND_BUDGET * 1048576:
             self.warn("encoded sounds reached %d MB: the rest stay silent" % ENCODED_SOUND_BUDGET)
+        if self.xma and compressed_pcm.missing:
+            self.warn("some sounds are .mp3 or compressed .wav files, which need miniaudio "
+                      "(pip install miniaudio, or start mw2tools.bat again): they stay silent")
         if self.xma and getattr(self, "_no_audio", None):
             self.log("    no audio found for %d sound files%s" % (
                 len(self._no_audio), "" if self.game_iwds else
@@ -3624,6 +3647,14 @@ class Porter:
         L.raw = struct.pack(L.E + "7f", *(mid + half + [sum(h * h for h in half)])) + L.raw[28:]
         self.test_counts["bone_bounds"] = self.test_counts.get("bone_bounds", 0) + 1
 
+    def streams_from_stock(self, name):
+        """Whether picture name comes from a stock map's streamed copy (stock_streamed_pictures):
+        one a stock map streams, that the map doesn't bring in its own .iwd (the PC game's
+        pictures are the same pictures as the 360's; a map's own may not be)."""
+        low = name.lower()
+        return bool(self.stock_streamed) and low in self.stock_streamed \
+            and low.decode("latin-1") not in self.map_pictures
+
     def stock_copy(self, src):
         """A copy of stock asset src (with what it points at), left as it is (stock_materials,
         stock_pictures)."""
@@ -3900,6 +3931,9 @@ class Porter:
         # .iwd carries a copy: a second asset with the name would replace the resident one.
         if ("GfxImage", name) in self.resident and (name.startswith(b"$") or not self.in_iwd(name)):
             return self._replace(d, self.reference("GfxImage", name))
+        if self.streams_from_stock(name):
+            self.stock_copied["streamed pictures"] += 1
+            return self._replace(d, self.stock_copy(copy.deepcopy(self.stock_streamed[name.lower()])))
         if self.fixes["stock_pictures"] and ("GfxImage", name) in self.library:
             self.stock_copied["pictures"] += 1
             return self._replace(d, self.stock_copy(self.library[("GfxImage", name)]))
@@ -4942,8 +4976,10 @@ RESIDENT_SOUND = "resident"     # Porter._encoded: a sound the always-loaded fil
 
 
 def _sound_name(path):
-    """The 360 name of a PC sound file (dir/name.wav): stock 360 sounds have no extension."""
-    return path[:-4] if path.lower().endswith(b".wav") else path
+    """The 360 name of a PC sound file (dir/name.wav, .mp3, ...): stock 360 sounds have no
+    extension."""
+    base, ext = os.path.splitext(path)
+    return base if ext.lower() in (b".wav", b".mp3", b".flac", b".ogg") else path
 
 
 def _sound_data(ls):
@@ -4973,13 +5009,35 @@ def wav_pcm(raw, info=None):
         if tag == 0xFFFE and len(fmt) >= 26:            # WAVE_FORMAT_EXTENSIBLE: its subformat
             tag = struct.unpack_from("<H", fmt, 24)[0]
         if tag != 1 or bits != 16 or ch not in (1, 2) or not rate or len(data) < 2 * ch:
-            return None
+            return compressed_pcm(raw)
         return data[:len(data) // (2 * ch) * 2 * ch], rate, ch
     if isinstance(info, dict) and info.get("format") == 1 and info.get("bits") == 16 \
             and info.get("channels") in (1, 2) and info.get("rate"):
         ch = info["channels"]
         return raw[:len(raw) // (2 * ch) * 2 * ch], info["rate"], ch
+    return compressed_pcm(raw)
+
+
+def compressed_pcm(raw):
+    """(16-bit PCM bytes, rate, channels) of an .mp3 (CoD4 maps' ambient tracks), an ADPCM .wav,
+    a .flac or an .ogg, decoded with miniaudio; None without it or for anything else."""
+    try:
+        import miniaudio
+    except ImportError:
+        compressed_pcm.missing = True
+        return None
+    for read in (miniaudio.mp3_read_s16, miniaudio.wav_read_s16, miniaudio.flac_read_s16,
+                 miniaudio.vorbis_read):
+        try:
+            d = read(bytes(raw))
+        except Exception:  # noqa: BLE001 - not this format: try the next
+            continue
+        if d.nchannels in (1, 2) and d.sample_rate and d.num_frames:
+            return d.samples.tobytes(), d.sample_rate, d.nchannels
     return None
+
+
+compressed_pcm.missing = False
 
 
 def picture_index(iwds):
@@ -5079,6 +5137,45 @@ def stock_techset_names(path):
     except OSError:
         pass
     return names
+
+
+def stock_streamed_images(path):
+    """{lower-case name: GfxImage} of the pictures a stock file streams from the 360's own
+    picture packs (a header and where its levels sit in imagefile1-4.pak, no pixels), kept in
+    mw2port_cache next to it; empty if it can't be read."""
+    import pickle
+    st = os.stat(path)
+    base = os.path.basename(path).lower() + ".streamed."
+    folder = os.path.join(os.path.dirname(os.path.abspath(path)), STOCK_CACHE_DIR)
+    cache = os.path.join(folder, "%s%x.%x.%s.pickle" % (base, st.st_size, st.st_mtime_ns,
+                                                         _stock_cache_tag()))
+    try:
+        with open(cache, "rb") as fh:
+            return pickle.load(fh)
+    except (OSError, EOFError, pickle.UnpicklingError, AttributeError, ImportError):
+        pass
+    out = {}
+    try:
+        with no_gc():
+            for o in iter_objects(load_stock(path)["assets"]):
+                if isinstance(o, dict) and o.get("_asset") == "GfxImage" and o.get("streaming") == 1 \
+                        and o.get("pixels") is None and o.get("streams"):
+                    n = asset_name(o) or b""
+                    if n and not n.startswith((b",", b"*", b"$")):
+                        out.setdefault(n.lower(), {k: v for k, v in o.items() if k not in ("_slot", "_forward")})
+    except Exception:  # noqa: BLE001 - a file that can't be read offers nothing
+        return {}
+    try:
+        os.makedirs(folder, exist_ok=True)
+        with open(cache + ".tmp", "wb") as fh:
+            pickle.dump(out, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(cache + ".tmp", cache)
+        for n in os.listdir(folder):
+            if n.startswith(base) and n != os.path.basename(cache):
+                os.remove(os.path.join(folder, n))
+    except OSError:
+        pass
+    return out
 
 
 def pc_techsets(root):
@@ -5480,6 +5577,10 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
                     fixes, pak)
     if cache_dir:
         porter.picture_cache = PictureCache(os.path.join(cache_dir, "pictures"))
+    if fixes["stock_streamed_pictures"]:
+        for p in list(ref_paths) + [p for p in fx_paths if p not in ref_paths]:
+            for k, v in stock_streamed_images(p).items():
+                porter.stock_streamed.setdefault(k, v)
     off = [k for k, v in fixes.items() if not v and DEFAULT_FIXES[k]]
     on = [k for k, v in fixes.items() if v and not DEFAULT_FIXES[k]]
     if off:
