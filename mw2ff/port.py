@@ -4620,6 +4620,7 @@ def effect_index(root):
 
 
 _ZONE_NAME = re.compile(rb"[\x20-\x7e]{1,255}")
+_ZONE_NAMES = re.compile(rb"\0([\x20-\x7e]{1,255})(?=\0)")
 
 
 def zone_names(path):
@@ -4636,7 +4637,7 @@ def zone_names(path):
     except OSError:
         pass
     _, zone = mw2ff.read_fastfile(path)
-    names = set(t for t in zone.split(b"\0")[1:-1] if _ZONE_NAME.fullmatch(t))
+    names = set(_ZONE_NAMES.findall(zone))
     try:
         os.makedirs(folder, exist_ok=True)
         with open(cache + ".tmp", "wb") as fh:
