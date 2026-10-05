@@ -133,6 +133,12 @@ FIXES = [
      "shiny surface, and the player's gun, reflects the map's probes: too bright, sandbags and "
      "scopes gleamed and the whole map looked washed out. Maps with real probes are left as "
      "they are." % 70),
+    ("dedupe_assets", "Each asset written once",
+     "An asset used in several places is written once and pointed at after that, as in every "
+     "stock 360 file (no stock map holds two copies of anything). Stock assets copied in "
+     "(the teams' models, effects) were written again wherever the stock file pointed back at "
+     "them: each team body picture 120 times over, which took the game's room for assets and "
+     "its memory."),
     ("tree_list_slices", "Culling tree model lists inside the room's list",
      "Every culling tree node's list of static models becomes a slice of its room's root list, "
      "as in every stock 360 map (16,017 of 16,017 lists): the root list is laid out so each node's "
@@ -5044,10 +5050,14 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     xs = schema_mod.load("xbox")
     w = tree.TreeWriter(root, xs, keep_fixes=False)
     w.map_rel = lambda r: map_rel(r, porter.P, porter.X)
+    w.dedupe = fixes["dedupe_assets"]
     out = w.write()
     out = reserve_callback_block(out, porter)
     _write_x360(out, out_path, pak_table(out, porter.root, w.starts, w.written))
     log("wrote %s (%d bytes of zone)" % (out_path, len(out)))
+    if w.deduped:
+        log("  %d places point at an asset written earlier instead of holding a copy of it"
+            % w.deduped)
     if measures and is_map:
         # Measured on the file as written (as the console loads it), with the converted tree
         # let go first: the read-back is as big again.
