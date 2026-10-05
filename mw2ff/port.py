@@ -1565,6 +1565,7 @@ class Porter:
             at = next((i for i, e in enumerate(ents) if e[0] == "gfx_map"), len(ents))
             # (Shader sets first: the materials point at them.)
             ents[at:at] = sorted(self.extra_assets, key=lambda e: e[0] != "techset")
+            self.pictures_before_composites(ents, at, at + len(self.extra_assets))
         if self.from_game:
             self.log("  %d pictures come from the PC game's own .iwd files" % self.from_game)
         if self.two_sided:
@@ -2239,6 +2240,54 @@ class Porter:
             len(dropped), ", ".join("%s %d" % kv for kv in types.most_common())))
         if early:
             self.warn("%d pointers to a merged asset come before it in the file" % early)
+
+    def pictures_before_composites(self, ents, start, end):
+        """merge_decals' composite materials (ents[start:end], before the world) point at the
+        pictures of the ground and decal materials. A picture first written further on (inside
+        the world, mp_waw_castle's berlin_floors_wood_dirty_white1_n) would be pointed at before
+        it is written: it is written at the composite's pointer instead (its first), and the
+        places that held it later point back at it."""
+        before = set(id(o) for e in ents[:start] for o in iter_objects([e]))
+        late = {}
+        for e in ents[start:end]:
+            for o in iter_objects([e]):
+                if not isinstance(o, dict):
+                    continue
+                for c in o.get("@", {}).values():
+                    for x in (c if isinstance(c, list) else [c]):
+                        a = x.target.asset if isinstance(x, Ref) and isinstance(x.target, tree.InsertSlot) else None
+                        if isinstance(a, dict) and a.get("_asset") == "GfxImage" and id(a) not in before:
+                            late[id(a)] = a
+        if not late:
+            return
+        moved = 0
+        for o in list(iter_objects(ents[end:])):
+            if not isinstance(o, dict):
+                continue
+            ch = o.get("@", {})
+            for k, v in list(ch.items()):
+                if isinstance(v, dict) and id(v) in late and "_slot" in v:
+                    r = tree.Ref(1)     # (not null until the writer places the picture)
+                    r.target, r.rel = v["_slot"], 0
+                    ch[k] = r
+                    if o.get("union") in ("ffffffff", "fffffffe"):
+                        o["union"] = "00000001"
+                    elif o.get(k[0]) in ("follow", "insert"):
+                        o[k[0]] = "0x00000001"
+                    moved += 1
+        for a in late.values():
+            a["_forward"] = True
+        # Every pointer to such a picture points at the picture itself, not its slot: the first
+        # one writes it there, and a slot only gets a place when the picture is written at it.
+        for o in iter_objects(ents):
+            if not isinstance(o, dict):
+                continue
+            for c in o.get("@", {}).values():
+                for x in (c if isinstance(c, list) else [c]):
+                    if isinstance(x, Ref) and isinstance(x.target, tree.InsertSlot) and id(x.target.asset) in late:
+                        x.target, x.rel, x.t = x.target.asset, 0, None
+        self.log("  decal layers: %d pictures written with the composite materials that use "
+                 "them (first written further on before)" % len(late))
 
     def own_reference_copies(self, ents):
         """A pointer to the slot of a picture that is only a name (",$white": the game has it
