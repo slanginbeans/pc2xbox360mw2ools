@@ -139,6 +139,13 @@ FIXES = [
      "(the teams' models, effects) were written again wherever the stock file pointed back at "
      "them: each team body picture 120 times over, which took the game's room for assets and "
      "its memory."),
+    ("stock_techsets", "Shader sets from every stock map",
+     "Shader sets the map's materials use (and, with Merge decal layers, the composite sets its "
+     "decals can become) that the stock files read for the map lack are looked for in every "
+     "stock map given; the one or two carrying the most are read as well (without their world). "
+     "Before, a material got the nearest set the files read had: mp_rust without its own stock "
+     "file lost a detail map on one material, and most of mp_waw_castle's decals stayed "
+     "unmerged because their composite sets were in other stock maps."),
     ("material_memory", "World material list as the 360 counts it",
      "The world's list of the materials its surfaces draw with (materialMemory) is made as every "
      "stock 360 map has it (1,866 of 1,866 entries in mp_rust, mp_favela and mp_afghan): every "
@@ -4823,6 +4830,89 @@ def zone_names(path):
     return names
 
 
+def stock_techset_names(path):
+    """The (lower-case) names of the shader sets a stock file has, kept in mw2port_cache next
+    to it (worked out once from its tree); empty if it can't be read."""
+    st = os.stat(path)
+    base = os.path.basename(path).lower() + ".techsets."
+    folder = os.path.join(os.path.dirname(os.path.abspath(path)), STOCK_CACHE_DIR)
+    cache = os.path.join(folder, "%s%x.%x.txt" % (base, st.st_size, st.st_mtime_ns))
+    try:
+        with open(cache, "rb") as fh:
+            return set(fh.read().split(b"\n")) - {b""}
+    except OSError:
+        pass
+    try:
+        with no_gc():
+            names = set(pool_names(load_stock(path)).get("MaterialTechniqueSet", ()))
+    except Exception:  # noqa: BLE001 - a file that can't be read offers nothing
+        return set()
+    try:
+        os.makedirs(folder, exist_ok=True)
+        with open(cache + ".tmp", "wb") as fh:
+            fh.write(b"\n".join(sorted(names)))
+        os.replace(cache + ".tmp", cache)
+        for n in os.listdir(folder):
+            if n.startswith(base) and n != os.path.basename(cache):
+                os.remove(os.path.join(folder, n))
+    except OSError:
+        pass
+    return names
+
+
+def pc_techsets(root):
+    """Names of the shader sets a PC file's materials use (PC files hold most assets inside
+    others, so the whole tree is walked; names only, ",name", count too)."""
+    out = set()
+    for o in iter_objects(root["assets"]):
+        if isinstance(o, dict) and o.get("_asset") == "MaterialTechniqueSet":
+            n = asset_name(o) or _name(o)
+            if n:
+                out.add(n.lstrip(b","))
+    return out
+
+
+def techset_donors(root, ref_paths, candidates, composites=False, log=print, most=2):
+    """Stock 360 maps (of candidates) to read as well for shader sets the map's materials use
+    that the stock files already read don't have (and, with merge_decals, the composite sets
+    its decals could become): at most `most`, those carrying the most of them. Without them a
+    material got the nearest set the files read had (mp_rust without its own stock file:
+    3 of 664 materials lost an input, a detail map among them; mp_waw_castle: most decals
+    stayed unmerged, their composite sets in other stock maps)."""
+    import decals
+    names = pc_techsets(root)
+    names |= {n.replace(b"_hsm_", b"_sm_") for n in names}     # (PC-only "high" shadow sets)
+    want = set(names)
+    if composites:
+        grounds = {g for g in (decals.ground_code(n) for n in names) if g}
+        l1 = {c for c in (decals.layer_code(n, 1) for n in names) if c}
+        l2 = {c for c in (decals.layer_code(n, 2) for n in names) if c}
+        for g in grounds:
+            for a in l1:
+                # (composite sets are named without wc_: l_sm_r0c0n0_b1c1n1s1p0)
+                want.add(g[0] + b"_" + a[0] + (b"p0" if g[1] or a[1] else b""))
+                for b in l2:
+                    want.add(g[0] + b"_" + a[0] + b"_" + b[0] + (b"p0" if g[1] or a[1] or b[1] else b""))
+    have = set()
+    for p in ref_paths:
+        have |= stock_techset_names(p)
+    want = {n.lower() for n in want} - have
+    if not want:
+        return []
+    hits = {p: want & stock_techset_names(p) for p in candidates}
+    out = []
+    while len(out) < most:
+        best = max(hits, key=lambda p: (len(hits[p] & want), p not in out), default=None)
+        if best is None or best in out or not hits[best] & want:
+            break
+        out.append(best)
+        want -= hits[best]
+    if out:
+        log("  shader sets the files given lack: reading %s as well" % ", ".join(
+            os.path.basename(p) for p in out))
+    return out
+
+
 def effect_donors(root, ref_roots, candidates, log=print, most=2):
     """Stock 360 maps (of candidates) to read as well for the map's effects that the stock
     files already read don't have: at most `most`, those carrying the most of them."""
@@ -5129,6 +5219,11 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         extra = effect_donors(root, [loaded[p] for p in ref_paths if os.path.splitext(
             os.path.basename(p))[0].lower() not in RESIDENT],
                               [p for p in fx_paths if p not in ref_paths], log)
+        ref_paths += extra
+        donors.update(extra)
+    if fx_paths and fixes["stock_techsets"]:
+        extra = techset_donors(root, ref_paths, [p for p in fx_paths if p not in ref_paths],
+                               fixes["merge_decals"], log)
         ref_paths += extra
         donors.update(extra)
     for p in ref_paths:
