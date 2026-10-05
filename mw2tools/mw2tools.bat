@@ -109,6 +109,11 @@ if errorlevel 1 (
     echo Installing Pillow, the picture library the tools use...
     call %PY% -m pip install --user pillow
 )
+call %PY% -c "import numpy" >nul 2>nul
+if errorlevel 1 (
+    echo Installing numpy, which the map converter uses to encode sounds for the 360...
+    call %PY% -m pip install --user numpy
+)
 echo.
 echo Your .ff files go in: %HOME_DIR%
 cd /d "%HOME_DIR%"
