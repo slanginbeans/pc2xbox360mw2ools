@@ -88,6 +88,16 @@ FIXES = [
      "PC normal maps (DXT5: X in alpha, Y in green) become DXN, two channels, as every stock 360 "
      "normal map is: X is the PC's alpha block as it is, Y its green channel. Off: they stay DXT5, "
      "which the 360's shaders read as if DXN."),
+    ("drop_pc_effects", "PC copies of stock effects left out",
+     "An effect taken from a stock 360 file (Stock 360 effects) no longer keeps the PC's converted "
+     "copy next to it under a ~pc/ name: each took one of the game's 600 effect places, so a PC "
+     "copy of a stock map carried every effect twice (PC mp_quarry: 294 effects, with common_mp's "
+     "411 past the limit, so it couldn't be converted; stock mp_quarry has 147). Pointers to the PC "
+     "copy go to the stock one."),
+    ("drop_pc_models", "PC copies of stock models left out",
+     "A static model drawn with its stock 360 copy (Stock 360 models) no longer keeps the PC's "
+     "converted copy in the file under a ~pc/ name, unless other assets point into it: each took "
+     "one of the game's 1,536 model places (PC mp_estate came to 1,544 with every model twice)."),
     ("stock_scripts", "Stock 360 scripts",
      "A script a stock 360 file also has (a stock map's own maps/mp/<map>.gsc, its effects "
      "scripts) comes from it. PC scripts can call what only later PC patches have: PC mp_rust's "
@@ -1921,7 +1931,7 @@ class Porter:
                     t = x if isinstance(x, dict) else deref(x) if isinstance(x, Ref) else None
                     if isinstance(t, dict) and t.get("_asset") == "XModel":
                         holders.setdefault(id(t), set()).add("placement" in o)
-        front, moved, names = [], [], []
+        front, moved, names, swapped_models = [], [], [], []
         for o in list(iter_objects(ents)):
             if not (isinstance(o, dict) and o.get("_asset") == "XModel") or id(o) in self.done:
                 continue
@@ -1940,7 +1950,34 @@ class Porter:
             o["@"][("name", ())] = Str(b"~pc/" + name)
             if id(o) not in top:
                 moved.append(tree.AssetEntry(["xmodel", o]))
+            swapped_models.append(o)
             names.append(name.decode("latin-1"))
+        if self.fixes["drop_pc_models"] and swapped_models:
+            # The converted copy goes too when nothing but placed copies points at it (they now
+            # point at the stock one): each took one of the game's 1,536 model places (PC
+            # mp_estate, a PC copy of a stock map, came to 1,544 with every model twice).
+            inside, own = {}, set()
+            for k, m in enumerate(swapped_models):
+                for x in iter_objects(m):
+                    own.add(id(x))
+                    if x is not m:
+                        inside[id(x)] = k
+                        if isinstance(x, dict) and "_slot" in x:
+                            inside[id(x["_slot"])] = k
+            keep = set()
+            for x in iter_objects(ents):
+                if id(x) in own:
+                    continue
+                for c in (x.get("@", {}).values() if isinstance(x, dict) else
+                          (x if isinstance(x, PtrList) else ())):
+                    for y in (c if isinstance(c, list) else [c]):
+                        if isinstance(y, Ref) and id(y.target) in inside:
+                            keep.add(inside[id(y.target)])
+            gone = set(id(m) for k, m in enumerate(swapped_models) if k not in keep)
+            moved = [e for e in moved if id(e[1]) not in gone]
+            ents[:] = [e for e in ents if not (isinstance(e[1], dict) and id(e[1]) in gone)]
+            self.log("  %d converted copies of those models left out (%d kept: other assets point "
+                     "into them)" % (len(gone), len(keep)))
         ents[:0] = front + moved
         self.log("  test: %d kinds of static model drawn with the stock 360 copy" % len(names))
 
@@ -2339,11 +2376,11 @@ class Porter:
         materials) instead of being converted: converted ones can draw far stronger than on
         the PC (mp_backlot's dust_wind_* filled the map with a yellow haze). Other assets and
         the map's scripts name effects rather than point at them, so the stock one goes in under
-        the name and the converted one is renamed out of the way (it stays: the map's other
-        assets can point at materials it brings)."""
+        the name and the converted one is renamed out of the way, then left out
+        (drop_pc_effects) unless the map's other assets point into it (materials it brings)."""
         if not self.fixes["stock_effects"]:
             return
-        new, names = [], []
+        new, names, swapped = [], [], {}
         for e in ents:
             if e[0] != "fx" or not isinstance(e[1], dict):
                 continue
@@ -2356,14 +2393,91 @@ class Porter:
             self.remap_bones(fx, src_root["script_strings"])
             self.done.add(id(fx))
             new.append(tree.AssetEntry([e[0], fx]))
+            swapped[id(e)] = (e, new[-1])
             self.stock_fx_used.append(fx)
             names.append(name.decode("latin-1"))
+        if swapped and self.fixes["drop_pc_effects"]:
+            self.drop_swapped_effects(ents, swapped)
         # First in the list: the shader sets they bring are the stock ones the map's own
         # materials of those sets point at, and have to be written before them.
         ents[:0] = new
         if names:
             self.log("  %d effect%s from the stock 360 files: %s" % (
                 len(names), "s" if len(names) > 1 else "", ", ".join(names)))
+
+    def drop_swapped_effects(self, ents, swapped):
+        """The PC copies of effects stock_effects took from a stock 360 file are left out:
+        each took a place in the game's room for 600 effects next to the stock one (PC
+        mp_quarry: 294 effects with common_mp's 411, stock mp_quarry 147). A pointer to one
+        (another effect's child, a breakable prop's destroy effect) goes to the stock copy;
+        the materials and pictures it brought are written where they are pointed at next (the
+        convert step's left-out assets). swapped: {id() of the PC entry: (it, the stock entry)}."""
+        # Only one nothing kept points into: a material, shader set or picture a dropped copy
+        # holds can be pointed at by the map's other effects before it would be written
+        # (mp_backlot: a shader set of one, pointed at by another effect's material).
+        swapped = dict(swapped)
+        kept = len(swapped)
+        inside = {}
+        for k, (e, stock) in swapped.items():
+            for o in iter_objects(e[1]):
+                if o is not e[1]:
+                    inside[id(o)] = k
+                    if isinstance(o, dict) and "_slot" in o:
+                        inside[id(o["_slot"])] = k
+        while True:
+            keep = set()
+            for e in ents:
+                if id(e) in swapped:
+                    continue
+                for o in iter_objects(e[1]):
+                    for c in (o.get("@", {}).values() if isinstance(o, dict) else
+                              (o if isinstance(o, PtrList) else ())):
+                        for x in (c if isinstance(c, list) else [c]):
+                            if isinstance(x, Ref) and id(x.target) in inside:
+                                keep.add(inside[id(x.target)])
+            keep &= set(swapped)
+            if not keep:
+                break
+            for k in keep:
+                swapped.pop(k)
+            inside = {i: k for i, k in inside.items() if k in swapped}
+        kept -= len(swapped)
+        if kept:
+            self.log("  %d PC copies of stock effects kept (renamed ~pc/...): the map's other assets "
+                     "point into them" % kept)
+        if not swapped:
+            return
+        by_obj = {}
+        for e, stock in swapped.values():
+            by_obj[id(e)] = stock
+            by_obj[id(e[1])] = stock
+            if "_slot" in e[1]:
+                by_obj[id(e[1]["_slot"])] = stock
+        moved = 0
+        for o in iter_objects(ents):
+            items = o.get("@", {}).items() if isinstance(o, dict) else (
+                enumerate(o) if isinstance(o, PtrList) else ())
+            for k, c in list(items):
+                for i, x in enumerate(c if isinstance(c, list) and not isinstance(o, PtrList) else [c]):
+                    if isinstance(x, Ref) and id(x.target) in by_obj and (x.rel in (0, 4)):
+                        stock = by_obj[id(x.target)]
+                        x.target, x.rel, x.t = stock, 4, None
+                        moved += 1
+                    elif isinstance(x, dict) and id(x) in by_obj:
+                        r = Ref(1)
+                        r.target, r.rel = by_obj[id(x)], 4
+                        if isinstance(c, list) and not isinstance(o, PtrList):
+                            c[i] = r
+                        elif isinstance(o, dict):
+                            o["@"][k] = r
+                            if isinstance(o.get(k[0]), str):
+                                o[k[0]] = "0x00000001"
+                        else:
+                            o[k] = r
+                        moved += 1
+        ents[:] = [e for e in ents if id(e) not in swapped]
+        self.log("  %d PC copies of those effects left out (%d pointers to them now name the "
+                 "stock copy)" % (len(swapped), moved))
 
     WORLD_ASSETS = {"gfx_map": "GfxWorld", "col_map_mp": "clipMap_t", "com_map": "ComWorld",
                     "game_map_mp": "GameWorldMp", "fx_map": "FxWorld", "map_ents": "MapEnts"}
