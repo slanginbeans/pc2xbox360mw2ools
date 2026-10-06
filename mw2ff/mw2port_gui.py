@@ -58,7 +58,7 @@ class Cancelled(BaseException):
 def settings():
     base = {"card_pak": False, "card_pak_copy": True, "card_source": "auto", "variants": False,
             "profile": False, "measures": True,
-            "texture_budget": port_mod.TEXTURE_BUDGET_MB,
+            "texture_budget": port_mod.TEXTURE_BUDGET_MB, "pak_start": port_mod.STREAM_PAK,
             "fixes": dict(port_mod.DEFAULT_FIXES)}
     try:
         with open(SETTINGS) as fh:
@@ -78,6 +78,11 @@ def save_settings(req):
     if "texture_budget" in req:
         try:
             s["texture_budget"] = max(4, min(400, int(req["texture_budget"])))
+        except (TypeError, ValueError):
+            pass
+    if "pak_start" in req:
+        try:
+            s["pak_start"] = max(port_mod.STREAM_PAK, min(port_mod.STREAM_PAK_LAST, int(req["pak_start"])))
         except (TypeError, ValueError):
             pass
     if req.get("card_source") in ("auto", "stock"):
@@ -198,7 +203,7 @@ def _convert(pc_path, teams, s, log, conv_log):
         return make(pc_path, out_dir, stock_files(), teams, conv_log,
                     port_mod.game_iwd_files(GAME_DIR), texture_budget=s["texture_budget"],
                     card_ui=ui, fixes=s["fixes"], write_card_pak=s["card_pak_copy"],
-                    measures=s["measures"])
+                    measures=s["measures"], pak_start=s["pak_start"])
 
     try:
         if not s["profile"]:
@@ -670,6 +675,12 @@ without it, to see on the console whether it helps or hurts.</p>
 <span class="dim">Pictures over this lose their top mip levels so the map fits in memory (normally 40). Stock
 360 maps stream most pictures from the disc, so converted maps are bigger in memory: lower it to test whether a
 map that crashes or freezes is running out of memory.</span></p>
+<p><label>First pak for streamed pictures <input type="number" id="pakStart" min="9" max="21" style="width:4em"></label>
+<span class="dim">With <b>Stream pictures from imagefile9.pak and on</b> ticked, maps' pictures go in
+<code>mw2port_out\imagefile&lt;n&gt;.pak</code> from this number on (normally 9). Each pak takes about 1 GB; then the next number
+starts, up to 21, and the full one never changes again. After converting, copy only the paks the log names to the game
+folder, next to <code>default_mp.xex</code>. Start a batch on a higher number to keep its pictures apart from the paks already on
+the console.</span></p>
 <label class="toggle" style="margin-top:10px"><input type="checkbox" id="variants"><span><b>Also build test variants</b><br>
 <span class="dim">Besides the map itself, converts it once more for every fix that is ticked, with just that fix off,
 into <code>mw2port_out\&lt;map&gt;\variants\no_&lt;fix&gt;</code>. Try them one after another on the console to find
@@ -718,7 +729,7 @@ function renderMaps(){if(!S.maps.length){$("#maps").innerHTML=`<p class="warn">N
 function fixSummary(){const d=S.fixes.filter(f=>!!S.settings.fixes[f.id]!==!!S.fix_defaults[f.id]);$("#fixSummary").textContent=`(${S.fixes.length}; ${d.length?d.length+" changed from the defaults: "+d.map(f=>f.id).join(", "):"all at their defaults"})`}
 function renderFixes(){$("#fixes").innerHTML=S.fixes.map(f=>`<label class="toggle" style="margin:6px 0"><input type="checkbox" class="fix" data-k="${f.id}"${S.settings.fixes[f.id]?" checked":""}><span><b>${esc(f.label)}</b> <code class="dim">${f.id}</code><br><span class="dim">${esc(f.help)}</span></span></label>`).join("");
  document.querySelectorAll(".fix").forEach(c=>c.onchange=async()=>{try{S.settings=await api("/api/settings",{fixes:{[c.dataset.k]:c.checked}});fixSummary()}catch(e){alert(e.message)}});fixSummary();
- $("#variants").checked=!!S.settings.variants;$("#budget").value=S.settings.texture_budget;$("#profile").checked=!!S.settings.profile;$("#measures").checked=S.settings.measures!==false}
+ $("#variants").checked=!!S.settings.variants;$("#budget").value=S.settings.texture_budget;$("#pakStart").value=S.settings.pak_start;$("#profile").checked=!!S.settings.profile;$("#measures").checked=S.settings.measures!==false}
 function renderRewrite(){const s=$("#rewriteMap");const keep=s.value;s.innerHTML=(S.stock_map_names||[]).map(n=>`<option${n===keep?" selected":""}>${esc(n)}</option>`).join("")||"<option value=''>no stock mp_*.ff here</option>"}
 function renderCards(){$("#cardPak").checked=!!S.settings.card_pak;$("#cardPakCopy").checked=S.settings.card_pak_copy!==false;$("#cardSource").value=S.settings.card_source||"auto";
  $("#cardInfo").innerHTML=S.ui?`Filled from <code>${esc(S.ui)}</code>.`:`<span class="warn">No ui_mp.ff in the work folder or mw2tex_out yet: copy it from the console.</span>`}
@@ -750,6 +761,7 @@ $("#rewriteBtn").onclick=async()=>{const m=$("#rewriteMap").value;if(!m)return;t
 try{$("#fixBox").open=localStorage.getItem("fixBoxOpen")==="1"}catch(e){}
 $("#fixBox").addEventListener("toggle",()=>{try{localStorage.setItem("fixBoxOpen",$("#fixBox").open?"1":"0")}catch(e){}});
 $("#fixDefaults").onclick=async()=>{try{S.settings=await api("/api/settings",{fixes:S.fix_defaults});renderFixes()}catch(err){alert(err.message)}};
+$("#pakStart").onchange=async e=>{try{S.settings=await api("/api/settings",{pak_start:e.target.value});$("#pakStart").value=S.settings.pak_start}catch(err){alert(err.message)}};
 $("#budget").onchange=async e=>{try{S.settings=await api("/api/settings",{texture_budget:e.target.value});$("#budget").value=S.settings.texture_budget}catch(err){alert(err.message)}};
 $("#variants").onchange=async e=>{try{S.settings=await api("/api/settings",{variants:e.target.checked})}catch(err){alert(err.message)}};
 $("#profile").onchange=async e=>{try{S.settings=await api("/api/settings",{profile:e.target.checked})}catch(err){alert(err.message)}};

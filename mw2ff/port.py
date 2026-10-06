@@ -60,6 +60,14 @@ TEXTURE_BUDGET_MB = 40
 # much more than the plain sum of the levels (mp_backlot: 90 MB counted, 115 MB in the block).
 TILING_PAD = 1.28
 LEVELS = 4      # pak table entries per picture
+STREAM_PAK = 9          # first pak for map pictures: mw2tex uses 7 (textures) and 8 (titles and emblems)
+# The highest pak number the game can open: TU6 keeps one 72-byte record per pak number
+# (0x821E3168, Com_sprintf "imagefile%d") in a table at 0x82CBC640, and the next object
+# starts at 0x82CBCC80, so 22 records (0 = inside the map file; stock maps use 1-4). It doesn't
+# check the number: a higher one would write over whatever follows.
+STREAM_PAK_LAST = 21
+PAK_VOLUME_MB = 1024    # a pak full past this is left as it is; the next map pictures go in the next
+STREAMABLE = ("DXT1", "DXT3", "DXT5", "DXN")
 # Fixes that can be switched off, to find out on the console which one helps or hurts:
 # (name, short label, what it does). All on by default.
 SWAP_MODELS = (60, 487)          # placed static models swapped by the swap_models_test switch
@@ -235,13 +243,15 @@ FIXES = [
      "PC mp_showdown: 539 of its 639 pictures (142 of 173 MB), every vehicle among them, so the "
      "rest fit the picture budget without losing any detail. Off by default until tried on a "
      "console. Reads every stock map given once to list their pictures (kept in mw2port_cache)."),
-    ("stream_pictures", "Stream pictures from imagefile9.pak (test)",
+    ("stream_pictures", "Stream pictures from imagefile9.pak and on (test)",
      "The map's own pictures stream from a pak as stock maps' do, instead of sitting in the map "
-     "file: they come in at full size and take no map memory (converted mp_rust needed about 112 MB "
-     "against stock's 67). Writes mw2port_out\\imagefile9.pak, shared by every map converted this "
-     "way (new pictures are added to it): copy it to the game folder (next to default_mp.xex) as it "
-     "is, imagefile9.pak, beside imagefile8.pak (titles and emblems), not over it. Off by default "
-     "until tried on a console."),
+     "file: they come in at full size and take no map memory (converted mp_waw_castle: 11 MB of "
+     "pictures in the map instead of 42). Every map converted this way shares the paks in "
+     "mw2port_out: imagefile9.pak (or the first pak number chosen) until it holds %d MB, then "
+     "imagefile10.pak, up to 21. New pictures only go on the end of the newest pak, so after a "
+     "new map only the paks its log names need copying to the game folder (next to "
+     "default_mp.xex, beside imagefile8.pak, not over it); maps converted earlier keep working. "
+     "Off by default until tried on a console." % PAK_VOLUME_MB),
     ("stock_world", "Stock 360 world (test)",
      "For a PC copy of a stock map (PC mp_rust): the world assets (drawn world, collision, map "
      "entities, effects placement, game world) come from the stock 360 map of the same name, "
@@ -1002,55 +1012,96 @@ def _picture_tag():
     return _picture_tag_value
 
 
-STREAM_PAK = 9          # imagefile9.pak: mw2tex uses 7 (textures) and 8 (titles and emblems)
-STREAMABLE = ("DXT1", "DXT3", "DXT5", "DXN")
 
 
 class PakWriter:
-    """imagefile<STREAM_PAK>.pak, shared by every map converted with stream_pictures. Chunks are
-    only ever added (maps converted earlier point into it); one already in it is reused (an
-    index of them is kept next to it)."""
+    """Rolling paks for stream_pictures: imagefile<start>.pak, then <start+1> and on, in one
+    folder (mw2port_out), shared by every map converted this way. New pictures only ever go on
+    the end of the newest one; when it would grow past the volume (PAK_VOLUME_MB) the next
+    number starts, and the full one never changes again, so only the newest pak needs copying
+    to the console after a new map. A picture already in any of them is reused. Each pak keeps
+    an index of its chunks next to it (imagefile<n>.json). A picture already in one of the paks
+    from the start number on is reused."""
 
-    def __init__(self, path):
+    HEADER = b"IWffu100\0\0\x01\x0d"
+
+    def __init__(self, folder, start=STREAM_PAK, volume_mb=PAK_VOLUME_MB):
         import json
-        self.path, self.index_path = path, os.path.splitext(path)[0] + ".json"
-        self.data = bytearray(open(path, "rb").read()) if os.path.exists(path) else bytearray(b"IWffu100\0\0\x01\x0d")
-        self.index = {}
-        try:
-            with open(self.index_path) as fh:
-                idx = json.load(fh)
-            if idx.get("size") == len(self.data):
-                self.index = idx.get("chunks", {})
-        except (OSError, ValueError):
-            pass
-        self.added = 0
+        if not STREAM_PAK <= start <= STREAM_PAK_LAST:
+            raise PortError("the first pak for streamed pictures must be %d to %d (7 and 8 are "
+                            "mw2tex's, 1-4 the game's own)" % (STREAM_PAK, STREAM_PAK_LAST))
+        self.folder, self.start, self.volume = folder, start, volume_mb * 1048576
+        self.size, self.index, self.pending, self.added = {}, {}, {}, {}
+        for n in range(STREAM_PAK, STREAM_PAK_LAST + 1):
+            path = self.path_of(n)
+            if not os.path.exists(path):
+                continue
+            self.size[n] = os.path.getsize(path)
+            try:
+                with open(os.path.splitext(path)[0] + ".json") as fh:
+                    idx = json.load(fh)
+                if idx.get("size") == self.size[n]:
+                    self.index[n] = idx.get("chunks", {})
+            except (OSError, ValueError):
+                pass
+        # The pak new pictures go in: the newest one from start on.
+        self.current = max([n for n in self.size if n >= start] or [start])
+        # Pictures already in a pak are reused, from the start number on only: a batch started
+        # on a higher number depends on no pak before it.
+        self.seen = {k: (n, v[0], v[1]) for n, idx in sorted(self.index.items()) if n >= start
+                     for k, v in idx.items()}
+        self.used = set()       # the paks the map's pictures are in
+
+    def path_of(self, n):
+        return os.path.join(self.folder, "imagefile%d.pak" % n)
 
     def add(self, blob):
         """(pak, start, end) of the zlib chunk holding blob."""
         import hashlib
         import zlib
         key = hashlib.sha1(blob).hexdigest()
-        if key in self.index:
-            start, end = self.index[key]
-            return (STREAM_PAK, start, end)
+        if key in self.seen:
+            self.used.add(self.seen[key][0])
+            return self.seen[key]
         chunk = zlib.compress(blob, 9)
-        start = len(self.data)
-        self.data += chunk
-        self.index[key] = [start, len(self.data)]
-        self.added += len(chunk)
-        return (STREAM_PAK, start, len(self.data))
+        n = self.current
+        size = self.size.get(n, len(self.HEADER))
+        if size + len(chunk) > self.volume and size > len(self.HEADER):
+            n = self.current = n + 1
+            if n > STREAM_PAK_LAST:
+                raise PortError("every pak for streamed pictures (imagefile%d-%d.pak) is full; the "
+                                "game can't open a higher number" % (self.start, STREAM_PAK_LAST))
+            size = self.size.get(n, len(self.HEADER))
+        start = size
+        self.pending.setdefault(n, []).append(chunk)
+        self.size[n] = size + len(chunk)
+        self.index.setdefault(n, {})[key] = [start, self.size[n]]
+        self.added[n] = self.added.get(n, 0) + len(chunk)
+        self.seen[key] = (n, start, self.size[n])
+        self.used.add(n)
+        return self.seen[key]
 
     def save(self):
+        """Put the new chunks on the end of their paks. Returns [(pak path, MB added, MB in
+        all)] for the paks that changed."""
         import json
-        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
-        # Each written whole, then put in place: a conversion ended part way (Cancel) leaves
-        # the pak every earlier map points into as it was.
-        with open(self.path + ".tmp", "wb") as fh:
-            fh.write(bytes(self.data))
-        with open(self.index_path + ".tmp", "w") as fh:
-            json.dump({"size": len(self.data), "chunks": self.index}, fh)
-        os.replace(self.path + ".tmp", self.path)
-        os.replace(self.index_path + ".tmp", self.index_path)
+        os.makedirs(self.folder, exist_ok=True)
+        out = []
+        for n, chunks in sorted(self.pending.items()):
+            path = self.path_of(n)
+            # (Appended only now, all at once: a conversion stopped part way leaves every pak as
+            # it was.)
+            with open(path, "ab") as fh:
+                if fh.tell() == 0:
+                    fh.write(self.HEADER)
+                for c in chunks:
+                    fh.write(c)
+            with open(os.path.splitext(path)[0] + ".json.tmp", "w") as fh:
+                json.dump({"size": self.size[n], "chunks": self.index[n]}, fh)
+            os.replace(os.path.splitext(path)[0] + ".json.tmp", os.path.splitext(path)[0] + ".json")
+            out.append((path, self.added[n] / 1048576.0, self.size[n] / 1048576.0))
+        self.pending = {}
+        return out
 
 
 def stream_levels(width, height, has_mips):
@@ -5721,9 +5772,10 @@ def drop_world(root):
 
 
 def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, loaded=None,
-         game_iwds=(), texture_budget=0, card_pak=False, fx_paths=(), fixes=None, pak_path=None,
-         measures=True, cache_dir=None, keep_loaded=True, donors=()):
-    """loaded: {path: tree} of stock files already read (load_stock), to reuse; with
+         game_iwds=(), texture_budget=0, card_pak=False, fx_paths=(), fixes=None, pak_dir=None,
+         measures=True, cache_dir=None, keep_loaded=True, donors=(), pak_start=STREAM_PAK):
+    """pak_dir, pak_start: where stream_pictures' paks go (PakWriter) and the first pak number.
+    loaded: {path: tree} of stock files already read (load_stock), to reuse; with
     keep_loaded=False they are let go once converting is done (the caller is done with them).
     donors: stock maps of ref_paths read only for their teams (or effects); their own world is
     drawn geometry and collision are let go as soon as they're read (drop_world), as are those
@@ -5782,8 +5834,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     log("converting %s" % os.path.basename(pc_path))
     pak = None
     if fixes["stream_pictures"]:
-        pak = PakWriter(pak_path or os.path.join(os.path.dirname(os.path.abspath(out_path)),
-                                                 "imagefile%d.pak" % STREAM_PAK))
+        pak = PakWriter(pak_dir or os.path.dirname(os.path.abspath(out_path)), pak_start)
     porter = Porter(root, refs, iwd, log, [zipfile.ZipFile(p) for p in game_iwds], texture_budget,
                     fixes, pak)
     if cache_dir:
@@ -5851,16 +5902,30 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         except Exception as e:      # the report must never stop a conversion
             porter.warn("map measures couldn't be taken (%s)" % e)
     if pak is not None and porter.streamed:
-        pak.save()
-        log("  %d pictures stream from %s (%.1f MB added, %.1f MB in all): copy it to the game "
-            "folder, next to default_mp.xex" % (porter.streamed, pak.path, pak.added / 1048576.0,
-                                                 len(pak.data) / 1048576.0))
+        changed = pak.save()
+        log("  %d pictures stream from %s (the console needs each of them)" % (
+            porter.streamed, ", ".join("imagefile%d.pak" % n for n in sorted(pak.used))))
+        for path, added, total in changed:
+            log("  %s: %.1f MB added, %.1f MB in all: copy it to the game folder, next to "
+                "default_mp.xex" % (os.path.basename(path), added, total))
+        if not changed:
+            log("  every one was in the paks already (no pak changed)")
     return out, porter
 
 
+def _pak_sizes(folder):
+    """{pak number: size} of the stream_pictures paks in folder."""
+    out = {}
+    for n in range(STREAM_PAK, STREAM_PAK_LAST + 1):
+        p = os.path.join(folder, "imagefile%d.pak" % n)
+        if os.path.exists(p):
+            out[n] = os.path.getsize(p)
+    return out
+
+
 def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
-             texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None, pak_path=None,
-             write_card_pak=True, measures=True):
+             texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None, pak_dir=None,
+             write_card_pak=True, measures=True, pak_start=STREAM_PAK):
     """Convert a PC map (its .ff, and _load.ff / .iwd / .arena next to it when there) into
     out_dir, picking what it needs from the stock 360 files given: code_post_gfx_mp.ff, a
     stock map (render settings, shaders) and the stock maps that carry the map's teams.
@@ -5879,8 +5944,8 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
     name = os.path.basename(base)
     iwd = [base + ".iwd"] if os.path.exists(base + ".iwd") else []
     # One pak for every map (stream_pictures), next to the maps' folders (mw2port_out).
-    pak_path = pak_path or os.path.join(os.path.dirname(os.path.normpath(os.path.abspath(out_dir))),
-                                        "imagefile%d.pak" % STREAM_PAK)
+    pak_dir = pak_dir or os.path.dirname(os.path.normpath(os.path.abspath(out_dir)))
+    paks_before = _pak_sizes(pak_dir)
     os.makedirs(out_dir, exist_ok=True)
     loaded = {}
     log("reading stock 360 file code_post_gfx_mp.ff")
@@ -5917,7 +5982,8 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
             out = os.path.join(out_dir, name + "_load.ff")
             try:
                 port(base + "_load.ff", out, iwd, [cpg, template, load_ref], log, loaded=loaded,
-                     game_iwds=game_iwds, fixes=fixes, pak_path=pak_path, cache_dir=cache_dir)
+                     game_iwds=game_iwds, fixes=fixes, pak_dir=pak_dir, pak_start=pak_start,
+                     cache_dir=cache_dir)
                 written.append(out)
             except (ValueError, PortError, mw2ff.zone_mod.ZoneError) as e:
                 # The map works without it: the game shows a plain loading screen.
@@ -5929,11 +5995,12 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
     out = os.path.join(out_dir, name + ".ff")
     port(pc_path, out, iwd, refs, log, teams=want, loaded=loaded, game_iwds=game_iwds,
          texture_budget=texture_budget, card_pak=bool(card_ui), fx_paths=maps, fixes=fixes,
-         pak_path=pak_path, measures=measures, cache_dir=cache_dir, keep_loaded=False,
+         pak_dir=pak_dir, pak_start=pak_start, measures=measures, cache_dir=cache_dir, keep_loaded=False,
          donors=donors)
     written.append(out)
-    if fix_set(fixes)["stream_pictures"] and os.path.exists(pak_path):
-        written.append(pak_path)
+    # The paks this map added pictures to (the ones to copy to the console again).
+    written += [os.path.join(pak_dir, "imagefile%d.pak" % n) for n, size in sorted(_pak_sizes(pak_dir).items())
+                if paks_before.get(n) != size]
     if card_ui and write_card_pak:
         # card_ui: a ui_mp.ff (mw2tex's built one, or the stock one) to fill the slots from.
         import mw2tex
@@ -5946,16 +6013,16 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
 
 def port_map_variants(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
                       texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None,
-                      write_card_pak=True, measures=True):
+                      write_card_pak=True, measures=True, pak_start=STREAM_PAK):
     """The map as port_map makes it with the fixes given, plus one test variant per fix that
     is on, with just that fix switched off: out_dir/variants/no_<fix>/. One batch of files to
     try on the console, to find which fix helps or hurts. Returns the paths written; a
     variant that fails to convert doesn't stop the others."""
     fixes = fix_set(fixes)
     written = port_map(pc_path, out_dir, stock_paths, teams, log, game_iwds, texture_budget,
-                       card_ui, fixes, write_card_pak=write_card_pak, measures=measures)
-    main_pak = os.path.join(os.path.dirname(os.path.normpath(os.path.abspath(out_dir))),
-                            "imagefile%d.pak" % STREAM_PAK)
+                       card_ui, fixes, write_card_pak=write_card_pak, measures=measures,
+                       pak_start=pak_start)
+    main_paks = os.path.dirname(os.path.normpath(os.path.abspath(out_dir)))
     labels = {k: label for k, label, _ in FIXES}
     for k in [k for k, v in fixes.items() if v]:
         log("")
@@ -5965,7 +6032,7 @@ def port_map_variants(pc_path, out_dir, stock_paths, teams=None, log=print, game
             # Titles and emblems: the pak written next to the main file serves every variant.
             files = [f for f in port_map(pc_path, vdir, stock_paths, teams, log, game_iwds,
                                          texture_budget, None, dict(fixes, **{k: False}),
-                                         pak_path=main_pak, measures=measures)
+                                         pak_dir=main_paks, pak_start=pak_start, measures=measures)
                      if not f.endswith(".pak")]
         except (PortError, mw2ff.zone_mod.ZoneError, ValueError) as e:
             log("  variant no_%s stopped: %s" % (k, e))
@@ -6137,6 +6204,9 @@ def main(argv):
                     choices=[k for k, _, _ in FIXES],
                     help="switch a fix on that is off by default (repeatable): "
                     + ", ".join(sorted(DEFAULT_OFF)))
+    ap.add_argument("--pak-start", type=int, default=STREAM_PAK, metavar="N",
+                    help="stream_pictures: the first pak number for the map's pictures (%d-%d; "
+                         "later ones follow when a pak is full)" % (STREAM_PAK, STREAM_PAK_LAST))
     ap.add_argument("--profile", nargs="?", const=30, type=int, metavar="N",
                     help="time the conversion: print the N functions taking the most time "
                          "(default 30) and save the full profile next to the output as .prof")
@@ -6147,7 +6217,8 @@ def main(argv):
 
     def run():
         port(a.pc_ff, a.out_ff, a.iwd, a.ref360, teams=a.teams, game_iwds=game_iwd_files(a.game),
-             texture_budget=a.texture_budget, card_pak=a.card_pak, fixes=fix_set({k: True for k in a.fix_on}, off=a.fix_off))
+             texture_budget=a.texture_budget, card_pak=a.card_pak, pak_start=a.pak_start,
+             fixes=fix_set({k: True for k in a.fix_on}, off=a.fix_off))
 
     if a.profile is None:
         run()
