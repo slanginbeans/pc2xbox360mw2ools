@@ -98,6 +98,14 @@ FIXES = [
      "component left out) and has two more part types, so PC animations can't be copied as they "
      "are: PC mp_terminal and mp_afghan didn't convert at all. Animations no stock file has are "
      "left out of the map (it then lacks those movements)."),
+    ("convert_anims", "Convert PC animations (test)",
+     "An animation no stock 360 file has (a map's own fans, foliage sway, flags) is converted to the "
+     "360's layout instead of being left out: its rotation keys packed as the 360 keeps them (32 "
+     "bits a full rotation, 16 a half one) and its part types laid out for the 360's two extra. "
+     "Checked against the 36 animations PC mp_derail, mp_estate, mp_highrise, mp_invasion and "
+     "mp_quarry share with stock 360 files: 99.35% of 51,051 values the same, the rest by the last "
+     "unit. Animations that move the whole object (delta parts) are still left out. Off by default "
+     "until tried on a console."),
     ("stock_sounds", "Stock 360 sounds",
      "Sound aliases a stock 360 file also has come from it, with its 360 audio. The PC file only "
      "names its sound files (,null.wav: files the PC game loads from disk); the 360 has nothing "
@@ -340,7 +348,8 @@ DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_bo
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
                "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes", "ground_lit_flag",
                "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin",
-               "swap_models_test", "encode_sounds", "stock_streamed_pictures", "destructible_parts"}
+               "swap_models_test", "encode_sounds", "stock_streamed_pictures", "destructible_parts",
+               "convert_anims"}
 TREE_BOX_MARGIN = 64            # units, for the tree_box_margin test switch
 # MB of XMA the encode_sounds switch makes at most (stock maps carry 4 to 8 MB of sounds).
 ENCODED_SOUND_BUDGET = 12
@@ -2587,7 +2596,7 @@ class Porter:
         9, 10 and 10 bits) and has two more part types. Same-named ones come from a stock 360
         file (stock_anims); the rest are left out, as nothing points at an animation (scripts
         and map entities name them)."""
-        took, dropped = [], []
+        took, dropped, converted, reasons = [], [], [], set()
         keep = []
         for e in ents:
             if e[0] != "xanim" or not isinstance(e[1], dict):
@@ -2610,7 +2619,13 @@ class Porter:
                                 self._anim_root.setdefault(id(o), r)
             src = self._stock_anims.get(name) if self.fixes["stock_anims"] else None
             if src is None:
-                dropped.append(name.decode("latin-1"))
+                why = self.convert_anim(e[1]) if self.fixes["convert_anims"] else "convert switched off"
+                if why is None:
+                    keep.append(e)
+                    converted.append(name.decode("latin-1"))
+                else:
+                    dropped.append(name.decode("latin-1"))
+                    reasons.add(why)
                 continue
             root = self._anim_root[id(src)]
             new = self.copy_in(src)
@@ -2624,9 +2639,77 @@ class Porter:
         ents[:] = keep
         if took:
             self.log("  %d animations from the stock 360 files" % len(took))
+        if converted:
+            self.log("  test: %d PC animations converted to the 360's layout: %s" % (
+                len(converted), ", ".join(converted[:8]) + (" ..." if len(converted) > 8 else "")))
         if dropped:
-            self.warn("%d animations left out (no stock 360 copy, and PC animations can't be converted "
-                      "yet): %s" % (len(dropped), ", ".join(dropped[:8]) + (" ..." if len(dropped) > 8 else "")))
+            self.warn("%d animations left out (no stock 360 copy; %s): %s" % (
+                len(dropped), "; ".join(sorted(reasons)),
+                ", ".join(dropped[:8]) + (" ..." if len(dropped) > 8 else "")))
+
+    def convert_anim(self, d):
+        """PC animation d in the 360's layout, in place (xanim.py: rotations packed, two more part
+        types). Returns None, or why it can't be converted."""
+        import xanim
+        ch = d.get("@", {})
+
+        def leaf(k):
+            v = ch.get((k, ()))
+            return v.target if isinstance(v, Ref) else v
+
+        def values(k, fmt):
+            lf = leaf(k)
+            if not isinstance(lf, Leaf):
+                return []
+            n = len(lf.raw) // struct.calcsize(fmt)
+            return list(struct.unpack(lf.E + "%d%s" % (n, fmt), lf.raw[:n * struct.calcsize(fmt)]))
+
+        delta = leaf("deltaPart")
+        if isinstance(delta, dict) and any(delta.get(k) for k in ("trans", "quat2", "quat")):
+            return "PC animations that move the whole object (delta parts) can't be converted yet"
+        try:
+            bc, ds, di, rs, ri = xanim.convert(
+                list(bytes.fromhex(d["boneCount"])), d["numframes"], values("dataShort", "h"),
+                values("dataInt", "i"), values("randomDataShort", "h"))
+        except (xanim.AnimError, KeyError, ValueError, TypeError) as e:
+            return "PC animation not in the layout expected (%s)" % e
+        new = {k: v for k, v in d.items() if k not in ("@", "_slot", "_forward")}
+        nch = {}
+        for k, v in ch.items():
+            lf = v.target if isinstance(v, Ref) else v
+            if isinstance(lf, Leaf):
+                xt = self.xc.type_by_name(getattr(lf.t, "name", "unsigned char"))
+                nch[k] = Leaf(xt, lf.n, _swap_words(lf.raw, lf.t.size if hasattr(lf.t, "size") else 1), ">")
+            else:
+                nch[k] = v
+        idx = d.get("indices")
+        if isinstance(idx, dict):
+            new["indices"] = dict(idx)
+            if "@" in idx:
+                new["indices"]["@"] = {}
+                for k, v in idx["@"].items():
+                    lf = v.target if isinstance(v, Ref) else v
+                    new["indices"]["@"][k] = Leaf(self.xc.type_by_name(lf.t.name), lf.n,
+                                                  _swap_words(lf.raw, lf.t.size), ">") \
+                        if isinstance(lf, Leaf) else v
+        for k, vals, fmt, tname in (("dataShort", ds, "H", "int16_t"), ("dataInt", di, "I", "int"),
+                                     ("randomDataShort", rs, "H", "int16_t"),
+                                     ("randomDataInt", ri, "I", "int")):
+            if vals:
+                nch[(k, ())] = Leaf(self.xc.type_by_name(tname), len(vals),
+                                    struct.pack(">%d%s" % (len(vals), fmt), *vals), ">")
+                new[k] = "follow"
+            else:
+                nch.pop((k, ()), None)
+                new[k] = None
+        new.update(boneCount=bc.hex(), dataShortCount=len(ds), dataIntCount=len(di),
+                   randomDataShortCount=len(rs), randomDataIntCount=len(ri))
+        new["@"] = nch
+        self._replace(d, new)
+        for o in iter_objects(d):
+            if isinstance(o, dict):
+                self.done.add(id(o))
+        return None
 
     def name_loaded_curves(self, alias):
         """Volume and other curves (SndCurve) in an alias list made here that the game already
