@@ -229,12 +229,12 @@ FIXES = [
      "distance. Stock mp_terminal has 0 for 206 models whose PC cull distance is 2,800-5,250; "
      "the converter keeps the PC values (mp_ancient: 206 models at 2,000). Off by default: for "
      "testing whether models vanish because of their cull distance."),
-    ("merge_decals", "Merge decal layers into the ground (test)",
+    ("merge_decals", "Merge decal layers into the ground",
      "Blend decals lying on the ground (dirt, rust, stains) become layers of the ground's "
      "material, as the 360 map compiler builds them: composite materials drawing the ground and "
      "up to two decals in one pass, blended per vertex. The PC draws each decal as its own "
      "see-through surface over the ground (converted mp_rust: 2,291 of them; stock 101). "
-     "Off by default."),
+     "Confirmed on the console (mp_waw_castle)."),
     ("room_box_bounds", "Room boxes enclose their contents (test)",
      "Each room's box (GfxCell.bounds) grows to enclose every static model and surface its "
      "culling tree lists. The 360's shadow pass tests each room's box against the shadow view "
@@ -359,7 +359,7 @@ FIXES = [
      "tool surfaces."),
 ]
 # Off unless switched on: the test switches, and portal_multiply (HDR portals are hidden instead).
-DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_box_bounds", "merge_decals", "skip_lod0", "one_room", "plain_pictures",
+DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_box_bounds", "skip_lod0", "one_room", "plain_pictures",
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
                "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes", "ground_lit_flag",
                "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin",
@@ -2682,7 +2682,13 @@ class Porter:
                 shared += 1
         if shared:
             self.log("  %d pointers into another element's material list pointed at the material" % shared)
-        for o in list(iter_objects(ents)):
+        objs = list(iter_objects(ents))
+        # Name-only assets of other kinds too once nothing holds them any more: the PC wrote
+        # each where its first pointer was, and that one can be gone (a decal material Merge
+        # decal layers drew into a composite: PC mp_backlot's ",wc_l_sm_b0c0", the materials
+        # listed after it pointing at its slot stopped the writer).
+        held = {id(o) for o in objs}
+        for o in objs:
             if not isinstance(o, dict):
                 continue
             ch = o.get("@", {})
@@ -2690,8 +2696,8 @@ class Porter:
                 if not (isinstance(c, Ref) and isinstance(c.target, tree.InsertSlot) and c.rel == 0):
                     continue
                 a = c.target.asset
-                if not (isinstance(a, dict) and a.get("_asset") == "GfxImage"
-                        and (_name(a) or b"").startswith(b",")):
+                if not (isinstance(a, dict) and (_name(a) or b"").startswith(b",")
+                        and (a.get("_asset") == "GfxImage" or id(a) not in held)):
                     continue
                 new = {kk: vv for kk, vv in a.items() if kk not in ("_slot", "_forward")}
                 new["@"] = dict(a.get("@", {}))
@@ -2704,7 +2710,8 @@ class Porter:
                     o[k[0]] = "follow"
                 self.done.add(id(new))
                 count += 1
-                self.ref_copy_types[a.get("_asset")] = self.ref_copy_types.get(a.get("_asset"), 0) + 1
+                kind = a.get("_asset") or "other"
+                self.ref_copy_types[kind] = self.ref_copy_types.get(kind, 0) + 1
         if count:
             self.log("  %d pointers to a name-only asset given their own copy of the name (%s)" % (
                 count, ", ".join("%s %d" % kv for kv in sorted(self.ref_copy_types.items()))))
