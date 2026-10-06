@@ -16,7 +16,7 @@ import struct
 import sys
 
 PORT = 730
-DEPTH = 24
+DEPTH = 40
 
 
 class Xbdm:
@@ -67,9 +67,12 @@ def fields(text):
 
 
 def num(v):
+    """0x1234 or XBDM's 64-bit 0q000000007a01f8f0 (the low 32 bits: pointers are 32-bit)."""
     try:
+        if v.lower().startswith("0q"):
+            return int(v[2:], 16) & 0xFFFFFFFF
         return int(v, 0)
-    except (TypeError, ValueError):
+    except (AttributeError, TypeError, ValueError):
         return None
 
 
