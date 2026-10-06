@@ -94,6 +94,11 @@ FIXES = [
      "copy of a stock map carried every effect twice (PC mp_quarry: 294 effects, with common_mp's "
      "411 past the limit, so it couldn't be converted; stock mp_quarry has 147). Pointers to the PC "
      "copy go to the stock one."),
+    ("share_effect_pictures", "Pictures shared with stock effects",
+     "A picture of the map's (from the PC game's files, not the map's own .iwd) with the name of one "
+     "a stock 360 effect it uses brings is taken from the effect instead of being kept a second "
+     "time under a ~pc/ name: each copy took one of the game's 3,584 picture places (PC "
+     "mp_estate came to 3,514 with 71 pictures twice)."),
     ("drop_pc_models", "PC copies of stock models left out",
      "A static model drawn with its stock 360 copy (Stock 360 models) no longer keeps the PC's "
      "converted copy in the file under a ~pc/ name, unless other assets point into it: each took "
@@ -3130,6 +3135,8 @@ class Porter:
                 if isinstance(o, dict) and o.get("_asset") in ("Material", "GfxImage") and \
                         not (_name(o) or b",").startswith(b","):
                     names.add((o["_asset"], _name(o)))
+        if self.fixes["share_effect_pictures"]:
+            self.share_effect_pictures(ours)
         count = 0
         for o in iter_objects(self.root["assets"]):
             if isinstance(o, dict) and id(o) not in ours and o.get("_asset") in ("Material", "GfxImage") \
@@ -3137,6 +3144,64 @@ class Porter:
                 _set_name(o, b"~pc/" + _name(o))
                 count += 1
         return count
+
+    def share_effect_pictures(self, ours):
+        """A picture of the map's own with the name of one a stock effect brings (ours: id() of
+        everything in the stock effects) is the same picture when it comes from the PC game's
+        files, not the map's own .iwd: the map's materials point at the stock effect's copy
+        (its slot, which the game sets to it), and the map's own copy is left out. Renamed and
+        kept (rename_clashes), it took a second place in the game's room for 3,584 pictures
+        (PC mp_quarry: 123 such pictures, mp_estate 71, which came to 3,514)."""
+        stock = {}
+        for fx in self.stock_fx_used:
+            for o in iter_objects(fx):
+                if isinstance(o, dict) and o.get("_asset") == "GfxImage":
+                    n = _name(o) or b","
+                    if not n.startswith(b","):
+                        stock.setdefault(n, o)
+        if not stock:
+            return
+        swap = {}
+        for o in iter_objects(self.root["assets"]):
+            if isinstance(o, dict) and id(o) not in ours and o.get("_asset") == "GfxImage":
+                n = _name(o) or b""
+                if n in stock and n.decode("latin-1").lower() not in self.map_pictures:
+                    swap[id(o)] = stock[n]
+                    if "_slot" in o:
+                        swap[id(o["_slot"])] = stock[n]
+        if not swap:
+            return
+        for v in swap.values():
+            # Stock effects hold their pictures inline: written with a slot of its own at its
+            # first pointer (in the effect, listed first), which the map's pointers then name.
+            if "_slot" not in v:
+                v["_slot"] = tree.InsertSlot(v)
+            v["_forward"] = True
+        moved = 0
+        for o in iter_objects(self.root["assets"]):
+            if not isinstance(o, dict) or id(o) in ours:
+                continue
+            ch = o.get("@", {})
+            for k, c in list(ch.items()):
+                if isinstance(c, dict) and id(c) in swap:
+                    target = swap[id(c)]
+                elif isinstance(c, Ref) and id(c.target) in swap and c.rel == 0:
+                    target = swap[id(c.target)]
+                else:
+                    continue
+                r = Ref(1)      # (not null until the writer places the picture)
+                r.target, r.rel = target["_slot"], 0
+                ch[k] = r
+                if o.get("union") in ("ffffffff", "fffffffe"):
+                    o["union"] = "00000001"
+                elif o.get(k[0]) in ("follow", "insert"):
+                    o[k[0]] = "0x00000001"
+                moved += 1
+        gone = set(k for k, v in swap.items())
+        self.root["assets"][:] = [e for e in self.root["assets"]
+                                  if not (isinstance(e[1], dict) and id(e[1]) in gone)]
+        self.log("  %d pictures the map shares with stock effects it uses taken from them (%d "
+                 "pointers), not kept twice" % (len(set(id(v) for v in swap.values())), moved))
 
     # ------------------------------------------------------------ hooks
 
