@@ -86,13 +86,19 @@ def main():
         sys.exit("XBDM didn't list threads: %s" % status)
     out.append("%d threads" % len(ids))
     for tid in ids:
-        tid = tid.strip()
+        # (XBDM lists thread ids as signed decimals, -83886072; it takes them back in hex)
+        tid = "0x%08x" % (int(tid.strip(), 0) & 0xFFFFFFFF)
         st, info = x.cmd("threadinfo thread=%s" % tid)
-        info = fields(st + " " + " ".join(info))
+        raw_info = [st] + info
+        info = fields(" ".join(raw_info))
         st, ctx = x.cmd("getcontext thread=%s control int" % tid)
         regs = {}
         for ln in [st] + ctx:
             regs.update(fields(ln))
+        if "iar" not in regs:
+            out.append("")
+            out.append("thread %s: XBDM said %r / %r" % (tid, raw_info[:3], ([st] + ctx)[:3]))
+            continue
         iar, lr, sp = num(regs.get("iar")), num(regs.get("lr")), num(regs.get("gpr1"))
         out.append("")
         out.append("thread %s  start=%s  priority=%s  suspend=%s" % (
