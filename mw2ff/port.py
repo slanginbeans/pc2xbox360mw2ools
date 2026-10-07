@@ -259,6 +259,12 @@ FIXES = [
      "material for its color. CoD4 ports carry other names for these (mp_backlot's silver and "
      "yellow sedans and brown wagons), so blowing one up showed a stand-in model. mp_backlot: 27 "
      "parts from mp_checkpoint and mp_invasion. Off by default until tried on a console."),
+    ("destructible_sounds", "Destructible sounds",
+     "The sounds the 360's destructible script plays for the map's destructible cars and props "
+     "(a burning car's fire_vehicle_med and fire_vehicle_flareup_med, ...) that neither the map "
+     "nor the always-loaded files have come from a stock 360 map, as every stock map carries "
+     "them in its own file. PC mp_backlot (a CoD4 port) has no sounds at all, so its cars "
+     "burned silently."),
     ("stock_streamed_pictures", "Pictures the 360 already has, streamed (test)",
      "A picture the map takes from the PC game's files (not its own .iwd) that a stock 360 map "
      "streams under the same name streams from the 360's own picture packs (imagefile1-4.pak, "
@@ -1339,6 +1345,7 @@ class Porter:
         self.stock_copied = Counter()   # materials / pictures copied whole (stock_materials, stock_pictures)
         self.stock_streamed = {}        # picture name -> a stock map's streamed one (stock_streamed_pictures)
         self.breakables = []            # destructible_plan: models to copy in (destructible_parts)
+        self.destructible_aliases = []  # destructible_sound_plan: aliases to add (destructible_sounds)
         self.swapped_rows = set()       # light grid row data already put in 360 byte order
         self.pc_sort = {}               # id() of a material -> the PC's sort key (pc_sort_keys)
         self.pc_cull = {}               # id() of a two-sided PC material -> its culling (pc_face_culling)
@@ -1779,6 +1786,7 @@ class Porter:
         ents[:] = [e for e in ents if e[0] not in ("pixelshader", "vertexshader", "vertexdecl", "xmodelsurfs")]
         self.stock_effects(ents)
         if self.fixes["stock_sounds"]:
+            self.add_destructible_aliases(ents)
             self.stock_sounds(ents)
         self.stock_anims(ents)
         if self.fixes["stock_models"]:
@@ -4904,6 +4912,24 @@ class Porter:
                             todo.append(j)
         self.picked.setdefault(id(src), set()).update(sel)
 
+    def add_destructible_aliases(self, ents):
+        """An alias list entry for each sound the map's destructibles need and lack
+        (self.destructible_aliases): only its name, which stock_sounds then fills from the
+        stock 360 file that has it, as it does the map's own aliases."""
+        have = set((alias_name(o) or b"").lower() for o in iter_objects(ents)
+                   if isinstance(o, dict) and o.get("_asset") == "snd_alias_list_t")
+        made = []
+        for name in self.destructible_aliases:
+            if name.lower() in have or name not in self.stock_aliases:
+                continue
+            d = {"_asset": "snd_alias_list_t", "@": {("aliasName", ()): Str(name)}}
+            made.append(tree.AssetEntry(["sound", d]))
+            have.add(name.lower())
+        ents[0:0] = made
+        if made:
+            self.log("  %d destructible sounds added from the stock 360 files (%s)" % (
+                len(made), ", ".join(alias_name(e[1]).decode("latin-1") for e in made)))
+
     def add_breakables(self, ents):
         """Copy in the models the map's destructible entities need (self.breakables, from
         destructible_plan), after the map's own assets: each named as the 360's script asks for
@@ -5664,6 +5690,56 @@ def destructible_donors(root, ref_paths, stock_paths, read, log=print):
     return plan
 
 
+def stock_alias_names(path):
+    """The (lower-case) sound alias names a stock file has, kept like stock_techset_names."""
+    return _stock_names(path, "aliases", "snd_alias_list_t")
+
+
+def destructible_sound_plan(pc_root, types_script, have, stock_paths):
+    """[(alias name, stock file)] of the sounds the 360's destructible script plays for the
+    map's destructible entities (the names in each type's function that are sound aliases of
+    some stock file) that the map and the always-loaded files lack (have: lower-case names)."""
+    types = set(re.findall(r'"destructible_type"\s+"([^"]+)"', map_entity_text(pc_root)))
+    if not types:
+        return []
+    found = {p: stock_alias_names(p) for p in stock_paths}
+    plan, seen = [], set()
+    for t, (names, _colors) in sorted(destructible_names(types_script, types).items()):
+        for n in sorted(names):
+            low = n.lower().encode("latin-1")
+            if low in have or low in seen:
+                continue
+            p = next((p for p in stock_paths if low in found[p]), None)
+            if p is not None:
+                plan.append((low, p))
+                seen.add(low)
+    return plan
+
+
+def destructible_sound_donors(root, ref_paths, stock_paths, read, log=print):
+    """destructible_sound_plan for PC map root, with the 360's destructible script and alias
+    names from the always-loaded files among ref_paths (read: path -> tree)."""
+    script = None
+    have = set(n.lower() for n in pool_names(root).get("snd_alias_list_t", ()))
+    for p in ref_paths:
+        if os.path.splitext(os.path.basename(p))[0].lower() not in RESIDENT:
+            continue
+        have |= stock_alias_names(p)
+        for e in read(p)["assets"]:
+            if e[0] == "rawfile" and isinstance(e[1], dict) and \
+                    (_name(e[1]) or b"").lower() == b"common_scripts/_destructible_types.gsc":
+                script = _rawfile_text(e[1])
+    if script is None:
+        return []
+    # (Stock files already being read first: no extra file to read for what they have.)
+    order = [p for p in stock_paths if p in ref_paths] + [p for p in stock_paths if p not in ref_paths]
+    plan = destructible_sound_plan(root, script, have, order)
+    if plan:
+        log("  destructible sounds the map lacks: %d from %s" % (
+            len(plan), ", ".join(sorted(set(os.path.basename(p) for _, p in plan)))))
+    return plan
+
+
 def stock_streamed_images(path):
     """{lower-case name: GfxImage} of the pictures a stock file streams from the 360's own
     picture packs (a header and where its levels sit in imagefile1-4.pak, no pixels), kept in
@@ -6093,6 +6169,13 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         extra = sorted(set(p for _, _, p, _ in breakables) - set(ref_paths))
         ref_paths += extra
         donors.update(extra)
+    sound_plan = []
+    if fx_paths and fixes["destructible_sounds"] and fixes["stock_sounds"]:
+        sound_plan = destructible_sound_donors(root, ref_paths, fx_paths, read, log)
+        # (Stock maps already among ref_paths are preferred: no extra file to read.)
+        extra = sorted(set(p for _, p in sound_plan) - set(ref_paths))
+        ref_paths += extra
+        donors.update(extra)
     for p in ref_paths:
         refs.append((p, read(p)))
     if not iwd_path:
@@ -6109,6 +6192,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     if cache_dir:
         porter.picture_cache = PictureCache(os.path.join(cache_dir, "pictures"))
     porter.breakables = breakables
+    porter.destructible_aliases = [n for n, _ in sound_plan]
     if fixes["stock_streamed_pictures"]:
         for p in list(ref_paths) + [p for p in fx_paths if p not in ref_paths]:
             for k, v in stock_streamed_images(p).items():
