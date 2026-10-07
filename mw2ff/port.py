@@ -264,9 +264,19 @@ FIXES = [
      "always-loaded common_mp.ff also has is named instead (a reference to the loaded one), as "
      "stock maps do: none of 5 stock maps checked carries a second copy of anything common_mp "
      "has. A second copy takes the name over when the map loads: PC mp_backlot's own "
-     "128x128 fire_roar_pm_atlas replaced common_mp's streamed one, and the picture streamer "
-     "froze the console the first time a burning car's flames drew it. mp_backlot: 24 "
-     "copies (14 pictures, 7 materials, 2 models, 1 effect)."),
+     "128x128 fire_roar_pm_atlas replaced common_mp's streamed one. Physics presets too, and "
+     "a raw file (vision, script) common_mp has is left out (the game loads raw files by name; "
+     "common_mp has IW's own 360 vision/mp_backlot.vision). mp_backlot: 24 copies (14 "
+     "pictures, 7 materials, 2 models, 1 effect), 2 physics presets, its vision file."),
+    ("stock_layout", "Stock file layout (test)",
+     "The file laid out as every one of the 16 stock 360 maps is (mined with the skill's "
+     "stock_rules.py): every shader set an asset list entry of its own (as Shader sets listed "
+     "as assets); the map's entities inside the collision map, not an entry of their own; the "
+     "map's one-of-a-kind assets in stock order (com_map, fx_map, lightdef, then gfx_map, "
+     "game_map_mp, col_map_mp); and one copy of each picture, material, model geometry, pixel "
+     "shader and physics preset per name (mp_backlot carried 65 names twice, from the team "
+     "models and stock shader sets copied from different maps; stock files never do). Off by "
+     "default until tried on a console."),
     ("list_techsets", "Shader sets listed as assets, as stock (test)",
      "Every shader set the map carries in full becomes an entry of its own in the file's asset "
      "list, just before the first asset that uses it, and materials point at that entry: stock "
@@ -392,7 +402,7 @@ DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_bo
                "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes", "ground_lit_flag",
                "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin",
                "swap_models_test", "encode_sounds", "stock_streamed_pictures", "destructible_parts",
-               "convert_anims", "split_car_fire", "list_techsets"}
+               "convert_anims", "split_car_fire", "list_techsets", "stock_layout"}
 TREE_BOX_MARGIN = 64            # units, for the tree_box_margin test switch
 # MB of XMA the encode_sounds switch makes at most (stock maps carry 4 to 8 MB of sounds).
 ENCODED_SOUND_BUDGET = 12
@@ -1874,8 +1884,6 @@ class Porter:
         self.own_reference_copies(ents)
         if self.fixes["merge_duplicates"]:
             self.merge_same_named(ents)
-        if self.fixes["list_techsets"]:
-            self.list_techsets(ents)
         for u in self.unreadable[:5]:
             self.warn("picture %s can't be read, so it's treated as missing" % u)
         if len(self.unreadable) > 5:
@@ -4943,6 +4951,370 @@ class Porter:
                             todo.append(j)
         self.picked.setdefault(id(src), set()).update(sel)
 
+    ONE_COPY = ("GfxImage", "Material", "XModelSurfs", "MaterialPixelShader", "PhysPreset")
+    GLOBAL_ORDER = ("com_map", "fx_map", "lightdef")
+    WORLD_ORDER = ("gfx_map", "game_map_mp", "col_map_mp")
+
+    @staticmethod
+    def _signature(o, depth=0):
+        """Content of an asset for comparing two same-named copies (pointers by name)."""
+        if depth > 12:
+            return "deep"
+        if isinstance(o, Ref):
+            t = o.target
+            t = t.asset if isinstance(t, tree.InsertSlot) else (t[1] if isinstance(t, tree.AssetEntry) else t)
+            if isinstance(t, dict) and t.get("_asset"):
+                return ("ref", t["_asset"], _name(t) or asset_name(t))
+            return ("ref", o.rel)
+        if isinstance(o, dict):
+            if depth and o.get("_asset"):
+                return ("asset", o["_asset"], _name(o) or asset_name(o))
+            items = []
+            for k, v in sorted(o.items(), key=lambda kv: str(kv[0])):
+                if str(k).startswith("_"):
+                    continue
+                if k == "@":
+                    for kk, vv in sorted(v.items(), key=lambda kv: str(kv[0])):
+                        items.append((str(kk), Porter._signature(vv, depth + 1)))
+                elif isinstance(v, (dict, list)):
+                    items.append((k, Porter._signature(v, depth + 1)))
+                elif not (isinstance(v, str) and (v.startswith("0x") or v in ("follow", "insert"))):
+                    items.append((k, v))
+            return tuple(items)
+        if isinstance(o, list):
+            return tuple(Porter._signature(x, depth + 1) for x in o)
+        if isinstance(o, Leaf):
+            return ("leaf", o.n, hash(o.raw))
+        if isinstance(o, Str):
+            return ("str", o.b)
+        return repr(o)
+
+    @classmethod
+    def _held(cls, ents):
+        """ids of what is written in place somewhere (an entry, or inside something written),
+        not only pointed at."""
+        held = set(id(e[1]) for e in ents)
+        for o in cls._reach(ents):
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    if k == "@":
+                        for c in v.values():
+                            for x in (c if isinstance(c, list) else [c]):
+                                if isinstance(x, (dict, list, Leaf)):
+                                    held.add(id(x))
+                    elif isinstance(v, (dict, list)):
+                        held.add(id(v))
+            elif isinstance(o, list):
+                held.update(id(x) for x in o if isinstance(x, (dict, list, Leaf)))
+        return held
+
+    @staticmethod
+    def _reach(ents):
+        """Every dict/list/Leaf the writer will write: those the asset list holds and those
+        reached only through a pointer (an effect's model in a stock file), each once."""
+        seen = set()
+        stack = [e[1] for e in ents]
+        out = []
+        while stack:
+            o = stack.pop()
+            if id(o) in seen:
+                continue
+            seen.add(id(o))
+            out.append(o)
+            if isinstance(o, dict):
+                for k, v in o.items():
+                    if k == "@":
+                        for c in v.values():
+                            for x in (c if isinstance(c, list) else [c]):
+                                if isinstance(x, Ref):
+                                    t = x.target
+                                    t = t.asset if isinstance(t, tree.InsertSlot) else (
+                                        t[1] if isinstance(t, tree.AssetEntry) else t)
+                                    if isinstance(t, (dict, list)):
+                                        stack.append(t)
+                                elif isinstance(x, (dict, list, Leaf)):
+                                    stack.append(x)
+                            if isinstance(c, PtrList):
+                                stack.append(c)
+                    elif isinstance(v, (dict, list)):
+                        stack.append(v)
+            elif isinstance(o, list):
+                for x in o:
+                    if isinstance(x, Ref):
+                        t = x.target
+                        t = t.asset if isinstance(t, tree.InsertSlot) else (
+                            t[1] if isinstance(t, tree.AssetEntry) else t)
+                        if isinstance(t, (dict, list)):
+                            stack.append(t)
+                    elif isinstance(x, (dict, list, Leaf)):
+                        stack.append(x)
+        return out
+
+    def stock_layout(self, ents):
+        """The test switch stock_layout (see FIXES); list_techsets has run already."""
+        notes = []
+        # The map's entities inside the collision map, as an inline (temporary) asset.
+        cm = next((e[1] for e in ents if e[0] == "col_map_mp" and isinstance(e[1], dict)), None)
+        me_entry = next((e for e in ents if e[0] == "map_ents"), None)
+        c = cm.get("@", {}).get(("mapEnts", ())) if cm else None
+        if me_entry is not None and isinstance(c, Ref) and c.target is me_entry:
+            me = me_entry[1]
+            slot = me.setdefault("_slot", tree.InsertSlot(me))
+            for o in self._reach(ents):
+                if isinstance(o, dict):
+                    for k, x in list(o.get("@", {}).items()):
+                        if isinstance(x, Ref) and x.target is me_entry and o is not cm:
+                            x.target, x.rel, x.t = slot, 0, None
+            cm["@"][("mapEnts", ())] = me
+            cm["mapEnts"] = "insert"
+            ents[:] = [e for e in ents if e is not me_entry]
+            notes.append("entities inside the collision map")
+        # One copy per name of the kinds stock files never repeat.
+        groups = {}
+        order = {}
+        for i, e in enumerate(ents):
+            for o in self._reach([e]):
+                if isinstance(o, dict) and o.get("_asset") in self.ONE_COPY:
+                    n = _name(o) or asset_name(o)
+                    if n and not n.startswith(b","):
+                        if id(o) not in order:
+                            order[id(o)] = i
+                            groups.setdefault((o["_asset"], n.lower()), []).append(o)
+        swap = {}           # id(copy) -> kept asset
+        differed = Counter()
+        for key, objs in groups.items():
+            if len(objs) < 2:
+                continue
+            # The stock copy (a streamed picture: what stock maps use) wins, else the first.
+            keep = next((o for o in objs if o.get("streaming") == 1), objs[0])
+            sig = self._signature(keep)
+            for o in objs:
+                if o is not keep:
+                    swap[id(o)] = keep
+                    if self._signature(o) != sig:
+                        differed[key[0]] += 1
+        if swap:
+            inside = {}
+            for o in self._reach(ents):
+                if isinstance(o, dict) and id(o) in swap:
+                    for x in iter_objects(o):
+                        if x is not o:
+                            inside[id(x)] = id(o)
+            pointed = set()
+            for o in self._reach(ents):
+                if isinstance(o, dict) and id(o) not in inside:
+                    for v in o.get("@", {}).values():
+                        for x in (v if isinstance(v, list) else [v]):
+                            if isinstance(x, Ref):
+                                t = x.target.asset if isinstance(x.target, tree.InsertSlot) else x.target
+                                if id(t) in inside and (x.rel or not (isinstance(t, dict) and t.get("_asset"))):
+                                    pointed.add(inside[id(t)])
+            # Pointers into an identical copy go to the same place in the kept one.
+            same = {}
+            def pair(a, b, depth=0):
+                if depth > 14 or type(a) is not type(b) or id(a) in same:
+                    return
+                same[id(a)] = b
+                if isinstance(a, dict):
+                    for k, v in a.items():
+                        if k == "@" and isinstance(b.get("@"), dict):
+                            for kk, vv in v.items():
+                                if kk in b["@"]:
+                                    pair(vv, b["@"][kk], depth + 1)
+                        elif isinstance(v, (dict, list)) and k in b and not str(k).startswith("_"):
+                            pair(v, b[k], depth + 1)
+                        elif isinstance(v, tree.InsertSlot) and isinstance(b.get(k), tree.InsertSlot):
+                            same[id(v)] = b[k]
+                elif isinstance(a, list) and len(a) == len(b):
+                    for x, y in zip(a, b):
+                        pair(x, y, depth + 1)
+            identical = set()
+            for o in self._reach(ents):
+                if isinstance(o, dict) and id(o) in swap and id(o) in pointed \
+                        and self._signature(o) == self._signature(swap[id(o)]):
+                    pair(o, swap[id(o)])
+                    identical.add(id(o))
+            for k in pointed - identical:
+                swap.pop(k, None)
+            if same:
+                for o in self._reach(ents):
+                    if not isinstance(o, dict) or id(o) in inside:
+                        continue
+                    for v in o.get("@", {}).values():
+                        for x in (v if isinstance(v, list) else [v]):
+                            if isinstance(x, Ref) and id(x.target) in same and inside.get(id(x.target)) in identical:
+                                x.target = same[id(x.target)]
+
+            def ref_to(a):
+                r = Ref(1)
+                r.target, r.rel = a.setdefault("_slot", tree.InsertSlot(a)), 0
+                a["_forward"] = True
+                return r
+            slots = {id(o["_slot"]): o for o in self._reach(ents)
+                     if isinstance(o, dict) and id(o) in swap and isinstance(o.get("_slot"), tree.InsertSlot)}
+            merged = Counter()
+            for o in list(self._reach(ents)):
+                if not isinstance(o, dict) or id(o) in swap:
+                    continue
+                ch = o.get("@", {})
+                for k, v in list(ch.items()):
+                    if isinstance(v, dict) and id(v) in swap:
+                        ch[k] = ref_to(swap[id(v)])
+                        if isinstance(o.get(k[0]), str):
+                            o[k[0]] = "0x00000001"
+                        merged[v["_asset"]] += 1
+                    elif isinstance(v, list):
+                        for j, x in enumerate(v):
+                            if isinstance(x, dict) and id(x) in swap:
+                                v[j] = ref_to(swap[id(x)])
+                                merged[x["_asset"]] += 1
+                            elif isinstance(x, Ref) and (id(x.target) in swap or id(x.target) in slots):
+                                a = swap.get(id(x.target)) or swap[id(slots[id(x.target)])]
+                                v[j] = ref_to(a)
+                    elif isinstance(v, Ref) and (id(v.target) in swap or id(v.target) in slots):
+                        a = swap.get(id(v.target)) or swap[id(slots[id(v.target)])]
+                        ch[k] = ref_to(a)
+            # What only a dropped copy held is now only pointed at: a name-only asset gets
+            # a copy of its name at each pointer, anything else is written at its first use.
+            held = self._held(ents)
+            for o in list(self._reach(ents)):
+                if not isinstance(o, dict):
+                    continue
+                ch = o.get("@", {})
+                for k, v in list(ch.items()):
+                    for j, x in enumerate(v if isinstance(v, list) else [v]):
+                        if not isinstance(x, Ref) or x.rel:
+                            continue
+                        t = x.target.asset if isinstance(x.target, tree.InsertSlot) else x.target
+                        if not isinstance(t, dict) or not t.get("_asset") or id(t) in held:
+                            continue
+                        if (_name(t) or asset_name(t) or b"").startswith(b","):
+                            c = {kk: vv for kk, vv in t.items() if kk not in ("_slot", "_forward")}
+                            if isinstance(t.get("@"), dict):
+                                c["@"] = dict(t["@"])
+                            self.done.add(id(c))
+                            if isinstance(v, list):
+                                v[j] = c
+                            else:
+                                ch[k] = c
+                                if isinstance(o.get(k[0]), str):
+                                    o[k[0]] = "follow"
+                        else:
+                            t.setdefault("_slot", tree.InsertSlot(t))
+                            t["_forward"] = True
+            if merged:
+                notes.append("one copy per name (%s%s)" % (
+                    ", ".join("%s %d" % kv for kv in sorted(merged.items())),
+                    "; differing copies replaced by the stock or first one: %s" % ", ".join(
+                        "%s %d" % kv for kv in sorted(differed.items())) if differed else ""))
+        # An asset pointed at from somewhere besides where it is held keeps a slot that the
+        # other pointers name: written inline without one, the writer wrote it again at the
+        # next pointer (mp_backlot: the cardboard box material in an effect and again in the
+        # collision map's dynamic entities).
+        pointed_at = set()
+        for o in self._reach(ents):
+            if isinstance(o, dict):
+                for v in o.get("@", {}).values():
+                    for x in (v if isinstance(v, list) else [v]):
+                        if isinstance(x, Ref) and not x.rel:
+                            t = x.target.asset if isinstance(x.target, tree.InsertSlot) else x.target
+                            if isinstance(t, dict) and t.get("_asset"):
+                                pointed_at.add(id(t))
+        held_by = Counter()
+        for o in self._reach(ents):
+            if isinstance(o, dict):
+                for v in o.get("@", {}).values():
+                    for x in (v if isinstance(v, list) else [v]):
+                        if isinstance(x, dict) and x.get("_asset"):
+                            held_by[id(x)] += 1
+            elif isinstance(o, PtrList):
+                for x in o:
+                    if isinstance(x, dict) and x.get("_asset"):
+                        held_by[id(x)] += 1
+        pointed_at.update(k for k, n in held_by.items() if n > 1)
+        shared = 0
+        for o in self._reach(ents):
+            if isinstance(o, dict) and id(o) in pointed_at and not o.get("_forward") \
+                    and not (_name(o) or asset_name(o) or b"").startswith(b","):
+                o.setdefault("_slot", tree.InsertSlot(o))
+                o["_forward"] = True
+                shared += 1
+        if shared:
+            notes.append("%d shared assets given a slot (written once)" % shared)
+        # The one-of-a-kind assets in stock order.
+        idx = {e[0]: i for i, e in enumerate(ents) if e[0] in self.GLOBAL_ORDER + self.WORLD_ORDER}
+        if all(t in idx for t in self.WORLD_ORDER):
+            singles = {t: ents[i] for t, i in idx.items()}
+            g_at = min(idx.values())
+            w_at = max(idx[t] for t in self.WORLD_ORDER)
+            rest = [(i, e) for i, e in enumerate(ents) if e[0] not in idx]
+            new = []
+            placed_g = placed_w = False
+            for i, e in enumerate(ents):
+                if i == g_at and not placed_g:
+                    new.extend(singles[t] for t in self.GLOBAL_ORDER if t in singles)
+                    placed_g = True
+                if i == w_at and not placed_w:
+                    new.extend(singles[t] for t in self.WORLD_ORDER)
+                    placed_w = True
+                if e[0] not in idx:
+                    new.append(e)
+            ents[:] = new
+            notes.append("one-of-a-kind assets in stock order")
+            moved = self._forward_early_uses(ents)
+            if moved:
+                notes.append("%d assets written at their first use" % moved)
+        self.log("  test: stock file layout: " + "; ".join(notes))
+
+    @staticmethod
+    def _forward_early_uses(ents):
+        """An asset used through a pointer before the entry that holds it is written at its
+        first use instead (_forward, as shared pictures are); what it points at counts as
+        used there too, so this repeats until nothing more moves. Returns how many moved."""
+        home = {}
+        for i, e in enumerate(ents):
+            for o in iter_objects(e[1]):
+                if isinstance(o, dict) and o.get("_asset"):
+                    home.setdefault(id(o), i)
+        eff = dict(home)
+        changed = True
+        while changed:
+            changed = False
+            for i, e in enumerate(ents):
+                stack = [(e[1], i)]
+                seen = set()
+                while stack:
+                    o, at = stack.pop()
+                    if id(o) in seen:
+                        continue
+                    seen.add(id(o))
+                    if isinstance(o, dict):
+                        if o.get("_asset") and id(o) in eff:
+                            at = min(at, eff[id(o)])
+                        for k, v in o.items():
+                            if k == "@":
+                                for c in v.values():
+                                    for x in (c if isinstance(c, list) else [c]):
+                                        if isinstance(x, Ref):
+                                            t = x.target.asset if isinstance(x.target, tree.InsertSlot) else x.target
+                                            if isinstance(t, dict) and id(t) in eff and eff[id(t)] > at:
+                                                eff[id(t)] = at
+                                                changed = True
+                                        elif isinstance(x, (dict, list)):
+                                            stack.append((x, at))
+                            elif isinstance(v, (dict, list)):
+                                stack.append((v, at))
+                    elif isinstance(o, list):
+                        stack.extend((x, at) for x in o if isinstance(x, (dict, list)))
+        moved = 0
+        for e in ents:
+            for o in iter_objects(e[1]):
+                if isinstance(o, dict) and id(o) in eff and eff[id(o)] < home[id(o)] and not o.get("_forward"):
+                    o.setdefault("_slot", tree.InsertSlot(o))
+                    o["_forward"] = True
+                    moved += 1
+        return moved
+
     def list_techsets(self, ents):
         """The test switch list_techsets (see FIXES): each full shader set written inside a
         material becomes an asset list entry of its own before the first entry that held it;
@@ -5044,13 +5416,22 @@ class Porter:
                  "window (distortion), windshield (bright core), first smoke (white puff) and fire "
                  "(flames)")
 
-    COMMON_NAMED = ("GfxImage", "Material", "XModel", "FxEffectDef", "MaterialTechniqueSet")
+    COMMON_NAMED = ("GfxImage", "Material", "XModel", "FxEffectDef", "MaterialTechniqueSet", "PhysPreset")
 
     def name_common_assets(self, ents):
         """A full asset under a name common_mp.ff has (always loaded) becomes a reference to
         the loaded one, as stock maps name them (see name_common_assets in FIXES). One that
         other assets point into (not at it, but at a part inside it) stays, as the parts
         would be written nowhere."""
+        # A raw file (vision, script) common_mp has is left out: the game loads raw files by
+        # name, and stock maps carry none of common_mp's (PC mp_backlot's vision/mp_backlot.vision:
+        # common_mp has IW's own 360 one).
+        dropped = [e for e in ents if e[0] == "rawfile" and isinstance(e[1], dict)
+                   and ("RawFile", (_name(e[1]) or b"").lower()) in self.common_names]
+        if dropped:
+            ents[:] = [e for e in ents if not any(e is d for d in dropped)]
+            self.log("  %d raw files common_mp has left out (%s)" % (
+                len(dropped), ", ".join(_name(e[1]).decode("latin-1") for e in dropped[:4])))
         found = [o for o in iter_objects(ents) if isinstance(o, dict) and id(o) not in self.done
                  and o.get("_asset") in self.COMMON_NAMED
                  and not (asset_name(o) or b",").startswith(b",")
@@ -6396,6 +6777,12 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
         # The stock team copied in: the PC copy of a stock map carries its own (PC mp_rust).
         if porter.fixes["merge_duplicates"]:
             porter.merge_same_named(root["assets"])
+    # Last, once everything the file carries is in (teams are added above): the layout
+    # passes look at the whole asset list.
+    if porter.fixes["list_techsets"] or porter.fixes["stock_layout"]:
+        porter.list_techsets(root["assets"])
+    if porter.fixes["stock_layout"]:
+        porter.stock_layout(root["assets"])
     if fixes["drop_pc_tables"]:
         drop_pc_tables(root, log)
     check_pools(root, refs, log, porter.warn)

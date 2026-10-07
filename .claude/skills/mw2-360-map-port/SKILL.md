@@ -28,7 +28,8 @@ test will tell you before asking for it.
   `src/game/iw4/mp_tu6/symbols.h` with known function names.
 
 Read `references/engine-notes.md` before reasoning about how the 360 culls, draws or loads a map,
-and `references/writer-pitfalls.md` before writing code that creates or moves pointers.
+`references/writer-pitfalls.md` before writing code that creates or moves pointers, and
+`references/stock-rules.md` before changing how assets are stored, named or ordered.
 
 ## How the user likes to work
 
@@ -58,6 +59,11 @@ mp_backlot or mp_waw_castle) with the relevant switches, then:
    that only the intended things changed, and that maps the change shouldn't touch are identical.
 4. **Compare against stock**: the 16 stock 360 maps are the ground truth. When unsure what a
    field should hold, measure it across the stock files first and write the rule down.
+5. **Run the stock rule checks**: `scripts/stock_rules.py --stock DIR OUT.ff` (value, listing,
+   duplicate-name and common_mp rules mined from the stock files) and `scripts/placement.py
+   OUT.ff STOCK.ff ...` (which memory block each kind of data loads into, and its alignment).
+   Both should come back clean; `references/stock-rules.md` lists every rule found so far, the
+   evidence, and where the converter stands. Add new rules there as you find them.
 
 ## Debugging method that works
 
@@ -71,7 +77,13 @@ mp_backlot or mp_waw_castle) with the relevant switches, then:
    `r_singleCell`, `r_forceLod`, `r_cacheSModelLighting`, `r_portalMinClipArea`, `r_portalBevels`.
 4. **Bisect with test switches** that change one thing (huge boxes on all nodes / leaves only /
    inner only / grown by N, swap two placements' numbers, room visibility off).
-5. **When the file looks right but the console misbehaves, read console memory.** Emulating the
+5. **A freeze (no Watson report) is usually the graphics chip hanging or a deadlock.** Run
+   `scripts/xbdm_stacks.py CONSOLE_IP` while frozen: every thread's registers and call chain.
+   All threads in the kernel wait with the render thread in its end-of-frame wait (TU6
+   0x823e6ad8) means the GPU hung on something drawn that frame; then bisect what is drawn
+   (`fx_draw 0`, `r_dlightLimit 0`, `r_distortion 0`, `fx_marks 0`, then test switches that
+   move pieces of an effect into separately triggered ones, like `split_car_fire`).
+6. **When the file looks right but the console misbehaves, read console memory.** Emulating the
    game's code from the file can't see what the game rewrites at load. `scripts/xbdm_dump.py`
    dumps the loaded world (pointer chain in the engine notes) over XBDM; compare it with the
    file. This is how the vanishing-models bug was finally found: the game reorders placed models
