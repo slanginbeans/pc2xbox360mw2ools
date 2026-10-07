@@ -267,6 +267,20 @@ FIXES = [
      "128x128 fire_roar_pm_atlas replaced common_mp's streamed one, and the picture streamer "
      "froze the console the first time a burning car's flames drew it. mp_backlot: 24 "
      "copies (14 pictures, 7 materials, 2 models, 1 effect)."),
+    ("list_techsets", "Shader sets listed as assets, as stock (test)",
+     "Every shader set the map carries in full becomes an entry of its own in the file's asset "
+     "list, just before the first asset that uses it, and materials point at that entry: stock "
+     "360 maps list every one that way (mp_invasion's car fire shader set, "
+     "effect_zfeather_falloff_add_eyeoffset, is entry 1142, the fire effect 1160). Converted "
+     "maps wrote each inside the first material that used it (mp_backlot: 63, inside the world, "
+     "the collision map's models, effects and models). Off by default until tried on a console."),
+    ("split_car_fire", "Split the car fire across the car's effects (test)",
+     "A diagnosis switch, not a fix. The burning car effect (smoke/car_damage_blacksmoke_fire) "
+     "froze the console on converted mp_backlot, and its data matches stock. This moves each "
+     "group of its elements into an effect you can set off on its own: shooting a headlight "
+     "plays its omni light, a brake light its halogen glow, a side window its heat distortion, "
+     "the windshield its bright core, the first smoke its white puff; the fire keeps only its "
+     "flame sprites. The first one that freezes names the part at fault."),
     ("destructible_sounds", "Destructible sounds",
      "The sounds the 360's destructible script plays for the map's destructible cars and props "
      "(a burning car's fire_vehicle_med and fire_vehicle_flareup_med, ...) that neither the map "
@@ -378,7 +392,7 @@ DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_bo
                "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes", "ground_lit_flag",
                "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin",
                "swap_models_test", "encode_sounds", "stock_streamed_pictures", "destructible_parts",
-               "convert_anims"}
+               "convert_anims", "split_car_fire", "list_techsets"}
 TREE_BOX_MARGIN = 64            # units, for the tree_box_margin test switch
 # MB of XMA the encode_sounds switch makes at most (stock maps carry 4 to 8 MB of sounds).
 ENCODED_SOUND_BUDGET = 12
@@ -1804,6 +1818,8 @@ class Porter:
             self.stock_model_swap(ents)
         if self.fixes["name_common_assets"]:
             self.name_common_assets(ents)
+        if self.fixes["split_car_fire"]:
+            self.split_car_fire(ents)
         # Materials and pictures a left-out asset brought in first are only pointed at from
         # then on: the writer puts each where the first remaining pointer to it is.
         reached = set(id(o) for o in iter_objects(ents))
@@ -1858,6 +1874,8 @@ class Porter:
         self.own_reference_copies(ents)
         if self.fixes["merge_duplicates"]:
             self.merge_same_named(ents)
+        if self.fixes["list_techsets"]:
+            self.list_techsets(ents)
         for u in self.unreadable[:5]:
             self.warn("picture %s can't be read, so it's treated as missing" % u)
         if len(self.unreadable) > 5:
@@ -4924,6 +4942,107 @@ class Porter:
                             sel.add(j)
                             todo.append(j)
         self.picked.setdefault(id(src), set()).update(sel)
+
+    def list_techsets(self, ents):
+        """The test switch list_techsets (see FIXES): each full shader set written inside a
+        material becomes an asset list entry of its own before the first entry that held it;
+        pointers to it point at the entry (as stock files point from one asset at another)."""
+        found = {}          # id(techset) -> [techset, first entry index, [(holder dict, key)]]
+        for i, e in enumerate(ents):
+            if e[0] == "techset":
+                continue
+            for o in iter_objects(e[1]):
+                if not isinstance(o, dict):
+                    continue
+                for k, c in o.get("@", {}).items():
+                    if isinstance(c, dict) and c.get("_asset") == "MaterialTechniqueSet" \
+                            and not (_name(c) or b",").startswith(b","):
+                        f = found.setdefault(id(c), [c, i, []])
+                        f[2].append((o, k))
+        if not found:
+            return
+        entries = {}
+        for key, (ts, at, holders) in found.items():
+            entries[key] = tree.AssetEntry(["techset", ts])
+        targets = {}
+        for key, (ts, at, holders) in found.items():
+            targets[id(ts)] = entries[key]
+            if isinstance(ts.get("_slot"), tree.InsertSlot):
+                targets[id(ts["_slot"])] = entries[key]
+        for o in iter_objects(ents):
+            if not isinstance(o, dict):
+                continue
+            for k, c in list(o.get("@", {}).items()):
+                for j, x in enumerate(c if isinstance(c, list) else [c]):
+                    if isinstance(x, Ref) and not x.rel and id(x.target) in targets:
+                        x.target, x.rel, x.t = targets[id(x.target)], 4, None
+        for key, (ts, at, holders) in found.items():
+            for o, k in holders:
+                r = Ref(1)
+                r.target, r.rel = entries[key], 4
+                o["@"][k] = r
+                if isinstance(o.get(k[0]), str):
+                    o[k[0]] = "0x00000001"      # (an alias: a non-null placeholder)
+            ts.pop("_slot", None)
+            ts.pop("_forward", None)
+        by_at = {}
+        for key, (ts, at, holders) in found.items():
+            by_at.setdefault(at, []).append(entries[key])
+        new = []
+        for i, e in enumerate(ents):
+            new.extend(by_at.get(i, ()))
+            new.append(e)
+        ents[:] = new
+        self.log("  test: %d shader sets listed as assets of their own, as stock files list them"
+                 % len(found))
+
+    # split_car_fire: (effect that gets them, element numbers of the car fire)
+    FIRE_SPLIT = ((b"props/car_glass_headlight", (0,)), (b"props/car_glass_brakelight", (1, 8)),
+                  (b"props/car_glass_med", (2,)), (b"props/car_glass_large", (3,)),
+                  (b"smoke/car_damage_whitesmoke", (10,)),
+                  (b"smoke/car_damage_blacksmoke_fire", (4, 5, 6, 7, 9)))
+
+    def split_car_fire(self, ents):
+        """The test switch split_car_fire (see FIXES): each FIRE_SPLIT effect becomes the car
+        fire with only the elements listed, sharing the fire's materials."""
+        fx = {(asset_name(e[1]) or b"").lower(): e[1] for e in ents
+              if e[0] == "fx" and isinstance(e[1], dict)}
+        fire = fx.get(b"smoke/car_damage_blacksmoke_fire")
+        els = deref(fire["@"].get(("elemDefs", ()))) if fire else None
+        if not any(n in fx for n, _ in self.FIRE_SPLIT):
+            return
+        if not isinstance(els, list) or len(els) != 11 or any(n not in fx for n, _ in self.FIRE_SPLIT):
+            self.warn("Split the car fire: the map lacks the car fire or the car's glass and smoke "
+                      "effects as expected; left as they were")
+            return
+        looping = fire["elemDefCountLooping"]
+        shared = {}
+        for o in iter_objects(fire):
+            if isinstance(o, dict) and o.get("_asset") not in (None, "FxEffectDef"):
+                for x in iter_objects(o):
+                    shared[id(x)] = x
+                    if isinstance(x, dict) and "_slot" in x:
+                        shared[id(x["_slot"])] = x["_slot"]
+        made = {}
+        for name, keep in self.FIRE_SPLIT:
+            new = {k: v for k, v in fire.items() if k not in ("@", "_slot", "_forward")}
+            new["@"] = {k: v for k, v in fire["@"].items() if k != ("elemDefs", ())}
+            new["@"][("elemDefs", ())] = [copy.deepcopy(els[i], dict(shared)) for i in keep]
+            new["elemDefCountLooping"] = sum(1 for i in keep if i < looping)
+            new["elemDefCountOneShot"] = sum(1 for i in keep if i >= looping)
+            new["elemDefCountEmission"] = 0
+            if not new["elemDefCountLooping"]:
+                new["msecLoopingLife"] = 0
+            made[name] = new
+        for name, new in made.items():
+            d = fx[name]
+            self._replace(d, new)
+            _set_name(d, asset_name(fire) if name == b"smoke/car_damage_blacksmoke_fire" else name)
+            for o in iter_objects(d):
+                self.done.add(id(o))
+        self.log("  test: car fire split across the headlight (light), brake light (glow), side "
+                 "window (distortion), windshield (bright core), first smoke (white puff) and fire "
+                 "(flames)")
 
     COMMON_NAMED = ("GfxImage", "Material", "XModel", "FxEffectDef", "MaterialTechniqueSet")
 
