@@ -17,6 +17,7 @@ import sys
 
 PORT = 730
 DEPTH = 40
+SCAN = 0x1000       # bytes of each thread's stack scanned for code addresses
 
 
 class Xbdm:
@@ -48,6 +49,26 @@ class Xbdm:
                     break
                 lines.append(ln)
         return status, lines
+
+    def block(self, addr, length):
+        """(bytes read from addr on, up to length: stops at the first unreadable byte,
+        XBDM's status line for the first chunk)."""
+        out, first = bytearray(), None
+        while length > 0:
+            n = min(0x400, length)
+            status, lines = self.cmd("getmem addr=0x%08x length=0x%x" % (addr, n))
+            first = first or status
+            hexs = "".join(lines)
+            if not status.startswith("2"):
+                break
+            cut = hexs.find("?")
+            if cut >= 0:
+                out += bytes.fromhex(hexs[:cut - cut % 2])
+                break
+            out += bytes.fromhex(hexs)
+            addr += n
+            length -= n
+        return bytes(out), first
 
     def u32(self, addr):
         status, lines = self.cmd("getmem addr=0x%08x length=4" % addr)
@@ -115,6 +136,8 @@ def main():
             if not frame:
                 break
             back = x.u32(frame)
+            if back == 0:
+                back = x.u32(frame + 4)     # (a 64-bit back chain: its low word)
             if not back or back <= frame or back - frame > 0x100000:
                 break
             ret = x.u32(back - 8)
@@ -122,6 +145,18 @@ def main():
                 frames.append("0x%08x" % ret)
             frame = back
         out.append("  stack: " + " ".join(frames))
+        # Whatever the frame layout: every word on the top of the stack that points into code
+        # (the game at 0x82..., the kernel and system at 0x80... / 0x9...), in stack order.
+        if sp:
+            data, status = x.block(sp, SCAN)
+            out.append("  stack read: %d bytes (%s)" % (len(data), status))
+            out.append("  stack head: " + data[:64].hex())
+            code = []
+            for i in range(0, len(data) - 3, 4):
+                v = struct.unpack_from(">I", data, i)[0]
+                if 0x80000000 <= v < 0x84000000 or 0x90000000 <= v < 0x92000000:
+                    code.append("+%x:%08x" % (i, v))
+            out.append("  code words: " + " ".join(code))
         print("thread %s: iar=%s lr=%s" % (tid, regs.get("iar", "?"), regs.get("lr", "?")))
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mw2_stacks.txt")
     with open(path, "w") as f:
