@@ -259,6 +259,14 @@ FIXES = [
      "material for its color. CoD4 ports carry other names for these (mp_backlot's silver and "
      "yellow sedans and brown wagons), so blowing one up showed a stand-in model. mp_backlot: 27 "
      "parts from mp_checkpoint and mp_invasion. Off by default until tried on a console."),
+    ("name_common_assets", "Name what common_mp has",
+     "A picture, material, model, effect or shader set the map carries under a name the "
+     "always-loaded common_mp.ff also has is named instead (a reference to the loaded one), as "
+     "stock maps do: none of 5 stock maps checked carries a second copy of anything common_mp "
+     "has. A second copy takes the name over when the map loads: PC mp_backlot's own "
+     "128x128 fire_roar_pm_atlas replaced common_mp's streamed one, and the picture streamer "
+     "froze the console the first time a burning car's flames drew it. mp_backlot: 24 "
+     "copies (14 pictures, 7 materials, 2 models, 1 effect)."),
     ("destructible_sounds", "Destructible sounds",
      "The sounds the 360's destructible script plays for the map's destructible cars and props "
      "(a burning car's fire_vehicle_med and fire_vehicle_flareup_med, ...) that neither the map "
@@ -1353,6 +1361,7 @@ class Porter:
         self.stock_glass = None         # glass material name -> a stock glass type's 360-only numbers
         self.stock_sort_keys = None     # every sort key a stock material uses (pc_sort_keys)
         self.x_refs = x_refs
+        self.common_names = set()       # (type, lower-case name) common_mp.ff has (name_common_assets)
         self.stock_aliases = {}         # sound alias name -> (stock alias list, resident?) (stock_sounds)
         for name, root in x_refs:
             idx, aliases = asset_indexes(root)
@@ -1360,6 +1369,8 @@ class Porter:
             if base in RESIDENT:
                 for t, names in pool_names(root, _file_key(name)).items():
                     self.loaded.update((t, n) for n in names)
+                    if base == "common_mp":
+                        self.common_names.update((t, n.lower()) for n in names)
             order = {id(e[1]): i for i, e in enumerate(root["assets"])}
             for k, v in aliases.items():
                 if k.startswith(b","):
@@ -1791,6 +1802,8 @@ class Porter:
         self.stock_anims(ents)
         if self.fixes["stock_models"]:
             self.stock_model_swap(ents)
+        if self.fixes["name_common_assets"]:
+            self.name_common_assets(ents)
         # Materials and pictures a left-out asset brought in first are only pointed at from
         # then on: the writer puts each where the first remaining pointer to it is.
         reached = set(id(o) for o in iter_objects(ents))
@@ -4911,6 +4924,53 @@ class Porter:
                             sel.add(j)
                             todo.append(j)
         self.picked.setdefault(id(src), set()).update(sel)
+
+    COMMON_NAMED = ("GfxImage", "Material", "XModel", "FxEffectDef", "MaterialTechniqueSet")
+
+    def name_common_assets(self, ents):
+        """A full asset under a name common_mp.ff has (always loaded) becomes a reference to
+        the loaded one, as stock maps name them (see name_common_assets in FIXES). One that
+        other assets point into (not at it, but at a part inside it) stays, as the parts
+        would be written nowhere."""
+        found = [o for o in iter_objects(ents) if isinstance(o, dict) and id(o) not in self.done
+                 and o.get("_asset") in self.COMMON_NAMED
+                 and not (asset_name(o) or b",").startswith(b",")
+                 and (o["_asset"], asset_name(o).lower()) in self.common_names]
+        if not found:
+            return
+        inside = {}
+        for o in found:
+            for x in iter_objects(o):
+                if x is not o:
+                    inside[id(x)] = id(o)
+            for v in o.values():
+                if isinstance(v, tree.InsertSlot):
+                    inside.pop(id(v), None)
+        held = set(id(o) for o in found)
+        pointed_into = set()
+        for o in iter_objects(ents):
+            if not isinstance(o, dict) or id(o) in inside or id(o) in held:
+                continue
+            for c in o.get("@", {}).values():
+                for x in (c if isinstance(c, (list, PtrList)) else [c]):
+                    if isinstance(x, Ref):
+                        t = x.target.asset if isinstance(x.target, tree.InsertSlot) else x.target
+                        if id(t) in inside and (x.rel or not isinstance(t, dict)
+                                                or t.get("_asset") is None):
+                            pointed_into.add(inside[id(t)])
+        named, kept = Counter(), []
+        for o in found:
+            if id(o) in pointed_into:
+                kept.append(asset_name(o))
+                continue
+            named[o["_asset"]] += 1
+            self._replace(o, self.reference(o["_asset"], asset_name(o)))
+        if named:
+            self.log("  %d assets common_mp has named instead of copied (%s)" % (
+                sum(named.values()), ", ".join("%s %d" % kv for kv in sorted(named.items()))))
+        if kept:
+            self.log("  note: %d kept as copies (other assets point inside them: %s)" % (
+                len(kept), ", ".join(n.decode("latin-1") for n in kept[:5])))
 
     def add_destructible_aliases(self, ents):
         """An alias list entry for each sound the map's destructibles need and lack
