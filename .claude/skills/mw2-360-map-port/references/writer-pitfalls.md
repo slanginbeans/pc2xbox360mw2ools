@@ -57,3 +57,19 @@ slices of the room's root list (see engine notes).
 
 Converted data is big-endian. Vector unions (`{"union": hex}`) hold big-endian floats; node and
 model boxes are centre + half-size, not min/max. The PC side is little-endian.
+
+## An asset held in two places is written twice unless it has a slot
+
+The writer dedupes an asset it meets again by pointing at where it was first written, but it
+never points into the temporary block. An asset written inline in the temporary block (any
+asset header) without a slot is therefore written again, in full, at the next place that holds
+or points at it: converted mp_backlot carried the cardboard box model twice (in a prop effect
+and in the collision map's dynamic entities), and team model pieces from two stock maps twice.
+Give such an asset a slot and `_forward` (written at its first use with INSERT; later pointers
+name the slot), as `share_effect_pictures` and `stock_layout` do. `scripts/stock_rules.py`
+reports any name written twice.
+
+Scans that decide this must also follow pointers (`Porter._reach`): an effect's model copied
+from a stock map is reached only through a pointer into the stock tree, which `iter_objects`
+doesn't follow. And passes that look at the whole file must run after `add_teams` (in `port()`),
+or they miss the team models.
