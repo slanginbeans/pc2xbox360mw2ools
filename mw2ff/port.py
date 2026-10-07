@@ -267,6 +267,13 @@ FIXES = [
      "128x128 fire_roar_pm_atlas replaced common_mp's streamed one, and the picture streamer "
      "froze the console the first time a burning car's flames drew it. mp_backlot: 24 "
      "copies (14 pictures, 7 materials, 2 models, 1 effect)."),
+    ("list_techsets", "Shader sets listed as assets, as stock (test)",
+     "Every shader set the map carries in full becomes an entry of its own in the file's asset "
+     "list, just before the first asset that uses it, and materials point at that entry: stock "
+     "360 maps list every one that way (mp_invasion's car fire shader set, "
+     "effect_zfeather_falloff_add_eyeoffset, is entry 1142, the fire effect 1160). Converted "
+     "maps wrote each inside the first material that used it (mp_backlot: 63, inside the world, "
+     "the collision map's models, effects and models). Off by default until tried on a console."),
     ("split_car_fire", "Split the car fire across the car's effects (test)",
      "A diagnosis switch, not a fix. The burning car effect (smoke/car_damage_blacksmoke_fire) "
      "froze the console on converted mp_backlot, and its data matches stock. This moves each "
@@ -385,7 +392,7 @@ DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_bo
                "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes", "ground_lit_flag",
                "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin",
                "swap_models_test", "encode_sounds", "stock_streamed_pictures", "destructible_parts",
-               "convert_anims", "split_car_fire"}
+               "convert_anims", "split_car_fire", "list_techsets"}
 TREE_BOX_MARGIN = 64            # units, for the tree_box_margin test switch
 # MB of XMA the encode_sounds switch makes at most (stock maps carry 4 to 8 MB of sounds).
 ENCODED_SOUND_BUDGET = 12
@@ -1867,6 +1874,8 @@ class Porter:
         self.own_reference_copies(ents)
         if self.fixes["merge_duplicates"]:
             self.merge_same_named(ents)
+        if self.fixes["list_techsets"]:
+            self.list_techsets(ents)
         for u in self.unreadable[:5]:
             self.warn("picture %s can't be read, so it's treated as missing" % u)
         if len(self.unreadable) > 5:
@@ -4933,6 +4942,59 @@ class Porter:
                             sel.add(j)
                             todo.append(j)
         self.picked.setdefault(id(src), set()).update(sel)
+
+    def list_techsets(self, ents):
+        """The test switch list_techsets (see FIXES): each full shader set written inside a
+        material becomes an asset list entry of its own before the first entry that held it;
+        pointers to it point at the entry (as stock files point from one asset at another)."""
+        found = {}          # id(techset) -> [techset, first entry index, [(holder dict, key)]]
+        for i, e in enumerate(ents):
+            if e[0] == "techset":
+                continue
+            for o in iter_objects(e[1]):
+                if not isinstance(o, dict):
+                    continue
+                for k, c in o.get("@", {}).items():
+                    if isinstance(c, dict) and c.get("_asset") == "MaterialTechniqueSet" \
+                            and not (_name(c) or b",").startswith(b","):
+                        f = found.setdefault(id(c), [c, i, []])
+                        f[2].append((o, k))
+        if not found:
+            return
+        entries = {}
+        for key, (ts, at, holders) in found.items():
+            entries[key] = tree.AssetEntry(["techset", ts])
+        targets = {}
+        for key, (ts, at, holders) in found.items():
+            targets[id(ts)] = entries[key]
+            if isinstance(ts.get("_slot"), tree.InsertSlot):
+                targets[id(ts["_slot"])] = entries[key]
+        for o in iter_objects(ents):
+            if not isinstance(o, dict):
+                continue
+            for k, c in list(o.get("@", {}).items()):
+                for j, x in enumerate(c if isinstance(c, list) else [c]):
+                    if isinstance(x, Ref) and not x.rel and id(x.target) in targets:
+                        x.target, x.rel, x.t = targets[id(x.target)], 4, None
+        for key, (ts, at, holders) in found.items():
+            for o, k in holders:
+                r = Ref(1)
+                r.target, r.rel = entries[key], 4
+                o["@"][k] = r
+                if isinstance(o.get(k[0]), str):
+                    o[k[0]] = "0x00000001"      # (an alias: a non-null placeholder)
+            ts.pop("_slot", None)
+            ts.pop("_forward", None)
+        by_at = {}
+        for key, (ts, at, holders) in found.items():
+            by_at.setdefault(at, []).append(entries[key])
+        new = []
+        for i, e in enumerate(ents):
+            new.extend(by_at.get(i, ()))
+            new.append(e)
+        ents[:] = new
+        self.log("  test: %d shader sets listed as assets of their own, as stock files list them"
+                 % len(found))
 
     # split_car_fire: (effect that gets them, element numbers of the car fire)
     FIRE_SPLIT = ((b"props/car_glass_headlight", (0,)), (b"props/car_glass_brakelight", (1, 8)),
