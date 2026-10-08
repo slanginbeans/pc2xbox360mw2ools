@@ -47,6 +47,13 @@ the first pointer then writes it in full and the rest resolve to it. A slot only
 when the asset is written at that slot, so Refs to the slot fail after a forward write
 (`ZoneError: a pointer refers to <InsertSlot> before it is written`).
 
+The same error appears when a pass drops an asset's only holder after `convert()` marked the
+orphans: Merge decal layers drops decal materials while the world converts, and a shader set
+inline in one (PC mp_asylum's `wc_unlit_multiply_lin`) stayed pointed at by other materials;
+11 of 31 test maps stopped. `Porter.mark_orphans(ents, new_only=True)` runs again after the
+world converts. Any new pass that removes holders late needs the same. Convert all the test maps
+(`maps/usermaps`, three at a time) after changing a default: two or three maps don't show it.
+
 ## Model lists
 
 Tree node `smodelIndexes` lists may be Refs into a shared array (`rel` = byte offset). Always
