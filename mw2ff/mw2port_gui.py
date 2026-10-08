@@ -748,10 +748,10 @@ or hurts. Both lists are in alphabetical order.</p>
 <span class="dim">Pictures over this lose their top mip levels so the map fits in memory (normally 40). Stock
 360 maps stream most pictures from the disc, so converted maps are bigger in memory: lower it to test whether a
 map that crashes or freezes is running out of memory.</span></p>
-<p><label>First pak for streamed pictures <input type="number" id="pakStart" min="9" max="21" style="width:4em"></label>
+<p><label>First pak for streamed pictures <input type="number" id="pakStart" min="9" max="20" style="width:4em"></label>
 <span class="dim">With <b>Stream pictures from imagefile9.pak and on</b> ticked, maps' pictures go in
 <code>mw2port_out\imagefile&lt;n&gt;.pak</code> from this number on (normally 9). Each pak takes about 1 GB; then the next number
-starts, up to 21, and the full one never changes again. After converting, copy only the paks the log names to the game
+starts, up to 20, and the full one never changes again. After converting, copy only the paks the log names to the game
 folder, next to <code>default_mp.xex</code>. Start a batch on a higher number to keep its pictures apart from the paks already on
 the console.</span></p>
 <label class="toggle" style="margin-top:10px"><input type="checkbox" id="variants"><span><b>Also build test variants</b><br>
