@@ -291,6 +291,14 @@ FIXES = [
      "plays its omni light, a brake light its halogen glow, a side window its heat distortion, "
      "the windshield its bright core, the first smoke its white puff; the fire keeps only its "
      "flame sprites. The first one that freezes names the part at fault."),
+    ("effect_sister_materials", "Stock flame materials from common_mp",
+     "An effect material whose shader set common_mp doesn't have (so the map would carry the "
+     "shader set itself) is replaced by common_mp's own material of the same name without the "
+     "eye offset (_eyeN), when that one draws the same color picture with the same render "
+     "states. The car fire's flames (gfx_fire_roar_pm_atlas_z10_godray60_eye20, shader set "
+     "effect_zfeather_falloff_add_eyeoffset) froze the console on converted mp_backlot although "
+     "they match stock byte for byte; common_mp's gfx_fire_roar_pm_atlas_z10_godray60 is what "
+     "backlot's own fires draw. The flames then sit 20 units further from the eye."),
     ("destructible_sounds", "Destructible sounds",
      "The sounds the 360's destructible script plays for the map's destructible cars and props "
      "(a burning car's fire_vehicle_med and fire_vehicle_flareup_med, ...) that neither the map "
@@ -1828,6 +1836,8 @@ class Porter:
             self.stock_model_swap(ents)
         if self.fixes["name_common_assets"]:
             self.name_common_assets(ents)
+        if self.fixes["effect_sister_materials"]:
+            self.effect_sister_materials(ents)
         if self.fixes["split_car_fire"]:
             self.split_car_fire(ents)
         # Materials and pictures a left-out asset brought in first are only pointed at from
@@ -5415,6 +5425,53 @@ class Porter:
         self.log("  test: car fire split across the headlight (light), brake light (glow), side "
                  "window (distortion), windshield (bright core), first smoke (white puff) and fire "
                  "(flames)")
+
+    COLOR_MAP = 2695565377         # nameHash of a material's colorMap texture
+
+    def _color_image(self, m):
+        for td in deref(m.get("@", {}).get(("textureTable", ()))) or []:
+            if isinstance(td, dict) and td.get("nameHash") == self.COLOR_MAP:
+                im = deref((td.get("u") or {}).get("@", {}).get(("image", ())))
+                return (_name(im) or b"").lstrip(b",").lower() if isinstance(im, dict) else None
+        return None
+
+    def effect_sister_materials(self, ents):
+        """The fix effect_sister_materials (see FIXES)."""
+        common = {n.lower(): v for (t, n), v in self.common_materials.items() if t == "Material"}
+        common_ts = set(n for t, n in self.common_names if t == "MaterialTechniqueSet")
+        swap = {}
+        for o in self._reach([e for e in ents if e[0] == "fx"]):
+            if not (isinstance(o, dict) and o.get("_asset") == "Material") or id(o) in swap:
+                continue
+            name = asset_name(o) or b""
+            sister = re.sub(rb"_eye\d+$", b"", name)
+            if name.startswith(b",") or sister == name or sister.lower() not in common:
+                continue
+            ts = deref(o.get("@", {}).get(("techniqueSet", ())))
+            tsn = (_name(ts) or b"") if isinstance(ts, dict) else b""
+            if not tsn or tsn.startswith(b",") or tsn.lower() in common_ts:
+                continue
+            s = common[sister.lower()]
+            if s.get("stateBitsEntry") != o.get("stateBitsEntry") or \
+                    self._color_image(s) != self._color_image(o):
+                continue
+            swap[id(o)] = sister
+        if not swap:
+            return
+        count = 0
+        for o in self._reach([e for e in ents if e[0] == "fx"]):
+            if not isinstance(o, dict):
+                continue
+            ch = o.get("@", {})
+            for k, v in list(ch.items()):
+                m = deref(v) if isinstance(v, Ref) else v
+                if isinstance(m, dict) and id(m) in swap:
+                    ch[k] = self.reference("Material", swap[id(m)])
+                    if isinstance(o.get(k[0]), str):
+                        o[k[0]] = "follow"
+                    count += 1
+        self.log("  %d effect material pointers drawn with common_mp's own material (%s)" % (
+            count, ", ".join(sorted(set(n.decode("latin-1") for n in swap.values())))))
 
     COMMON_NAMED = ("GfxImage", "Material", "XModel", "FxEffectDef", "MaterialTechniqueSet", "PhysPreset")
 
