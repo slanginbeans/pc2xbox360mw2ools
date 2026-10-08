@@ -133,6 +133,12 @@ FIXES = [
      "given). Streamed sounds become loaded ones (the 360 streams only from its own disc). "
      "Needs numpy, and miniaudio for .mp3 sounds (CoD4 maps' ambient tracks). Off by default "
      "until tried on a console."),
+    ("ambient_tracks", "Ambience track from the 360's own",
+     "A map's ambience track (ambientPlay in its script) that no stock 360 file has becomes the "
+     "closest of the 360's own (common_mp's ambient_mp_desert, _urban, _snow, _rain, _rural, ...), "
+     "picked by the words in its name and sound file. The 360 plays ambience only streamed from "
+     "its disc: converted mp_showdown with its own track encoded stopped with \"alias "
+     "ambient_crossfire ... played as an ambient / music track is not streamed\"."),
     ("surface_bounds", "Surface culling radius",
      "Fill in the 360-only number every world surface carries (its culling radius and texture "
      "density), worked out from stock mp_rust. Converted maps used to leave it 0."),
@@ -1398,6 +1404,7 @@ class Porter:
         self.x_refs = x_refs
         self.common_names = set()       # (type, lower-case name) common_mp.ff has (name_common_assets)
         self.stock_aliases = {}         # sound alias name -> (stock alias list, resident?) (stock_sounds)
+        self.ambient_swaps = {}         # ambience track name -> the 360's one playing instead
         for name, root in x_refs:
             idx, aliases = asset_indexes(root)
             base = os.path.splitext(os.path.basename(name))[0]
@@ -1797,7 +1804,8 @@ class Porter:
                     _set_rawfile_text(e[1], text)
                     stock_scripts.append(_name(e[1]).decode("latin-1"))
             elif e[0] == "rawfile" and isinstance(e[1], dict) and \
-                    (not self.fixes["map_effects"] or not self.fixes["map_fog"]):
+                    (not self.fixes["map_effects"] or not self.fixes["map_fog"]
+                     or self.fixes["ambient_tracks"]):
                 self.edit_script(e[1])
         if stock_scripts:
             self.log("  %d script%s from the stock 360 files: %s" % (
@@ -1951,8 +1959,9 @@ class Porter:
         return self.root
 
     def edit_script(self, d):
-        """Test switches that take things out of the map's scripts: the effects its createfx
-        script places (map_effects off) and its distance fog (map_fog off)."""
+        """Changes to the map's scripts: its ambience track (ambient_tracks), and test switches
+        that take things out: the effects its createfx script places (map_effects off) and its
+        distance fog (map_fog off)."""
         name = (_name(d) or b"").decode("latin-1")
         if not name.endswith(".gsc"):
             return
@@ -1963,6 +1972,9 @@ class Porter:
             self.tests_found["map_effects"] += n
             if n:
                 self.log("  test: %d effects left out of %s" % (n, name))
+        if self.fixes["ambient_tracks"]:
+            self._script_words = set(re.findall(r"[a-z]+", name.lower()))
+            new = _AMBIENT.sub(self.ambient_track, new)
         if not self.fixes["map_fog"]:
             new, n = strip_fog(new)
             self.tests_found["map_fog"] += n
@@ -1970,6 +1982,35 @@ class Porter:
                 self.log("  test: fog switched off in %s" % name)
         if new != text:
             _set_rawfile_text(d, new.encode("latin-1"))
+
+    def ambient_track(self, m):
+        """_AMBIENT.sub: an ambientPlay("name") whose track no stock file has names the closest
+        track the 360 has loaded (common_mp) instead."""
+        name = m.group(2).encode("latin-1")
+        if name in self.stock_aliases:
+            return m.group(0)
+        have = [n for n, _ in AMBIENCE if n.encode() in self.stock_aliases]
+        if not have:
+            return m.group(0)
+        # The words of its name and of everything its alias names (sound files, ...).
+        words = set(re.findall(r"[a-z]+", name.decode("latin-1").lower()))
+        alias = next((e[1] for e in self.root["assets"] if e[0] == "sound"
+                      and isinstance(e[1], dict) and alias_name(e[1]) == name), None)
+        for o in iter_objects(alias) if alias is not None else ():
+            if isinstance(o, dict):
+                for c in o.get("@", {}).values():
+                    if isinstance(c, Str):
+                        words.update(re.findall(r"[a-z]+", c.b.decode("latin-1").lower()))
+        # The track's own words first (what the PC plays), then the map's name (mp_bo2frost).
+        pick = None
+        for ws in (words, self._script_words):
+            pick = pick or next((n for n, keys in AMBIENCE if n in have
+                                 and any(all(w in ws for w in k.split()) for k in keys)), None)
+        pick = pick or (AMBIENCE_DEFAULT if AMBIENCE_DEFAULT in have else have[0])
+        self.ambient_swaps[name] = pick
+        self.log("  ambience track %s plays the 360's %s (it plays ambience only streamed from "
+                 "its disc)" % (name.decode("latin-1"), pick))
+        return m.group(1) + '"' + pick + '"'
 
     def stock_model_swap(self, ents):
         """Test switch stock_models: static models a stock 360 file also has are drawn with the
@@ -3154,7 +3195,8 @@ class Porter:
                 missing.append(name)
                 continue
             new = copy.deepcopy(self.copy_in(null[0]))
-            audio = self.pc_audio(d, ents) if self.xma else None
+            # (An ambience track the script no longer plays isn't encoded: ambient_tracks.)
+            audio = self.pc_audio(d, ents) if self.xma and name not in self.ambient_swaps else None
             if audio:
                 self.encoded_heads(new, audio)
             self.name_loaded_curves(new)
@@ -5760,6 +5802,30 @@ def _rawfile_text(d):
 # createfx lines that place an effect: "ent = createOneshotEffect( ... );", also called by
 # its script's name (maps\mp\_utility::createOneshotEffect), as most MW2 and CoD4 maps do.
 _PLACE_FX = re.compile(r"ent\s*=\s*(?:[\w\\/]+::)?create(?:OneshotEffect|LoopEffect|Exploder)\b")
+# ambientPlay("name"): the map's ambience track.
+_AMBIENT = re.compile(r'(\bambientPlay\s*\(\s*)"([^"]+)"')
+# common_mp's ambience tracks (all streamed from the 360's disc) and the words that pick each,
+# first match wins: one word, or words that must all be there ("middle east").
+AMBIENCE = (
+    ("ambient_mp_duststorm", ("duststorm", "sandstorm", "dust storm")),
+    ("ambient_mp_airport", ("airport", "terminal", "hangar")),
+    ("ambient_mp_estate", ("estate",)),
+    ("embient_mp_highrise", ("highrise", "rooftop", "skyscraper")),
+    ("ambient_mp_favela", ("favela", "jungle", "tropical")),
+    ("ambient_mp_rain", ("rain", "thunder", "storm")),
+    ("ambient_mp_snow", ("snow", "winter", "arctic", "blizzard", "frozen", "frost")),
+    # (and the CoD4 / CoD2 maps set in the Middle East or North Africa, by their tracks' names)
+    ("ambient_mp_desert", ("desert", "middle east", "mideast", "arab", "sand", "afghan",
+                           "quarry", "boneyard", "backlot", "bog", "broadcast", "citystreets",
+                           "district", "convoy", "ambush", "crash", "crossfire", "showdown",
+                           "strike", "toujane")),
+    ("ambient_mp_urban", ("urban", "city", "town", "street", "traffic", "industrial", "factory",
+                          "docks", "harbor", "harbour")),
+    ("ambient_mp_rural", ("rural", "farm", "forest", "country", "village", "field", "swamp",
+                          "creek", "russia", "birds", "crickets", "bloc", "pipeline", "vacant",
+                          "overgrown", "france", "carentan")),
+)
+AMBIENCE_DEFAULT = "ambient_mp_rural"
 # A setExpFog call at the start of a line, its arguments over one line or several.
 _FOG = re.compile(r'(?m)^([ \t]*)(setExpFog\w*[ \t]*\((?:[^;"]|"[^"]*")*?\)[ \t]*;)')
 
