@@ -126,13 +126,14 @@ FIXES = [
      "names its sound files (,null.wav: files the PC game loads from disk); the 360 has nothing "
      "under those names, and a converted PC mp_rust froze on the loading screen with them. An "
      "alias no stock file has plays the silent stock \"null\" sound."),
-    ("encode_sounds", "Encode PC sounds for the 360 (test)",
+    ("encode_sounds", "Encode PC sounds for the 360",
      "A sound alias no stock 360 file has gets the PC's own audio, encoded as XMA (the only "
      "sound format the 360 game plays), instead of the silent \"null\" sound: the map's own "
      "sounds, and the PC game's streamed ones (sound/... in the .iwd files of the PC game folder "
      "given). Streamed sounds become loaded ones (the 360 streams only from its own disc). "
-     "Needs numpy, and miniaudio for .mp3 sounds (CoD4 maps' ambient tracks). Off by default "
-     "until tried on a console."),
+     "Needs numpy, and miniaudio for .mp3 sounds (CoD4 maps' ambient tracks); without numpy "
+     "the sounds stay silent. Converted mp_showdown plays its vehicles' PC sounds on the "
+     "console."),
     ("ambient_tracks", "Ambience track from the 360's own",
      "A map's ambience track (ambientPlay in its script) that no stock 360 file has becomes the "
      "closest of the 360's own (common_mp's ambient_mp_desert, _urban, _snow, _rain, _rural, ...), "
@@ -417,7 +418,7 @@ DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_bo
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
                "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes",
                "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin",
-               "swap_models_test", "encode_sounds",
+               "swap_models_test",
                "convert_anims", "split_car_fire", "list_techsets", "stock_layout"}
 TREE_BOX_MARGIN = 64            # units, for the tree_box_margin test switch
 # MB of XMA the encode_sounds switch makes at most (stock maps carry 4 to 8 MB of sounds).

@@ -58,7 +58,7 @@ class Cancelled(BaseException):
 # Settings files saved before they recorded the defaults (fix_defaults) were saved with these:
 # today's, except the test switches made default fixes since.
 LEGACY_DEFAULTS = dict(port_mod.DEFAULT_FIXES, ground_lit_flag=False, stock_streamed_pictures=False,
-                       destructible_parts=False, merge_decals=False)
+                       destructible_parts=False, merge_decals=False, encode_sounds=False)
 
 
 def settings():
