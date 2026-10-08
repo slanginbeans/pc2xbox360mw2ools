@@ -63,9 +63,11 @@ LEVELS = 4      # pak table entries per picture
 STREAM_PAK = 9          # first pak for map pictures: mw2tex uses 7 (textures) and 8 (titles and emblems)
 # The highest pak number the game can open: TU6 keeps one 72-byte record per pak number
 # (0x821E3168, Com_sprintf "imagefile%d") in a table at 0x82CBC640, and the next object
-# starts at 0x82CBCC80, so 22 records (0 = inside the map file; stock maps use 1-4). It doesn't
+# starts at 0x82CBCC80, so 22 records (0 = inside the map file; stock maps use 1-4); and one
+# 8-byte file handle per pak number from 0x82C42608 (0x82319AC0, "%s%d.pak"), with another
+# variable at 0x82C426B4, so 21 (0-20). It doesn't
 # check the number: a higher one would write over whatever follows.
-STREAM_PAK_LAST = 21
+STREAM_PAK_LAST = 20
 PAK_VOLUME_MB = 1024    # a pak full past this is left as it is; the next map pictures go in the next
 STREAMABLE = ("DXT1", "DXT3", "DXT5", "DXN")
 # Fixes that can be switched off, to find out on the console which one helps or hurts:
@@ -325,12 +327,18 @@ FIXES = [
      "file: they come in at full size and take no map memory (converted mp_waw_castle: 11 MB of "
      "pictures in the map instead of 42). Every map converted this way shares the paks in "
      "mw2port_out: imagefile9.pak (or the first pak number chosen) until it holds %d MB, then "
-     "imagefile10.pak, up to 21. New pictures only go on the end of the newest pak, so after a "
+     "imagefile10.pak, up to 20. New pictures only go on the end of the newest pak, so after a "
      "new map only the paks its log names need copying to the game folder (next to "
      "default_mp.xex, where imagefile1-4.pak are; not _codxe\\zone\\, where codxe sends only "
      "imagefile5.pak); maps converted earlier keep working. A map whose pak isn't there stops the "
      "console. "
      "Off by default until tried on a console." % PAK_VOLUME_MB),
+    ("stream_full_chains", "Streamed levels hold whole mip chains (test)",
+     "With stream_pictures: every level of a streamed picture in the pak holds its whole mip "
+     "chain, as stock paks have them, instead of only its own top mip (mw2tex found a whole "
+     "chain gave \"disc is unreadable\"; its levels then had stock's sizes recorded, which the "
+     "converter now records too). Off by default: try it if streamed maps still say \"disc is "
+     "unreadable\". New chunks go on the end of the pak, so copy it again."),
     ("stock_world", "Stock 360 world (test)",
      "For a PC copy of a stock map (PC mp_rust): the world assets (drawn world, collision, map "
      "entities, effects placement, game world) come from the stock 360 map of the same name, "
@@ -417,7 +425,7 @@ FIXES = [
 ]
 # Off unless switched on: the test switches, and portal_multiply (HDR portals are hidden instead).
 DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_box_bounds", "skip_lod0", "one_room", "plain_pictures",
-               "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
+               "stock_world", "portal_multiply", "stream_pictures", "stream_full_chains", "stock_materials", "stock_pictures",
                "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes",
                "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin",
                "swap_models_test",
@@ -1286,11 +1294,14 @@ class ImageMaker:
         d.update(new)
         d.update(keep)
 
-    def build_streamed(self, d, fmt_name, width, height, mips, pak):
+    def build_streamed(self, d, fmt_name, width, height, mips, pak, full_chains=False):
         """Fill image dict d (in place) as a streamed 360 picture, as stock ones are: a 1x1
         record listing up to four levels (streams: size, and mip count << 26 | data size), each
         one zlib chunk in pak. The smallest level holds its whole mip chain, each bigger one only
-        its own top mip (a whole chain there overflows the game's buffer, as mw2tex found).
+        its own top mip (a whole chain there overflows the game's buffer, as mw2tex found), but
+        every level's data size is its whole chain's, as stock records and mw2tex's working
+        camos have it: top-mip sizes there gave "disc is unreadable" on every converted bo2 map.
+        full_chains (test): every level holds its whole chain, as stock paks do.
         False when it can't be (mips missing): the caller keeps the picture in the file."""
         import math
         tex = self.tex
@@ -1311,10 +1322,16 @@ class ImageMaker:
                 chain = mips[first:] if has_mips else mips[:1]
                 blob = tex.tile(chain, w, h, gpu, single=not has_mips)
                 count = int(math.log2(max(w, h))) + 1 if has_mips else 1
+            elif full_chains:
+                blob = tex.tile(mips[first:], w, h, gpu)
+                count = int(math.log2(max(w, h))) + 1
             else:
                 blob = tex.tile(mips[first:first + 1], w, h, gpu, single=True)
                 count = int(math.log2(max(w, h))) + 1
-            streams.append({"width": w, "height": h, "info": (count << 26) | len(blob)})
+            # (The whole chain's size, as stock: stock mp_afghan's barrel_d 512x512 DXT1 level
+            # says 196,608 bytes, its top mip and the 256x256 level's chain.)
+            size = tex._plan(w, h, gpu)[1] if count > 1 else len(blob)
+            streams.append({"width": w, "height": h, "info": (count << 26) | max(size, len(blob))})
             paks.append(pak.add(blob))
         while len(streams) < 4:
             streams.append({"width": 0, "height": 0, "info": 0})
@@ -4682,7 +4699,8 @@ class Porter:
                 fmt = "DXN"
                 self.dxn_count = getattr(self, "dxn_count", 0) + 1
             d["category"] = 3
-            if self.images.build_streamed(d, fmt, w, h, mips, self.pak):
+            if self.images.build_streamed(d, fmt, w, h, mips, self.pak,
+                                          full_chains=self.fixes["stream_full_chains"]):
                 self.streamed += 1
                 self.done.add(id(d))
                 return d
