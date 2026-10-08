@@ -368,12 +368,13 @@ FIXES = [
      "If the vanishing stays at #60's spot, it goes with the place; if it moves to #487's spot, "
      "with the number. Off by default."
      % SWAP_MODELS),
-    ("ground_lit_flag", "Ground-lit flag from ground colour (test)",
+    ("ground_lit_flag", "Ground-lit flag from ground colour",
      "A placed model with a ground colour gets the 360's ground-lit flag (0x02), as in every "
      "stock 360 map (16 maps: 35,119 of 35,119 placements with a ground colour have it, none "
      "without). mp_ancient's PC file marks its foliage ground-lit on the model rather than on "
-     "each placement, so 468 of its 474 foliage placements had a ground colour but no flag. "
-     "Off by default."),
+     "each placement, so 468 of its 474 foliage placements had a ground colour but no flag; "
+     "converted mp_backlot: 2029 of 3619, so props in shade were lit from the light grid "
+     "instead of their baked ground colour and looked too bright."),
     ("one_room", "Room visibility off (test)",
      "The map is treated as one room: every room's culling tree becomes a single node listing "
      "every surface and static model, and the portals between rooms go. Off by default. If the "
@@ -407,7 +408,7 @@ FIXES = [
 # Off unless switched on: the test switches, and portal_multiply (HDR portals are hidden instead).
 DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_box_bounds", "skip_lod0", "one_room", "plain_pictures",
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
-               "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes", "ground_lit_flag",
+               "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes",
                "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin",
                "swap_models_test", "encode_sounds", "stock_streamed_pictures", "destructible_parts",
                "convert_anims", "split_car_fire", "list_techsets", "stock_layout"}
