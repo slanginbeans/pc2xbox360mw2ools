@@ -98,5 +98,9 @@ mp_backlot or mp_waw_castle) with the relevant switches, then:
   match stock, but don't stop investigating.
 - Distrust your own analysis scripts: a shared array read without its offset once produced a
   completely wrong conclusion. Cross-check surprising results a second way.
+- The converter page's worker never keeps a read waiting on stdin: on Windows that holds every
+  other call on the pipe, and numpy's math library (Encode PC sounds) checks stdin as it loads,
+  so the worker hung for good where Linux runs passed. Cancel is polled from the log
+  (`_cancel_poller`). A hang only on the user's PC: look for Windows pipe and console behaviour.
 - The map measures report (logged after each conversion) shows what's above stock — use it for
   frame-rate questions before guessing.
