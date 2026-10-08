@@ -436,9 +436,7 @@ def _run(items, s):
                 failed.append((m["name"], error))
         _log("")
         if job["files"]:
-            _log("Done. Copy these to _codxe\\zone\\ on the console:")
-            for f in job["files"]:
-                _log("  " + f)
+            _done_list(job["files"])
         if failed:
             _log("")
             _log("%d of %d map%s stopped:" % (len(failed), len(items), "" if len(items) == 1 else "s"))
@@ -450,6 +448,28 @@ def _run(items, s):
     finally:
         job["running"] = False
         job["done"] = True
+
+
+def _done_list(files):
+    """Where each file written goes on the console. The paks for streamed map pictures
+    (imagefile9.pak and up) go in the game folder, where the game opens them: codxe sends only
+    imagefile5.pak to _codxe\\zone\\, and a map pointing at a pak the game can't open stopped
+    the console (mp_bo2cove)."""
+    import re as _re
+    streamed = [f for f in files if (lambda m: m and int(m.group(1)) >= port_mod.STREAM_PAK)(
+        _re.match(r"imagefile(\d+)\.pak$", os.path.basename(f)))]
+    rest = [f for f in files if f not in streamed]
+    if rest:
+        _log("Done. Copy these to _codxe\\zone\\ on the console:")
+        for f in rest:
+            _log("  " + f)
+    if streamed:
+        _log("%s the game folder on the console, next to default_mp.xex (where imagefile1.pak "
+             "to imagefile4.pak are), not _codxe\\zone\\; the maps above can't load without "
+             "%s:" % ("Copy these to" if rest else "Done. Copy these to",
+                      "it" if len(streamed) == 1 else "them"))
+        for f in streamed:
+            _log("  " + f)
 
 
 def _patch_stock():
