@@ -1015,15 +1015,16 @@ class PictureCache:
     wrong with it and the step is done again."""
     LIMIT = 2 << 30
 
-    def __init__(self, path):
+    def __init__(self, path, tag=None):
         self.path = path
+        self.tag = tag          # what changes with the code behind the steps (pictures' own)
         self.hits = self.misses = 0
 
     def get(self, fn, *args):
         """fn(*args), from the cache when it has it. args: numbers, names and lists of bytes."""
         import hashlib
         import pickle
-        h = hashlib.sha1(_picture_tag())
+        h = hashlib.sha1(self.tag or _picture_tag())
         h.update(fn.__name__.encode())
         for a in args:
             for m in (a if isinstance(a, list) else [repr(a).encode()]):
@@ -1459,6 +1460,8 @@ class Porter:
         self.picked = {}        # stock file -> its asset list entries to copy in
         self.owners = {}        # stock file -> {id() of an asset dict: its entry} (_pick)
         self.picture_cache = None       # PictureCache, set by port()
+        self.sound_cache_dir = None     # where encode_sounds keeps its sounds (port())
+        self.sound_cache = None
         self.stock_entry_ids = set()    # id() of asset list entries copied whole from stock (teams)
         self.remapped = set()
         self.report = set()     # (type, "dropped" | "defaulted", member) seen while converting
@@ -1842,25 +1845,7 @@ class Porter:
             self.effect_sister_materials(ents)
         if self.fixes["split_car_fire"]:
             self.split_car_fire(ents)
-        # Materials and pictures a left-out asset brought in first are only pointed at from
-        # then on: the writer puts each where the first remaining pointer to it is.
-        reached = set(id(o) for o in iter_objects(ents))
-        orphans = {}
-        for o in iter_objects(ents):
-            if not isinstance(o, dict):
-                continue
-            for c in o.get("@", {}).values():
-                for x in (c if isinstance(c, list) else [c]):
-                    if isinstance(x, Ref) and isinstance(x.target, tree.InsertSlot):
-                        a = x.target.asset
-                        if isinstance(a, dict) and id(a) not in reached and id(a) not in gone:
-                            orphans[id(a)] = a
-        inner = set()
-        for a in orphans.values():
-            inner.update(id(o) for o in iter_objects(a) if o is not a)
-        orphans = [a for k, a in orphans.items() if k not in inner]
-        for a in orphans:
-            a["_forward"] = True
+        orphans = self.mark_orphans(ents, gone)
         for e in ents:
             if e[0] in ("vertexshader", "vertexdecl"):
                 raise PortError("top-level %s assets can't be converted" % e[0])
@@ -1893,7 +1878,14 @@ class Porter:
                                                                  len(self.stock_streamed)))
         if self.fixes["stock_world"]:
             self.stock_world_swap(ents)
+        # Merge decal layers drops the decal materials it drew into composites while the world
+        # converts: what they held first (a shader set the map's other materials point at,
+        # PC mp_asylum's wc_unlit_multiply_lin) is only pointed at from then on.
         self.own_reference_copies(ents)
+        late = self.mark_orphans(ents, gone, new_only=True)
+        if late:
+            self.log("  %d assets the merged decal materials held written where their next "
+                     "pointer is" % len(late))
         if self.fixes["merge_duplicates"]:
             self.merge_same_named(ents)
         for u in self.unreadable[:5]:
@@ -2709,6 +2701,31 @@ class Porter:
         self.log("  decal layers: %d pictures written with the composite materials that use "
                  "them (first written further on before)" % len(late))
 
+    @staticmethod
+    def mark_orphans(ents, gone=(), new_only=False):
+        """Materials and pictures a left-out asset brought in first are only pointed at from
+        then on: the writer puts each where the first remaining pointer to it is ("_forward").
+        Returns them (new_only: those not marked already)."""
+        reached = set(id(o) for o in iter_objects(ents))
+        orphans = {}
+        for o in iter_objects(ents):
+            if not isinstance(o, dict):
+                continue
+            for c in o.get("@", {}).values():
+                for x in (c if isinstance(c, list) else [c]):
+                    if isinstance(x, Ref) and isinstance(x.target, tree.InsertSlot):
+                        a = x.target.asset
+                        if isinstance(a, dict) and id(a) not in reached and id(a) not in gone:
+                            orphans[id(a)] = a
+        inner = set()
+        for a in orphans.values():
+            inner.update(id(o) for o in iter_objects(a) if o is not a)
+        orphans = [a for k, a in orphans.items() if k not in inner
+                   and not (new_only and a.get("_forward"))]
+        for a in orphans:
+            a["_forward"] = True
+        return orphans
+
     def own_reference_copies(self, ents):
         """A pointer to the slot of a picture that is only a name (",$white": the game has it
         loaded) gets its own copy of that name, as stock materials repeat such names inline. The
@@ -2986,7 +3003,7 @@ class Porter:
             if key not in self._encoded:
                 enc, pcm = None, got() if got else None
                 if pcm and self._encoded_bytes < ENCODED_SOUND_BUDGET * 1024 * 1024:
-                    enc = self.xma.encode(*pcm)
+                    enc = self.encode_sound(key, *pcm)
                     self._encoded_bytes += len(enc.data)
                 elif not pcm:
                     self._no_audio.add(key)
@@ -2994,6 +3011,27 @@ class Porter:
             if self._encoded[key][0] is not None:
                 out.append((h, key))
         return out
+
+    def encode_sound(self, key, pcm, rate, channels):
+        """One sound encoded as XMA, from mw2port_cache when it was encoded before (another
+        conversion, a test variant). The log shows the encoding going on: a long one (CoD4
+        maps' ambient tracks) takes a while."""
+        import time
+        secs = len(pcm) / (2.0 * channels * rate)
+        if secs >= 30:
+            self.log("    encoding %s (%d seconds of sound)" % (key.decode("latin-1"), secs))
+        t = time.time()
+        if self.sound_cache:
+            enc = self.sound_cache.get(_encode_xma, [bytes(pcm)], rate, channels)
+        else:
+            enc = _encode_xma(pcm, rate, channels)
+        self._encode_time = getattr(self, "_encode_time", 0.0) + time.time() - t
+        self._encode_count = getattr(self, "_encode_count", 0) + 1
+        if self._encode_count % 20 == 0:
+            self.log("    %d sounds encoded so far (%.1f MB, %d s)" % (
+                self._encode_count, (self._encoded_bytes + len(enc.data)) / 1048576.0,
+                self._encode_time))
+        return enc
 
     def encoded_heads(self, new, audio):
         """Alias list new (a copy of the stock "null" alias) gets a head for each (PC head, sound)
@@ -3066,14 +3104,10 @@ class Porter:
         sound under its own name. The PC's sound file assets then go."""
         swapped, silent, missing, encoded = 0, [], [], []
         null = self.stock_aliases.get(b"null")
-        self.xma = None
-        if self.fixes["encode_sounds"]:
-            try:
-                import xma
-                self.xma = xma
-            except ImportError:
-                self.warn("Encode PC sounds is on, but numpy isn't installed (pip install numpy, or "
-                          "start mw2tools.bat again): the sounds stay silent")
+        self.xma = load_xma(self.log, self.warn) if self.fixes["encode_sounds"] else None
+        if self.xma:
+            self.sound_cache = PictureCache(self.sound_cache_dir, xma_tag()) \
+                if self.sound_cache_dir else None
         ours = [o for o in iter_objects(ents) if isinstance(o, dict)
                 and o.get("_asset") == "snd_alias_list_t" and id(o) not in self.done]
         # Stock aliases share sound files (one alias's points into another's): those taken from
@@ -3090,6 +3124,10 @@ class Porter:
         for group in by_root.values():
             self.localize(list(group.values()))
         rank = {}
+        # (Files in the order their aliases were read, so a map converts the same every time.)
+        file_order = {}
+        for src in self.stock_aliases.values():
+            file_order.setdefault(id(src[2]), len(file_order))
         for d in ours:
             src = take.get(id(d))
             if src is None:
@@ -3097,7 +3135,7 @@ class Porter:
             new = dict(src[0])
             new.pop("_slot", None)
             self._replace(d, new)
-            rank[id(d)] = (id(src[2]), src[3])
+            rank[id(d)] = (file_order[id(src[2])], src[3])
             swapped += 1
         at = [i for i, e in enumerate(ents) if isinstance(e[1], dict) and id(e[1]) in rank]
         for i, e in zip(at, sorted((ents[i] for i in at), key=lambda e: rank[id(e[1])])):
@@ -6096,6 +6134,74 @@ def compressed_pcm(raw):
 
 compressed_pcm.missing = False
 
+# Seconds numpy gets to load and encode a test sound in a process of its own (encode_sounds).
+XMA_CHECK_SECONDS = 180
+_xma_state = {}
+
+
+def load_xma(log, warn):
+    """The XMA encoder (xma.py), or None. numpy is first loaded and tried in a short process of
+    its own: a numpy that crashes or hangs while loading (a build that doesn't suit the Python
+    or the processor) then leaves the sounds silent instead of stopping the conversion."""
+    if "xma" in _xma_state:
+        return _xma_state["xma"]
+    import importlib.util
+    import subprocess
+    _xma_state["xma"] = None
+    if importlib.util.find_spec("numpy") is None:
+        warn("Encode PC sounds is on, but numpy isn't installed (pip install numpy, or start "
+             "mw2tools.bat again): the sounds stay silent")
+        return None
+    here = os.path.dirname(os.path.abspath(__file__))
+    code = "import sys; sys.path.insert(0, %r); import xma; xma.encode(bytes(8192), 22050)" % here
+    exe = sys.executable
+    if os.path.basename(exe).lower() == "pythonw.exe" and \
+            os.path.exists(os.path.join(os.path.dirname(exe), "python.exe")):
+        exe = os.path.join(os.path.dirname(exe), "python.exe")
+    try:
+        r = subprocess.run([exe, "-c", code], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=XMA_CHECK_SECONDS,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except subprocess.TimeoutExpired:
+        warn("Encode PC sounds: numpy didn't finish a short test in %d seconds (it hangs "
+             "loading on this PC; try pip install --upgrade numpy): the sounds stay silent"
+             % XMA_CHECK_SECONDS)
+        return None
+    except OSError as e:
+        log("  (numpy couldn't be tried on its own first: %s)" % e)
+        r = None
+    if r is not None and r.returncode != 0:
+        out = r.stdout.decode("utf-8", "replace").strip().splitlines()
+        warn("Encode PC sounds: numpy fails to load (exit code %s%s; try pip install --upgrade "
+             "numpy): the sounds stay silent" % (r.returncode, (": " + out[-1]) if out else ""))
+        return None
+    try:
+        import xma
+    except Exception as e:  # noqa: BLE001 - shown, and the sounds stay silent
+        warn("Encode PC sounds: numpy fails to load (%s: %s): the sounds stay silent"
+             % (type(e).__name__, e))
+        return None
+    _xma_state["xma"] = xma
+    return xma
+
+
+def xma_tag():
+    """Changes whenever the XMA encoder changes (the sound cache's key)."""
+    import hashlib
+    import xma
+    h = hashlib.sha1(b"xma %d.%d" % sys.version_info[:2])
+    for m in (xma, sys.modules.get("xmatables")):
+        if m is not None:
+            with open(m.__file__, "rb") as fh:
+                h.update(fh.read())
+    return h.digest()
+
+
+def _encode_xma(pcm, rate, channels):
+    """xma.encode, for the sound cache (pcm: the bytes, or a list holding them)."""
+    import xma
+    return xma.encode(pcm[0] if isinstance(pcm, list) else pcm, rate, channels)
+
 
 def picture_index(iwds):
     """{lowercase picture name: (zipfile, path)} for the images/*.iwi in the .iwd files given;
@@ -6810,6 +6916,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
                     fixes, pak)
     if cache_dir:
         porter.picture_cache = PictureCache(os.path.join(cache_dir, "pictures"))
+        porter.sound_cache_dir = os.path.join(cache_dir, "sounds")
     porter.breakables = breakables
     porter.destructible_aliases = [n for n, _ in sound_plan]
     if fixes["stock_streamed_pictures"]:

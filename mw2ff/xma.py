@@ -34,6 +34,7 @@ QUALITY = 4.0               # band step = band level / QUALITY
 MASK_DB = 30                # bands this far below the frame's loudest get coarser steps
 FLOOR = 1e-4                # smallest step (silence)
 GAIN = -32342.0             # MDCT scale (and sign) the decoder's inverse transform expects
+TRANSFORM_BATCH = 1024      # frames transformed together (8 MB of samples a batch)
 
 
 def _codes(lens, syms):
@@ -134,9 +135,21 @@ def _coefficients(q, t):
     return b
 
 
-def _frame(x, offs, first, quality, mask):
-    """One frame's bits (after its length, before its two end bits) for 1,024 input samples."""
-    X = MDCT @ (x * WINDOW)
+def _transform(padded, nframes):
+    """Each frame's 512 coefficients (the MDCT of its 1,024 windowed samples), as rows. Done in
+    batches of frames, one large matrix product each: a product per frame made numpy's math
+    library hand every small one to all the processor's threads, which crawled (20 seconds of
+    sound took 16 seconds on 4 cores, 1.3 with one thread) and with more cores could look hung."""
+    out = np.empty((nframes, FRAME))
+    frames = np.lib.stride_tricks.as_strided(
+        padded, (nframes, _N), (padded.strides[0] * FRAME, padded.strides[0]), writeable=False)
+    for a in range(0, nframes, TRANSFORM_BATCH):
+        out[a:a + TRANSFORM_BATCH] = (frames[a:a + TRANSFORM_BATCH] * WINDOW) @ MDCT.T
+    return out
+
+
+def _frame(X, offs, first, quality, mask):
+    """One frame's bits (after its length, before its two end bits) for its 512 coefficients."""
     levels = [math.sqrt(float(np.mean(X[a:b] ** 2))) for a, b in zip(offs, offs[1:])]
     top = max(levels)
     d = [int(round(20 * math.log10(max(lv / quality, top * mask, FLOOR)))) for lv in levels]
@@ -206,8 +219,8 @@ def encode(pcm, rate, channels=1, quality=QUALITY, mask_db=MASK_DB):
     padded = np.concatenate([np.zeros(LEAD), x, np.zeros(nframes * FRAME + FRAME - LEAD - n)])
     offs = band_offsets(rate)
     mask = 10 ** (-mask_db / 20.0)
-    frames = [str(_frame(padded[i * FRAME:i * FRAME + 2 * FRAME], offs, i == 0, quality, mask))
-              for i in range(nframes)]
+    X = _transform(padded, nframes)
+    frames = [str(_frame(X[i], offs, i == 0, quality, mask)) for i in range(nframes)]
     return _pack(frames, n, rate)
 
 
