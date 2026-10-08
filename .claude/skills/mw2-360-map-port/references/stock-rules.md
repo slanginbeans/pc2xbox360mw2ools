@@ -33,6 +33,7 @@ the converter or write down here why the difference is harmless.
 | Six configstrings string tables per map (`mp/configstrings/configstrings_360_<map>_{dm,sab,sd,war,ctf,koth}.csv`) | all 16 maps | not made (a network optimisation; maps load and play without) |
 | A map impact effects table (impactfx) | all 16 maps; code_post_gfx_mp has `default` | not made (bullet impacts fall back to the default table) |
 | Material gameFlags are the same on PC and 360 (0x8 sky, 0x4 also flares, foliage, fences, ...) | 3,400 same-named materials in 5 PC IW4x stock maps and their 360 originals: identical | copied as they are |
+| A placed model (GfxStaticModelDrawInst) with a ground colour has the ground-lit flag (flags 0x02); none without one | 35,119 of 35,119 (16 maps) | `ground_lit_flag` (on); converted mp_backlot had 2029 models without it: props in shade looked lit |
 | A material's stateBitsEntry names a valid state for every technique its shader set has | 0 exceptions in stock mp_invasion and converted mp_backlot | holds |
 | Composite (merged decal) surfaces' layer data (`tris.vertexLayerData`) stays inside `draw.vertexLayerDataSize`; strides 8–24 bytes per vertex | mp_rust, mp_terminal | holds (Merge decal layers) |
 | World pictures: `$outdoor` 512x512 (format 0x28000102), lightmaps primary 0x2800007A / secondary 0x18280086, reflection probes 64x64 cubes with 7 levels | mp_invasion, mp_rust, mp_afghan | holds; converted maps' `$outdoor` can be nearly blank (the PC compile had no outdoor map) |
