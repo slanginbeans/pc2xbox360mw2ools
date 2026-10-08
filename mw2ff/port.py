@@ -327,7 +327,9 @@ FIXES = [
      "mw2port_out: imagefile9.pak (or the first pak number chosen) until it holds %d MB, then "
      "imagefile10.pak, up to 21. New pictures only go on the end of the newest pak, so after a "
      "new map only the paks its log names need copying to the game folder (next to "
-     "default_mp.xex, beside imagefile8.pak, not over it); maps converted earlier keep working. "
+     "default_mp.xex, where imagefile1-4.pak are; not _codxe\\zone\\, where codxe sends only "
+     "imagefile5.pak); maps converted earlier keep working. A map whose pak isn't there stops the "
+     "console. "
      "Off by default until tried on a console." % PAK_VOLUME_MB),
     ("stock_world", "Stock 360 world (test)",
      "For a PC copy of a stock map (PC mp_rust): the world assets (drawn world, collision, map "
@@ -7059,7 +7061,7 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
             porter.streamed, ", ".join("imagefile%d.pak" % n for n in sorted(pak.used))))
         for path, added, total in changed:
             log("  %s: %.1f MB added, %.1f MB in all: copy it to the game folder, next to "
-                "default_mp.xex" % (os.path.basename(path), added, total))
+                "default_mp.xex (not _codxe\\zone\\)" % (os.path.basename(path), added, total))
         if not changed:
             log("  every one was in the paks already (no pak changed)")
     return out, porter
