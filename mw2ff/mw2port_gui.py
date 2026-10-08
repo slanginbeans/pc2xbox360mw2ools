@@ -324,6 +324,49 @@ def _convert_one(pc_path, teams, s):
     return [], "the conversion's process ended unexpectedly"
 
 
+def _cancel_poller(cancel):
+    """A function that sets cancel once "cancel" has come in on stdin, or stdin has closed (the
+    app stopped). It looks without waiting, each time the converter logs a line. A thread
+    waiting on stdin instead hung the worker on Windows for good with Encode PC sounds on:
+    while a read waits on a pipe, Windows holds every other call on that pipe, and numpy's math
+    library looks at stdin as it loads."""
+    try:
+        fd = sys.stdin.fileno()
+    except (AttributeError, OSError, ValueError):
+        return lambda: None
+    if os.name == "nt":
+        try:
+            import _winapi
+            import msvcrt
+            handle = msvcrt.get_osfhandle(fd)
+        except (ImportError, OSError):
+            return lambda: None
+
+        def waiting():
+            return _winapi.PeekNamedPipe(handle, 0)[0]
+    else:
+        import select
+
+        def waiting():
+            return 4096 if select.select([fd], [], [], 0)[0] else 0
+    got = []
+
+    def poll():
+        if cancel.is_set():
+            return
+        try:
+            n = waiting()
+            if not n:
+                return
+            data = os.read(fd, n)
+        except OSError:         # (the pipe is broken: the app stopped)
+            data = b""
+        got.append(data)
+        if not data or b"cancel" in b"".join(got):
+            cancel.set()        # Cancel pressed, or the app stopped
+    return poll
+
+
 def worker():
     """--worker: converts the one map a job line on stdin asks for (see _convert_one)."""
     import io
@@ -353,19 +396,13 @@ def worker():
 
     sys.stdout = sys.stderr = Lines()
     req = json.loads(sys.stdin.readline())
-
-    def listen():
-        for line in sys.stdin:
-            if line.strip() == "cancel":
-                break
-        cancel.set()        # Cancel pressed, or the app stopped
-
-    threading.Thread(target=listen, daemon=True).start()
+    check_cancel = _cancel_poller(cancel)
 
     def log(msg):
         send("log", str(msg))
 
     def conv_log(msg):
+        check_cancel()
         if cancel.is_set():
             raise Cancelled()
         log(msg)
