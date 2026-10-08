@@ -251,14 +251,15 @@ FIXES = [
      "type among them) are drawn with Infinity Ward's own 360 copy instead of the converted one. "
      "Untick to draw the converted models instead (if they then flicker and the stock ones "
      "didn't, the converted models are at fault)."),
-    ("destructible_parts", "Breakable car parts (test)",
+    ("destructible_parts", "Breakable car parts",
      "The parts a destructible car or prop needs when it breaks (its destroyed model, hood, "
      "doors, wheels, ...: the names the 360's own destructible script asks for) that neither the "
      "map nor the always-loaded files have come from a stock 360 map that has them; a part no "
      "stock map has in the car's color is copied in another color and painted with the map's own "
      "material for its color. CoD4 ports carry other names for these (mp_backlot's silver and "
      "yellow sedans and brown wagons), so blowing one up showed a stand-in model. mp_backlot: 27 "
-     "parts from mp_checkpoint and mp_invasion. Off by default until tried on a console."),
+     "parts from mp_checkpoint and mp_invasion. Tried on a console: the parts fly off and the "
+     "destroyed body takes the car's color."),
     ("name_common_assets", "Name what common_mp has",
      "A picture, material, model, effect or shader set the map carries under a name the "
      "always-loaded common_mp.ff also has is named instead (a reference to the loaded one), as "
@@ -305,7 +306,7 @@ FIXES = [
      "nor the always-loaded files have come from a stock 360 map, as every stock map carries "
      "them in its own file. PC mp_backlot (a CoD4 port) has no sounds at all, so its cars "
      "burned silently."),
-    ("stock_streamed_pictures", "Pictures the 360 already has, streamed (test)",
+    ("stock_streamed_pictures", "Pictures the 360 already has, streamed",
      "A picture the map takes from the PC game's files (not its own .iwd) that a stock 360 map "
      "streams under the same name streams from the 360's own picture packs (imagefile1-4.pak, "
      "always on the disc) at full size, as in that stock map, instead of sitting in the map file. "
@@ -410,7 +411,7 @@ DEFAULT_OFF = {"hide_foliage", "draw_distance_cap", "no_cull_distance", "room_bo
                "stock_world", "portal_multiply", "stream_pictures", "stock_materials", "stock_pictures",
                "merge_duplicates", "model_box_bounds", "rebuild_trees", "huge_tree_boxes",
                "huge_leaf_boxes", "huge_inner_boxes", "tree_box_margin",
-               "swap_models_test", "encode_sounds", "stock_streamed_pictures", "destructible_parts",
+               "swap_models_test", "encode_sounds",
                "convert_anims", "split_car_fire", "list_techsets", "stock_layout"}
 TREE_BOX_MARGIN = 64            # units, for the tree_box_margin test switch
 # MB of XMA the encode_sounds switch makes at most (stock maps carry 4 to 8 MB of sounds).
@@ -6902,7 +6903,7 @@ def _pak_sizes(folder):
 
 def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
              texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None, pak_dir=None,
-             write_card_pak=True, measures=True, pak_start=STREAM_PAK):
+             write_card_pak=True, measures=True, pak_start=STREAM_PAK, load_screen=True):
     """Convert a PC map (its .ff, and _load.ff / .iwd / .arena next to it when there) into
     out_dir, picking what it needs from the stock 360 files given: code_post_gfx_mp.ff, a
     stock map (render settings, shaders) and the stock maps that carry the map's teams.
@@ -6950,7 +6951,9 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
             refs.append(donor)
             donors.append(donor)
     written = []
-    if os.path.exists(base + "_load.ff"):
+    if not load_screen:
+        log("  loading screen not made this time (the %s_load.ff already converted stays as it is)" % name)
+    elif os.path.exists(base + "_load.ff"):
         tpl_load = os.path.splitext(template)[0] + "_load.ff"
         load_ref = tpl_load if tpl_load in loads else (loads[0] if loads else None)
         if load_ref is None:
@@ -6990,7 +6993,7 @@ def port_map(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
 
 def port_map_variants(pc_path, out_dir, stock_paths, teams=None, log=print, game_iwds=(),
                       texture_budget=TEXTURE_BUDGET_MB, card_ui=None, fixes=None,
-                      write_card_pak=True, measures=True, pak_start=STREAM_PAK):
+                      write_card_pak=True, measures=True, pak_start=STREAM_PAK, load_screen=True):
     """The map as port_map makes it with the fixes given, plus one test variant per fix that
     is on, with just that fix switched off: out_dir/variants/no_<fix>/. One batch of files to
     try on the console, to find which fix helps or hurts. Returns the paths written; a
@@ -6998,7 +7001,7 @@ def port_map_variants(pc_path, out_dir, stock_paths, teams=None, log=print, game
     fixes = fix_set(fixes)
     written = port_map(pc_path, out_dir, stock_paths, teams, log, game_iwds, texture_budget,
                        card_ui, fixes, write_card_pak=write_card_pak, measures=measures,
-                       pak_start=pak_start)
+                       pak_start=pak_start, load_screen=load_screen)
     main_paks = os.path.dirname(os.path.normpath(os.path.abspath(out_dir)))
     labels = {k: label for k, label, _ in FIXES}
     for k in [k for k, v in fixes.items() if v]:
@@ -7009,7 +7012,8 @@ def port_map_variants(pc_path, out_dir, stock_paths, teams=None, log=print, game
             # Titles and emblems: the pak written next to the main file serves every variant.
             files = [f for f in port_map(pc_path, vdir, stock_paths, teams, log, game_iwds,
                                          texture_budget, None, dict(fixes, **{k: False}),
-                                         pak_dir=main_paks, pak_start=pak_start, measures=measures)
+                                         pak_dir=main_paks, pak_start=pak_start, measures=measures,
+                                         load_screen=load_screen)
                      if not f.endswith(".pak")]
         except (PortError, mw2ff.zone_mod.ZoneError, ValueError) as e:
             log("  variant no_%s stopped: %s" % (k, e))

@@ -55,9 +55,15 @@ class Cancelled(BaseException):
     converter's own error handling doesn't catch it)."""
 
 
+# Settings files saved before they recorded the defaults (fix_defaults) were saved with these:
+# today's, except the test switches made default fixes since.
+LEGACY_DEFAULTS = dict(port_mod.DEFAULT_FIXES, ground_lit_flag=False, stock_streamed_pictures=False,
+                       destructible_parts=False, merge_decals=False)
+
+
 def settings():
     base = {"card_pak": False, "card_pak_copy": True, "card_source": "auto", "variants": False,
-            "profile": False, "measures": True,
+            "profile": False, "measures": True, "load_screen": True,
             "texture_budget": port_mod.TEXTURE_BUDGET_MB, "pak_start": port_mod.STREAM_PAK,
             "fixes": dict(port_mod.DEFAULT_FIXES)}
     try:
@@ -66,13 +72,19 @@ def settings():
     except (OSError, ValueError):
         s = base
     # Fixes added since the file was saved start as their default; unknown ones are dropped.
-    s["fixes"] = {k: bool(s.get("fixes", {}).get(k, v)) for k, v in port_mod.DEFAULT_FIXES.items()}
+    # A fix left at the default it had when the file was saved follows today's default (a test
+    # switch made a default fix since turns on); one the user changed keeps their choice.
+    saved = s.get("fixes", {})
+    before = s.get("fix_defaults") or LEGACY_DEFAULTS
+    s["fixes"] = {k: (v if k not in saved or bool(saved[k]) == bool(before.get(k, v)) else bool(saved[k]))
+                  for k, v in port_mod.DEFAULT_FIXES.items()}
+    s["fix_defaults"] = dict(port_mod.DEFAULT_FIXES)
     return s
 
 
 def save_settings(req):
     s = settings()
-    for k in ("card_pak", "card_pak_copy", "variants", "profile", "measures"):
+    for k in ("card_pak", "card_pak_copy", "variants", "profile", "measures", "load_screen"):
         if k in req:
             s[k] = bool(req[k])
     if "texture_budget" in req:
@@ -203,7 +215,7 @@ def _convert(pc_path, teams, s, log, conv_log):
         return make(pc_path, out_dir, stock_files(), teams, conv_log,
                     port_mod.game_iwd_files(GAME_DIR), texture_budget=s["texture_budget"],
                     card_ui=ui, fixes=s["fixes"], write_card_pak=s["card_pak_copy"],
-                    measures=s["measures"], pak_start=s["pak_start"])
+                    measures=s["measures"], pak_start=s["pak_start"], load_screen=s["load_screen"])
 
     try:
         if not s["profile"]:
@@ -664,11 +676,15 @@ from it.</span></p>
 <p><button id="patch">Patch stock maps</button> <span class="dim">Does the same for every stock <code>mp_*.ff</code> in the work
 folder: the patched copies and <code>imagefile8.pak</code> go in <code>mw2port_out\stock</code>. Only their picture table changes.</span></p>
 <p id="cardInfo" class="dim"></p></section>
-<section><h2>Fixes (for testing)</h2>
-<p class="dim">Each fix below changes how maps are converted. They are all on normally; untick one to convert
-without it, to see on the console whether it helps or hurts.</p>
-<details id="fixBox"><summary><b>Switches</b> <span id="fixSummary" class="dim"></span></summary>
-<div id="fixes"></div>
+<section><h2>Switches</h2>
+<p class="dim">Test switches are experiments, off normally: tick one to try it on the console. Fixes on by
+default bring converted maps in line with stock 360 maps: untick one to convert without it, to see whether it helps
+or hurts. Both lists are in alphabetical order.</p>
+<details id="fixBox"><summary><b>Test switches</b> (off by default) <span id="fixSummary" class="dim"></span></summary>
+<div id="fixesTest"></div>
+</details>
+<details id="fixBoxOn"><summary><b>Fixes on by default</b> <span id="fixSummaryOn" class="dim"></span></summary>
+<div id="fixesOn"></div>
 </details>
 <p><button id="fixDefaults">Restore default switches</button> <span class="dim">Puts every switch back the way it is normally.</span></p>
 <p><label>Picture budget <input type="number" id="budget" min="4" max="400" style="width:5em"> MB</label>
@@ -703,6 +719,9 @@ the writer is at fault; if it plays like the stock map, the writer is fine.</p>
 <span class="dim">Ticked: every converted map comes with its own copy of <code>imagefile8.pak</code>, filled with the
 titles and emblems. Unticked: maps still take titles and emblems from <code>imagefile8.pak</code> when the box under
 Titles and emblems is ticked, but no new pak is written; use the one already on the console, or Build imagefile8.pak.</span></span></label></p>
+<p><label class="toggle"><input type="checkbox" id="loadScreen"><span><b>Make the loading screen</b><br>
+<span class="dim">Unticked: only the map file is converted; the <code>&lt;map&gt;_load.ff</code> already in
+<code>mw2port_out</code> stays as it is (quicker while trying switches).</span></span></label></p>
 <p><button id="convert" class="primary" disabled>Convert</button> <button id="cancel" disabled>Cancel</button> <button id="openOut">Open mw2port_out</button> <span id="state" class="dim"></span></p>
 <pre id="log" class="dim">Nothing converted yet.</pre></section>
 </div>
@@ -726,8 +745,12 @@ function renderMaps(){if(!S.maps.length){$("#maps").innerHTML=`<p class="warn">N
  <span class="tag dim">${esc(m.where)}</span></div>`).join("");
  document.querySelectorAll(".map").forEach(d=>d.onclick=e=>{if(e.target.classList.contains("tick"))return;pick=d.dataset.p;renderMaps();renderTeams()});
  document.querySelectorAll(".tick").forEach(c=>c.onchange=()=>{c.checked?ticked.add(c.dataset.p):ticked.delete(c.dataset.p);renderJob()})}
-function fixSummary(){const d=S.fixes.filter(f=>!!S.settings.fixes[f.id]!==!!S.fix_defaults[f.id]);$("#fixSummary").textContent=`(${S.fixes.length}; ${d.length?d.length+" changed from the defaults: "+d.map(f=>f.id).join(", "):"all at their defaults"})`}
-function renderFixes(){$("#fixes").innerHTML=S.fixes.map(f=>`<label class="toggle" style="margin:6px 0"><input type="checkbox" class="fix" data-k="${f.id}"${S.settings.fixes[f.id]?" checked":""}><span><b>${esc(f.label)}</b> <code class="dim">${f.id}</code><br><span class="dim">${esc(f.help)}</span></span></label>`).join("");
+function fixGroup(on){return S.fixes.filter(f=>!!S.fix_defaults[f.id]===on).sort((a,b)=>a.label.toLowerCase().localeCompare(b.label.toLowerCase()))}
+function fixSummary(){for(const[on,id]of[[false,"#fixSummary"],[true,"#fixSummaryOn"]]){const g=fixGroup(on);const d=g.filter(f=>!!S.settings.fixes[f.id]!==!!S.fix_defaults[f.id]);
+ $(id).textContent=`(${g.length}; ${d.length?d.length+(on?" switched off: ":" switched on: ")+d.map(f=>f.label).join(", "):"all at their defaults"})`}}
+function fixHtml(f){return `<label class="toggle" style="margin:6px 0"><input type="checkbox" class="fix" data-k="${f.id}"${S.settings.fixes[f.id]?" checked":""}><span><b>${esc(f.label)}</b> <code class="dim">${f.id}</code><br><span class="dim">${esc(f.help)}</span></span></label>`}
+function renderFixes(){$("#fixesTest").innerHTML=fixGroup(false).map(fixHtml).join("");$("#fixesOn").innerHTML=fixGroup(true).map(fixHtml).join("");
+ $("#loadScreen").checked=S.settings.load_screen!==false;
  document.querySelectorAll(".fix").forEach(c=>c.onchange=async()=>{try{S.settings=await api("/api/settings",{fixes:{[c.dataset.k]:c.checked}});fixSummary()}catch(e){alert(e.message)}});fixSummary();
  $("#variants").checked=!!S.settings.variants;$("#budget").value=S.settings.texture_budget;$("#pakStart").value=S.settings.pak_start;$("#profile").checked=!!S.settings.profile;$("#measures").checked=S.settings.measures!==false}
 function renderRewrite(){const s=$("#rewriteMap");const keep=s.value;s.innerHTML=(S.stock_map_names||[]).map(n=>`<option${n===keep?" selected":""}>${esc(n)}</option>`).join("")||"<option value=''>no stock mp_*.ff here</option>"}
@@ -765,6 +788,7 @@ $("#pakStart").onchange=async e=>{try{S.settings=await api("/api/settings",{pak_
 $("#budget").onchange=async e=>{try{S.settings=await api("/api/settings",{texture_budget:e.target.value});$("#budget").value=S.settings.texture_budget}catch(err){alert(err.message)}};
 $("#variants").onchange=async e=>{try{S.settings=await api("/api/settings",{variants:e.target.checked})}catch(err){alert(err.message)}};
 $("#profile").onchange=async e=>{try{S.settings=await api("/api/settings",{profile:e.target.checked})}catch(err){alert(err.message)}};
+$("#loadScreen").onchange=async e=>{try{S.settings=await api("/api/settings",{load_screen:e.target.checked})}catch(err){alert(err.message)}};
 $("#measures").onchange=async e=>{try{S.settings=await api("/api/settings",{measures:e.target.checked})}catch(err){alert(err.message)}};
 $("#patch").onclick=async()=>{if(!confirm("Write patched copies of every stock map ("+S.stock_maps+") and imagefile8.pak to mw2port_out\\stock?"))return;
  try{await api("/api/patch",{});load(false)}catch(e){alert(e.message)}};
