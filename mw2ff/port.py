@@ -142,6 +142,13 @@ FIXES = [
      "picked by the words in its name and sound file. The 360 plays ambience only streamed from "
      "its disc: converted mp_showdown with its own track encoded stopped with \"alias "
      "ambient_crossfire ... played as an ambient / music track is not streamed\"."),
+    ("sort_key_kind", "PC sort keys only where stock agrees",
+     "A PC material keeps its own sort key (draw order) only if stock 360 materials with that "
+     "key use the same kind of shader set (with the lit technique for keys 0-33, without it for "
+     "34 and up, in every stock file); otherwise it takes its stock template's. The game sorts "
+     "materials of one key by their lit technique's shaders without checking both have one: "
+     "converted mp_bo2cove's mc/mtl_p6_cas_rock_foliage_cover_blend (a lit model with the PC "
+     "key 43, heat distortion's) crashed the console while loading."),
     ("surface_bounds", "Surface culling radius",
      "Fill in the 360-only number every world surface carries (its culling radius and texture "
      "density), worked out from stock mp_rust. Converted maps used to leave it 0."),
@@ -1421,6 +1428,7 @@ class Porter:
         self.two_sided = 0
         self.stock_glass = None         # glass material name -> a stock glass type's 360-only numbers
         self.stock_sort_keys = None     # every sort key a stock material uses (pc_sort_keys)
+        self.sort_key_kind_swapped = []  # (material, PC sort key, the template's) (sort_key_kind)
         self.x_refs = x_refs
         self.common_names = set()       # (type, lower-case name) common_mp.ff has (name_common_assets)
         self.stock_aliases = {}         # sound alias name -> (stock alias list, resident?) (stock_sounds)
@@ -1893,6 +1901,11 @@ class Porter:
             self.add_breakables(ents)
         if self.from_game:
             self.log("  %d pictures come from the PC game's own .iwd files" % self.from_game)
+        if self.sort_key_kind_swapped:
+            self.log("  %d PC sort keys stock uses only for the other kind of material replaced by "
+                     "the template's (%s)" % (len(self.sort_key_kind_swapped), ", ".join(
+                         "%s %d->%d" % (n.decode("latin-1"), a, b) for n, a, b in self.sort_key_kind_swapped[:5])
+                     + (", ..." if len(self.sort_key_kind_swapped) > 5 else "")))
         if self.two_sided:
             self.log("  %d materials drawn two-sided as on the PC (the stock render state they take culls back faces)" % self.two_sided)
         if getattr(self, "dxn_count", 0):
@@ -4484,6 +4497,50 @@ class Porter:
                         if t in self.PC_DRAW_TECHNIQUES and e < len(words))
         return votes.most_common(1)[0][0] if votes else None
 
+    def techset_has(self, name, technique=9):
+        """Whether stock shader set name (or the one it's remapped to) has the technique, or
+        None when no stock file given has it."""
+        if not name:
+            return None
+        name = name.lstrip(b",")
+        cache = self.__dict__.setdefault("_techset_has", {})
+        if (name, technique) in cache:
+            return cache[(name, technique)]
+
+        def techniques(ts):
+            """Its techniques, or None for a set that is only a name (most stock maps only name
+            the shader sets common_mp carries: every technique empty)."""
+            if not isinstance(ts, dict):
+                return None
+            rm = deref(ts.get("@", {}).get(("remappedTechniqueSet", ())))
+            if isinstance(rm, dict) and techniques(rm) is not None:
+                return techniques(rm)
+            techs = deref(ts.get("@", {}).get(("techniques", ())))
+            # (A technique shared with an earlier slot is a pointer to it, not the technique.)
+            if not isinstance(techs, list) or all(t is None for t in techs):
+                return None
+            return techs
+        index = self.__dict__.get("_stock_techniques")
+        if index is None:
+            # Stock shader sets by name, the copies that carry their techniques: reached through
+            # the stock materials using them (the stock indexes hold few shader sets).
+            index = self._stock_techniques = {}
+            for (t, _), v in list(self.library.items()) + list(self.resident.items()) + \
+                    list(self.common_materials.items()):
+                cands = []
+                if t == "Material" and isinstance(v, dict):
+                    cands.append(deref(v.get("@", {}).get(("techniqueSet", ()))))
+                elif t == "MaterialTechniqueSet":
+                    cands.append(v)
+                for ts in cands:
+                    techs = techniques(ts)
+                    if techs is not None:
+                        index.setdefault((asset_name(ts) or b"").lstrip(b","), techs)
+        techs = index.get(name)
+        out = None if techs is None else (len(techs) > technique and techs[technique] is not None)
+        cache[(name, technique)] = out
+        return out
+
     def pre_Material(self, d, tp, tx):
         name = asset_name(d) or _name(d) or b""     # (_name: a name shared with another asset)
         if name and name.startswith(b","):
@@ -4541,15 +4598,30 @@ class Porter:
         # mp_rust shares with stock 360 mp_rust have the same one. Kept unless the shader set
         # was swapped for one that hides it (tool surfaces, HDR portals).
         if self.stock_sort_keys is None:
-            self.stock_sort_keys = set(
-                (v.get("info") or {}).get("sortKey") for (t, _), v in
-                list(self.library.items()) + list(self.resident.items()) + list(self.common_materials.items())
-                if t == "Material" and isinstance(v, dict))
+            # Each sort key stock uses, with whether its materials' shader sets have the lit
+            # technique (9): sort keys 0-33 only with it, 34 and up only without, in every stock
+            # file. The game sorts materials of one key by that technique's shaders and doesn't
+            # check the second one has it (TU6 0x82406418).
+            self.stock_sort_keys = {}
+            for (t, _), v in list(self.library.items()) + list(self.resident.items()) + \
+                    list(self.common_materials.items()):
+                if t == "Material" and isinstance(v, dict):
+                    sts = deref(v.get("@", {}).get(("techniqueSet", ())))
+                    lit = self.techset_has(asset_name(sts) if isinstance(sts, dict) else None)
+                    self.stock_sort_keys.setdefault((v.get("info") or {}).get("sortKey"), set()).add(lit)
         sort = (d.get("info") or {}).get("sortKey")
-        # (A sort key no stock material uses, PC mp_raid's 35, 49, 52, 54: the template's.)
+        # (A sort key no stock material uses, PC mp_raid's 35, 49, 52, 54: the template's. One
+        # stock uses only for the other kind of shader set: the template's too. PC mp_bo2cove's
+        # mc/mtl_p6_cas_rock_foliage_cover_blend, a lit model, had 43, common_mp's heat
+        # distortion's: the console crashed sorting the two.)
+        sides = self.stock_sort_keys.get(sort)
         if self.fixes["pc_sort_keys"] and not d.get("_invisible") and not (b"_distfalloff" in (orig_ts or b"")) \
-                and sort in self.stock_sort_keys:
-            self.pc_sort[id(d)] = sort
+                and sides is not None:
+            ours = self.techset_has(tsname)
+            if not self.fixes["sort_key_kind"] or ours is None or sides - {None} in ({ours}, set()):
+                self.pc_sort[id(d)] = sort
+            elif sort != tpl["info"]["sortKey"]:
+                self.sort_key_kind_swapped.append((name, sort, tpl["info"]["sortKey"]))
         return None
 
     def post_Material(self, d, tx):
