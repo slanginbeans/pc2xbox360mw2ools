@@ -26,6 +26,14 @@ test will tell you before asking for it.
 - TU6 executable research: an unpacked `default_mp.xex` image (base 0x82000000) with small
   disassembly helpers, kept outside the repo (never commit game files). The codxe source has
   `src/game/iw4/mp_tu6/symbols.h` with known function names.
+- Function names for TU6: the user supplies the MW2 Alpha 482 debug `default_mp.xex` and its
+  `.pdb` (game files: keep them in the scratchpad). `scripts/xexunpack.py` unpacks either
+  executable (devkit or retail key), then `scripts/match.py ALPHA_IMAGE ALPHA_PDB TU6_IMAGE
+  OUT.txt` carries the PDB's names over by masked instruction matching plus call-graph
+  following (`scripts/pdbread.py` reads the PDB). First run: 9,451 of 11,591 TU6 functions
+  named; 71 of the 72 codxe names agree (the other is an identical twin). Name an address
+  before reasoning about it (`Material_Compare`, `DB_ReadStreamFile`, `PakFile_Open`,
+  `ImageCache_AllocMemory2`, `R_AddAabbTreeSurfacesInFrustum_r` were all found this way).
 
 Read `references/engine-notes.md` before reasoning about how the 360 culls, draws or loads a map,
 `references/writer-pitfalls.md` before writing code that creates or moves pointers, and
