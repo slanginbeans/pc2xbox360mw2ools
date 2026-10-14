@@ -91,6 +91,13 @@ mp_backlot or mp_waw_castle) with the relevant switches, then:
    0x823e6ad8) means the GPU hung on something drawn that frame; then bisect what is drawn
    (`fx_draw 0`, `r_dlightLimit 0`, `r_distortion 0`, `fx_marks 0`, then test switches that
    move pieces of an effect into separately triggered ones, like `split_car_fire`).
+   Also run it right after Watson reports an exception: XBDM holds the game at a first-chance
+   exception, and the script lists the loaded modules and saves any plugin the crashing thread
+   is in. **Check which module a crash address is in before reading game code**: the game is
+   0x82000000-0x83xxxxxx, codxe loads at 0x91D00000 (its `xex.xml`), so 0x91D8DFFC is codxe
+   +0x8DFFC, not the engine. codxe keeps its hook trampolines (the first instructions of each
+   hooked game function) in its own code, so a codxe address can still be a game prologue;
+   the stock prologues it copies only touch the stack.
 6. **When the file looks right but the console misbehaves, read console memory.** Emulating the
    game's code from the file can't see what the game rewrites at load. `scripts/xbdm_dump.py`
    dumps the loaded world (pointer chain in the engine notes) over XBDM; compare it with the

@@ -4,11 +4,15 @@
 Usage (on a PC on the same network as the console, Python 3, nothing to install):
     python xbdm_stacks.py 192.168.1.50
 
-Run it while the console is frozen (a freeze raises no exception, so Watson shows nothing).
-It stops the game's threads (the game is stuck anyway), reads each thread's instruction
-address, link register and up to 24 return addresses from its stack, and writes them to
-mw2_stacks.txt next to this script. Send that file back. Nothing in memory is changed; the
-console stays stopped afterwards (restart it as usual).
+Run it while the console is frozen (a freeze raises no exception, so Watson shows nothing),
+or right after Watson reports an exception (before restarting: XBDM holds the game stopped
+at a first-chance exception). It stops the game's threads, lists the loaded modules (game,
+system, plugins like codxe, with their addresses), reads each thread's instruction address,
+link register and return addresses from its stack, and writes them to mw2_stacks.txt next
+to this script. A thread stopped inside a plugin also gets that plugin's code saved
+(<plugin>.bin, next to the script), so the crashing function can be named. Send the .txt and
+any .bin files back. Nothing in memory is changed; the console stays stopped afterwards
+(restart it as usual).
 """
 import os
 import socket
@@ -18,6 +22,8 @@ import sys
 PORT = 730
 DEPTH = 40
 SCAN = 0x1000       # bytes of each thread's stack scanned for code addresses
+AROUND = 0x100      # bytes of code saved on each side of a thread's instruction address
+PLUGIN_MAX = 0x400000   # plugins (outside the game and the system) up to this size are saved
 
 
 class Xbdm:
@@ -80,7 +86,7 @@ class Xbdm:
 
 def fields(text):
     out = {}
-    for part in text.replace("200- ", "").split():
+    for part in text.replace("200- ", "").replace('"', "").split():
         if "=" in part:
             k, v = part.split("=", 1)
             out[k.lower()] = v
@@ -105,6 +111,27 @@ def main():
     out = []
     status, _ = x.cmd("stop")
     out.append("stop: %s" % status)
+    status, lines = x.cmd("modules")
+    mods = []
+    out.append("modules: %s" % status)
+    for ln in lines:
+        f = fields(ln)
+        base, size = num(f.get("base")), num(f.get("size"))
+        if base is not None and size:
+            mods.append((f.get("name", "?"), base, size))
+            out.append("  %-24s 0x%08x..0x%08x" % (f.get("name", "?"), base, base + size))
+
+    def module_of(addr):
+        for m in mods:
+            if addr is not None and m[1] <= addr < m[1] + m[2]:
+                return m
+        return None
+
+    def where(addr):
+        m = module_of(addr)
+        return "%s+0x%x" % (m[0], addr - m[1]) if m else "?"
+
+    saved = set()
     status, ids = x.cmd("threads")
     if not status.startswith("2"):
         sys.exit("XBDM didn't list threads: %s" % status)
@@ -129,7 +156,21 @@ def main():
             tid, info.get("start", "?"), info.get("priority", "?"), info.get("suspend", "?")))
         out.append("  iar=%s  lr=%s  sp=%s  ctr=%s" % (
             regs.get("iar", "?"), regs.get("lr", "?"), regs.get("gpr1", "?"), regs.get("ctr", "?")))
+        out.append("  iar in %s, lr in %s" % (where(iar), where(lr)))
         out.append("  " + " ".join("r%d=%s" % (i, regs.get("gpr%d" % i, "?")) for i in range(3, 12)))
+        if iar:
+            data, status = x.block(iar - AROUND, 2 * AROUND)
+            out.append("  code at iar-0x%x: %s" % (AROUND, data.hex()))
+            m = module_of(iar)
+            if m and not 0x82000000 <= m[1] < 0x84000000 and m[1] >= 0x90000000 \
+                    and m[2] <= PLUGIN_MAX and m[0] not in saved:
+                saved.add(m[0])
+                data, status = x.block(m[1], m[2])
+                name = os.path.basename(m[0]).replace(".", "_") + ".bin"
+                with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), name), "wb") as f:
+                    f.write(data)
+                out.append("  saved %s (0x%x bytes from 0x%08x, %s)" % (name, len(data), m[1], status))
+                print("saved %s: send it with mw2_stacks.txt" % name)
         frames = []
         frame = sp
         for _ in range(DEPTH):
@@ -142,7 +183,8 @@ def main():
                 break
             ret = x.u32(back - 8)
             if ret:
-                frames.append("0x%08x" % ret)
+                frames.append("0x%08x" % ret if module_of(ret) is None or 0x82000000 <= ret < 0x84000000
+                              else "0x%08x(%s)" % (ret, where(ret)))
             frame = back
         out.append("  stack: " + " ".join(frames))
         # Whatever the frame layout: every word on the top of the stack that points into code
