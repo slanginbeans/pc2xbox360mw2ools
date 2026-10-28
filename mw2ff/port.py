@@ -6716,19 +6716,20 @@ def techset_donors(root, ref_paths, candidates, composites=False, log=print, mos
     return out
 
 
-def effect_donors(root, ref_roots, candidates, log=print, most=2):
+def effect_donors(root, ref_roots, candidates, log=print, most=None, resident_roots=()):
     """Stock 360 maps (of candidates) to read as well for the map's effects that the stock
-    files already read don't have: at most `most`, those carrying the most of them."""
+    files already read don't have: those carrying the most of them first, until every effect
+    a stock map has is covered (or `most` maps). An effect no stock map has stays the PC's,
+    converted, and is named in the log. resident_roots: the always-loaded files (common_mp),
+    whose effects the map names rather than carries (not looked for, not listed)."""
     have = set()
-    for r in ref_roots:
+    for r in list(ref_roots) + list(resident_roots):
         have.update(effect_index(r))
-    want = set(_name(e[1]) for e in root["assets"] if e[0] == "fx" and isinstance(e[1], dict)) - have
-    want.discard(None)
-    if not want or not candidates:
-        return []
+    want = set(n for n in (_name(e[1]) for e in root["assets"] if e[0] == "fx" and isinstance(e[1], dict))
+               if n and not n.startswith(b",")) - have
     hits = {}
     plain = all(_ZONE_NAME.fullmatch(n) for n in want)
-    for p in candidates:
+    for p in candidates if want else ():
         try:
             if plain:
                 hits[p] = want & zone_names(p)
@@ -6738,12 +6739,20 @@ def effect_donors(root, ref_roots, candidates, log=print, most=2):
             continue
         hits[p] = set(n for n in want if b"\0" + n + b"\0" in zone)
     out = []
-    while len(out) < most:
+    while most is None or len(out) < most:
         best = max(hits, key=lambda p: (len(hits[p] & want), p not in out), default=None)
         if best is None or best in out or not hits[best] & want:
             break
         out.append(best)
         want -= hits[best]
+    if out:
+        log("  effects: %d more stock 360 map%s read for the stock copies of the map's effects (%s)"
+            % (len(out), "s" if len(out) > 1 else "",
+               ", ".join(os.path.basename(p) for p in out)))
+    if want:
+        names = sorted(n.decode("latin-1") for n in want)
+        log("  effects: %d no stock 360 file has, so the PC's own are converted: %s"
+            % (len(names), ", ".join(names)))
     return out
 
 
@@ -7010,8 +7019,8 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     drawn geometry and collision are let go as soon as they're read (drop_world), as are those
     of the effect maps read here.
     game_iwds: the PC game's .iwd files, for pictures the map's own .iwd doesn't have.
-    fx_paths: stock 360 maps to take the map's effects from (those carrying the most of them
-    are read too). fixes: {name: bool} of FIXES (default all on). measures: log a map's
+    fx_paths: stock 360 maps to take the map's effects from (as many as it takes to cover
+    every effect one of them has are read too). fixes: {name: bool} of FIXES (default all on). measures: log a map's
     measures against the stock maps (map_limits_report) after writing it. cache_dir: a
     mw2port_cache folder to keep slow picture steps in between conversions (PictureCache)."""
     fixes = fix_set(fixes)
@@ -7037,9 +7046,10 @@ def port(pc_path, out_path, iwd_path=None, ref_paths=(), log=print, teams=None, 
     if fx_paths and fixes["stock_effects"]:
         for p in ref_paths:
             read(p)
-        extra = effect_donors(root, [loaded[p] for p in ref_paths if os.path.splitext(
-            os.path.basename(p))[0].lower() not in RESIDENT],
-                              [p for p in fx_paths if p not in ref_paths], log)
+        resident = [os.path.splitext(os.path.basename(p))[0].lower() in RESIDENT for p in ref_paths]
+        extra = effect_donors(root, [loaded[p] for p, r in zip(ref_paths, resident) if not r],
+                              [p for p in fx_paths if p not in ref_paths], log,
+                              resident_roots=[loaded[p] for p, r in zip(ref_paths, resident) if r])
         ref_paths += extra
         donors.update(extra)
     if fx_paths and fixes["stock_techsets"]:
