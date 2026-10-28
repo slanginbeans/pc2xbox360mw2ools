@@ -411,11 +411,12 @@ FIXES = [
      "maps, black for specular. Off by default. If flicker or missing textures stop, the picture "
      "conversion (tiling, mip levels, headers) is at fault."),
     ("surface_order", "Surfaces in 360 draw order",
-     "Lay the world's surfaces out as the 360 tools do: solid ones (sort key below 6) first, then "
-     "decals and see-through ones, then shadow casters, with the opaque / transparent / shadow "
-     "caster ranges set to match (stock mp_rust: 5,230 / 101 / 1). IW4x maps list every surface "
-     "as opaque (mp_backlot: about 2,400 decals among them), which can make decals flicker and "
-     "hide things behind them."),
+     "Lay the world's surfaces out in the order the 360 sorts them into when the map loads (by "
+     "sort key: solid ones, sort key below 6, first; then decals and see-through ones; shadow "
+     "casters last within their key), with the opaque / transparent / shadow caster ranges set "
+     "to match (stock mp_rust: 5,230 / 101 / 1). The game reads the ranges as surface numbers "
+     "after its sort and never moves them. IW4x maps list every surface as opaque (mp_backlot: "
+     "about 2,400 decals among them), which can make decals flicker and hide things behind them."),
     ("merge_duplicates", "One copy of each asset (test)",
      "Assets with the same type and name are written once, as in stock 360 files: several PC "
      "shader sets become the same 360 one, and PC copies of stock maps carry their own team "
@@ -3603,9 +3604,9 @@ class Porter:
         return out + rest
 
     def order_surfaces(self, world):
-        """Test switch surface_order: the static surfaces in the 360 tools' order (solid, sort key
-        below 6; then decals and see-through; then shadow casters; each group keeping its order)
-        and the dpvs ranges to match. Every per-surface array moves with them (bounds, draw
+        """surface_order: the static surfaces in the order the 360 puts them in when the map loads
+        (by sort key; solid ones, sort key below 6, first; then decals and see-through; shadow
+        casters last within their key) and the dpvs ranges to match. Every per-surface array moves with them (bounds, draw
         surface, sun shadow bit) and every surface number is renumbered (sortedSurfIndex, the
         shadow geometry lists). Culling tree nodes index sortedSurfIndex, which keeps its order,
         so they stay valid. Brush model surfaces (after the static ones) don't move."""
@@ -3629,10 +3630,22 @@ class Porter:
             key = (m.get("info") or {}).get("sortKey") or 0
             return (0 if key < 6 else 1), key
 
+        def sort_key(s):
+            m = deref(s.get("@", {}).get(("material", ()))) if isinstance(s, dict) else None
+            return ((m.get("info") or {}).get("sortKey") or 0) if isinstance(m, dict) else 0
+
         groups = [group(s)[0] for s in surfs[:n]]
         order = sorted(range(n), key=lambda i: groups[i])     # stable: each group keeps its order
         if self.fixes["merge_decals"]:
             order = self.solid_runs(surfs, order, groups, group)
+        # When the map loads, the 360 sorts these surfaces by their material's sort key (then
+        # primary light, then material: TU6 0x824047C8) and renumbers sortedSurfIndex, but the
+        # draw ranges below stay as the file has them and are read as surface numbers
+        # (0x823EDDE0). So the file must already be in sort key order or the ranges cover other
+        # surfaces after loading (a shadow caster with a low key lands in the solid range and
+        # pushes the last see-through surfaces out of every range: never drawn).
+        keys = [sort_key(s) for s in surfs[:n]]
+        order = sorted(order, key=lambda i: keys[i])         # stable: groups and runs kept per key
         if order == list(range(n)):
             new_of = None
         else:
@@ -3668,9 +3681,16 @@ class Porter:
             for gm in geoms if isinstance(geoms, list) else []:
                 if isinstance(gm, dict) and gm.get("surfaceCount"):
                     renumber(tgt(gm.get("@", {}).get(("sortedSurfIndex", ()))), gm["surfaceCount"])
-        a = groups.count(0)
-        b = a + groups.count(1)
-        c = b + groups.count(2)
+        a = sum(1 for k in keys if k < 6)
+        c = n
+        b = c
+        while b > a and groups[order[b - 1]] == 2:
+            b -= 1
+        stray = groups.count(2) - (c - b)
+        if stray:
+            self.warn("%d shadow caster surface(s) have a lower sort key than see-through ones; "
+                      "the 360 sorts them in with those when the map loads, so they stay in the "
+                      "solid or see-through draw range" % stray)
         dpvs.update(litOpaqueSurfsBegin=0, litOpaqueSurfsEnd=a, litTransSurfsBegin=a, litTransSurfsEnd=b,
                     shadowCasterSurfsBegin=b, shadowCasterSurfsEnd=c, emissiveSurfsBegin=c, emissiveSurfsEnd=c)
         self.log("  test: surfaces in 360 order: %d solid, %d decals / see-through, %d shadow casters%s"
