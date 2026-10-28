@@ -46,6 +46,23 @@ multiplayer maps. Addresses are virtual (image base 0x82000000).
   other node's list must be a slice of its room's root list (true for 16,017 of 16,017 stock
   lists) or it keeps stale numbers and names other models → whole models vanish depending on
   which nodes are in view. Fixed by `tree_list_slices`.
+  The sort is `0x82404CC8` (key: the material sort index of the model's first material). It
+  moves only smodelInsts and smodelDrawInsts and renumbers only the room root lists and every
+  light's `shadowGeom[i].smodelIndex`; nothing else in the world holds placed-model numbers
+  (collision's static models are a separate list it doesn't touch).
+- **Load-time surface sort** (`0x824047C8`, called from `0x82405198`): the world model's
+  surfaces (`models[0].surfaceCount`) are sorted by material sort key, then primary light
+  (GfxSurface +0x16), then material sort index. Only surfaces and surfacesBounds move; only
+  `dpvs.sortedSurfIndex` is renumbered. Culling tree surface ranges and `skyStartSurfs` are
+  positions in sortedSurfIndex, so they stay valid. surfaceMaterials and surfaceCastsSunShadow
+  are rebuilt from the sorted surfaces. The draw ranges (litOpaque / litTrans / shadowCaster /
+  emissive Begin/End) are **not** touched and are read as surface numbers (`0x823EDDE0`), so the
+  file must already be in sort key order (`surface_order`).
+- **Shadow surface lists rebuilt at load** (`0x82404268`): every `shadowGeom[i].surfaceCount`
+  is zeroed and refilled (`0x823D1300`: a material with gameFlags 0x2 goes to its surface's
+  own primary light; otherwise every non-sun light whose sphere / cone touches the surface's
+  box). The append (`0x823D14E0`) checks only that the list pointer isn't null, not its
+  length: a file list shorter than what the game finds is written past its end.
 - `r_lockPvs 1` freezes the cull frustum and the "visibility origin" (`viewParms+0x2B0`), which
   the per-model draw step also uses for distance — so it doesn't isolate the walk alone.
 
