@@ -9,6 +9,13 @@ Each file is read back once and checked the ways a converted map has failed on t
   emulator    (--emu, or whenever unicorn and the TU6 image are there) the game's own zone
               loader, run in an emulator (research/), reads the file to the same end, asset
               for asset and read for read, as the zone reader;
+  load-time   (with the emulator) what the game does once the map is loaded, its own code run
+              in the emulator (research/postload.py): the material sort, then the world's
+              surface sort, placed model reorder and shadow list rebuild. Fails on a crash in
+              them, draw ranges or culling tree / shadow model lists that name other surfaces
+              or models afterwards, shadow lists filled past their end, and look-ups of an empty
+              name. With common_mp.ff and code_post_gfx_mp.ff in --stock DIR they are loaded
+              first, as the game does, and named assets none of them has fail too;
   pools       the map and the files loaded with it fit the game's asset pools (needs common_mp.ff
               and code_post_gfx_mp.ff in --stock DIR);
   placement   each kind of data loads into the memory block stock maps put it in, aligned as
@@ -16,8 +23,8 @@ Each file is read back once and checked the ways a converted map has failed on t
   stock rules the rules mined from the stock maps in --stock DIR (scripts/stock_rules.py);
   measures    the map's measures against the 16 stock 360 maps' highest.
 
-Read back, aliases, emulator, pools and block placement fail a file (exit status 1); stock
-rules and measures are reported for you to judge (some differences are known and harmless).
+Read back, aliases, emulator, load-time, pools and block placement fail a file (exit status 1);
+stock rules and measures are reported for you to judge (some differences are known and harmless).
 
 A summary of each file (results, measures and a hash of every asset and of each part of the
 big ones) is written next to it as OUT.ff.check.json. With --baseline DIR, the summary is
@@ -241,6 +248,23 @@ def emulator_check(path):
         len(r.assets), r.pos)
 
 
+def load_time(path, stock_dir=None):
+    """[(check, ok, message)] of research/postload.py on the file, after the always-loaded
+    files in stock_dir when they are there."""
+    import io
+    import contextlib
+    resident = []
+    if stock_dir:
+        resident = [p for p in (os.path.join(stock_dir, n + ".ff") for n in ("code_post_gfx_mp", "common_mp"))
+                    if os.path.exists(p)]
+        if len(resident) < 2:
+            resident = []
+    with contextlib.redirect_stdout(io.StringIO()):
+        import postload
+        r = postload.run(path, resident)
+    return r["checks"]
+
+
 # ------------------------------------------------------------ one file
 
 def check_file(path, stock_dir=None, emu=None, log=print):
@@ -250,7 +274,7 @@ def check_file(path, stock_dir=None, emu=None, log=print):
 
     def result(name, ok, msg, fatal=True):
         s["checks"][name] = {"ok": ok, "msg": msg}
-        log("  %-12s %s  %s" % (name, "ok  " if ok else ("FAIL" if fatal else "note"), msg))
+        log("  %-20s %s  %s" % (name, "ok  " if ok else ("FAIL" if fatal else "note"), msg))
         if not ok and fatal:
             s["fail"].append(name)
 
@@ -291,6 +315,11 @@ def check_file(path, stock_dir=None, emu=None, log=print):
                 result("emulator", *emulator_check(path))
             except Exception as ex:
                 result("emulator", False, "%s: %s" % (type(ex).__name__, ex))
+            try:
+                for name, ok, msg in load_time(path, stock_dir):
+                    result(name, ok, msg)
+            except Exception as ex:
+                result("load-time", False, "%s: %s" % (type(ex).__name__, ex))
 
     if stock_dir:
         refs = resident_refs(stock_dir)
@@ -302,7 +331,7 @@ def check_file(path, stock_dir=None, emu=None, log=print):
             except port.PortError as ex:
                 result("pools", False, str(ex))
         else:
-            log("  %-12s skip  needs common_mp.ff and code_post_gfx_mp.ff in %s" % ("pools", stock_dir))
+            log("  %-20s skip  needs common_mp.ff and code_post_gfx_mp.ff in %s" % ("pools", stock_dir))
         if stock_maps(stock_dir):
             types = [e[0] for e in root["assets"]]
             blocks, aligns, unseen = placement.compare(placement.summarize(reads, types),
@@ -321,7 +350,7 @@ def check_file(path, stock_dir=None, emu=None, log=print):
             for kind, what, n, detail in broken[:15]:
                 log("      %-8s %-50s x%-5d %s" % (kind, what[:50], n, detail[:100]))
         else:
-            log("  %-12s skip  no stock mp_*.ff in %s" % ("stock rules", stock_dir))
+            log("  %-20s skip  no stock mp_*.ff in %s" % ("stock rules", stock_dir))
     reads = None
 
     m = port.map_measures(root)

@@ -60,7 +60,8 @@ Convert the affected maps (at least one small one like mp_ancient and one large 
 mp_backlot or mp_waw_castle) with the relevant switches, then:
 
 0. **Run `mw2ff/check.py OUT.ff|FOLDER --stock DIR --baseline GOOD_DIR`** first. It does steps 1,
-   2 and 5 below in one read, runs the game's own zone loader in the emulator when unicorn and
+   2 and 5 below in one read, runs the game's own zone loader and load-time steps (material sort,
+   surface sort, model reorder, shadow rebuild: `research/postload.py`) in the emulator when unicorn and
    `TU6_PE` are there, checks the asset pools and the stock measures, and diffs every asset (and
    each part of the world, collision, ...) against the last good conversion of that map in
    GOOD_DIR, so a change that touches more than it should shows. Exit 1 = a fatal check failed
