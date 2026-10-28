@@ -112,6 +112,20 @@ probes, map entities, scripts) and the two teams. Custom models, sounds and effe
 brings with it aren't converted yet. Pictures over 40 MB lose their top mip levels so the map
 fits in memory (`--texture-budget` from a command prompt).
 
+### Checking a converted map
+
+`python check.py OUT.ff --stock WORK --baseline GOOD` (or a folder, such as `mw2port_out`, for every
+map in it) checks a converted map without the console: it reads it back, looks for the pointers
+that crash the console (to data not loaded yet, or into the temporary block), checks the asset
+pools, the memory block and alignment of each kind of data and the rules mined from the stock maps
+in WORK, and logs the map's measures. With the TU6 `default_mp` image (`TU6_PE`) and
+`python -m pip install unicorn capstone`, it also runs the game's own loader on the file in an
+emulator (`research/`), and then the game's own load-time steps (`research/postload.py`): the material sort, the world's surface sort, the placed-model reorder and the shadow list rebuild, failing on a crash in them, draw ranges or culling tree lists that name other surfaces or models once the game has reordered them (models vanishing), shadow lists filled past their end, and effects or sounds looked up by an empty name. Put `common_mp.ff` and `code_post_gfx_mp.ff` in WORK so those run with the assets the map names. Each file's summary goes next to it (`OUT.ff.check.json`); with
+`--baseline GOOD` it is compared with the last good conversion of that map in GOOD, listing the
+assets added, gone and changed (and which parts of the world changed) and the measures that
+moved. `--accept` makes this conversion the good one. Exit status 1 means a check that would stop
+the console failed, or a check got worse than the good one.
+
 ### Writer test
 
 **Rewrite stock map (test)** on the converter page (or `python port.py --rewrite-stock STOCK.ff OUT.ff`)

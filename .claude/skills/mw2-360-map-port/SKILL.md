@@ -59,6 +59,14 @@ Read `references/engine-notes.md` before reasoning about how the 360 culls, draw
 Convert the affected maps (at least one small one like mp_ancient and one large one like
 mp_backlot or mp_waw_castle) with the relevant switches, then:
 
+0. **Run `mw2ff/check.py OUT.ff|FOLDER --stock DIR --baseline GOOD_DIR`** first. It does steps 1,
+   2 and 5 below in one read, runs the game's own zone loader and load-time steps (material sort,
+   surface sort, model reorder, shadow rebuild: `research/postload.py`) in the emulator when unicorn and
+   `TU6_PE` are there, checks the asset pools and the stock measures, and diffs every asset (and
+   each part of the world, collision, ...) against the last good conversion of that map in
+   GOOD_DIR, so a change that touches more than it should shows. Exit 1 = a fatal check failed
+   or got worse. `--accept` makes a passing conversion the new good one. The steps below say
+   what each part means and how to look further.
 1. **Read the file back** with `port.load_tree` — it must parse to the end.
 2. **No forward or temp-block aliases**: every alias must point at something already written,
    and never into the temporary block (reused per asset). Both are fatal on the console even

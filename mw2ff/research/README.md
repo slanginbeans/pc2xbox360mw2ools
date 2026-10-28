@@ -9,6 +9,9 @@ python cmp.py <file.ff>            walk with zone.py and the emulator; prints th
 python around.py <file.ff> <pos>   reads on both sides around a zone position
 python tree.py <hexaddr>           pseudo-code of a Load_ function and everything it calls
 python d.py <hexaddr> [count]      plain disassembly
+python postload.py <map.ff> [--resident code_post_gfx_mp.ff common_mp.ff]
+                                   load the files, then run the game's load-time steps on the
+                                   map (material sort, world setup) and check what they did
 ```
 
 The emulator result for each file is cached in `cache/`, so only the first run is slow.
@@ -29,3 +32,17 @@ Useful TU6 addresses (image loads at 0x82000000):
 
 Memory blocks on the 360: 0 temp, 1 physical, 2 runtime (not in the file), 3 virtual,
 4 large, 5 callback.
+
+## Load-time steps (postload.py, wide.py)
+
+`postload.py` loads the always-loaded files and the map in one emulator, with the asset tables
+filled in as DB_AddXAsset does (headers copied out of the temporary block, materials into the
+game's own material pool at 0x82922598, named references pointed at what they name), then calls
+R_SortMaterials (0x824069f8) and the world setup (0x82405198) and compares the world before and
+after. The 360's CPU has 64-bit registers and these steps use them (packed sort keys); unicorn's
+64-bit PowerPC can't load or store 64 bits, so `wide.py` keeps each register's high word beside
+the 32-bit CPU and runs the functions that need it through Python (only those reachable from the
+step that have a 64-bit instruction; the whole image gives the same results, 20 times slower).
+Converted mp_waw_castle (Oct 1): 6,381 stale model numbers in 1,019 culling tree lists (the
+vanishing models `tree_list_slices` fixed) and 6 surfaces the opaque draw range loses to the sort
+(`surface_order`), in 30 seconds.
