@@ -93,22 +93,19 @@ def survey(root):
     return vals, seen, listing, names
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--stock", required=True)
-    ap.add_argument("--maps", type=int, default=0)
-    ap.add_argument("converted", nargs="+")
-    a = ap.parse_args()
-    files = sorted(f for f in os.listdir(a.stock) if f.startswith("mp_") and f.endswith(".ff")
+def mine(stock_dir, maps=0):
+    """The rules the stock files in stock_dir hold to (the first maps maps, 0 all): a dict that
+    check() takes, plain data (it can be pickled and kept)."""
+    files = sorted(f for f in os.listdir(stock_dir) if f.startswith("mp_") and f.endswith(".ff")
                    and not f.endswith("_load.ff"))
-    if a.maps:
-        files = files[:a.maps]
+    if maps:
+        files = files[:maps]
     vals = collections.defaultdict(collections.Counter)
     seen = collections.Counter()
     listing = collections.defaultdict(collections.Counter)
     dup_stock = 0
     common = set()
-    cpath = os.path.join(a.stock, "common_mp.ff")
+    cpath = os.path.join(stock_dir, "common_mp.ff")
     if os.path.exists(cpath):
         for o in port.iter_objects(port.load_stock(cpath)["assets"]):
             t = asset_type(o)
@@ -117,7 +114,7 @@ def main():
                 common.add((t, n.lower()))
     clash_stock = collections.Counter()     # type -> stock full assets under a common_mp name
     for f in files:
-        v, s, l, n = survey(port.load_stock(os.path.join(a.stock, f)))
+        v, s, l, n = survey(port.load_stock(os.path.join(stock_dir, f)))
         for k in n:
             if k in common:
                 clash_stock[k[0]] += 1
@@ -128,38 +125,57 @@ def main():
             listing[k].update(c)
         dup_stock += sum(1 for x in n.values() if x > 1)
     rules = {k: set(c) for k, c in vals.items() if seen[k[0]] >= MIN_SEEN and len(c) <= MAX_VALUES}
+    return {"files": files, "rules": rules, "types": len(seen), "dup_stock": dup_stock,
+            "listing": {t: dict(c) for t, c in listing.items()}, "common": common,
+            "clash_stock": dict(clash_stock)}
+
+
+def check(root, mined):
+    """[(kind, what, how many, detail)] of the stock rules a converted file's tree breaks."""
+    rules, listing, common, clash_stock = (mined["rules"], mined["listing"], mined["common"],
+                                           mined["clash_stock"])
+    v, s, l, n = survey(root)
+    broken = []
+    for k, allowed in rules.items():
+        if k in v:
+            bad = {x: c for x, c in v[k].items() if x not in allowed}
+            if bad:
+                broken.append(("value", "%s.%s" % k, sum(bad.values()),
+                               "ours %s / stock %s" % (sorted(map(str, bad))[:4], sorted(map(str, allowed)))))
+    for t, c in l.items():
+        st = listing.get(t)
+        if not st:
+            continue
+        if c["inline"] and not st.get("inline") and st.get("top"):
+            broken.append(("listing", t, c["inline"], "stock always lists it on its own (%d), ours has it inside other assets" % st["top"]))
+        if c["top"] and not st.get("top") and st.get("inline"):
+            broken.append(("listing", t, c["top"], "stock never lists it on its own (%d inside other assets)" % st["inline"]))
+    dups = [k for k, x in n.items() if x > 1]
+    if dups:
+        broken.append(("names", "two full copies of one name", len(dups), str([(t, nm.decode("latin-1")) for t, nm in dups[:5]])))
+    clash = [k for k in n if k in common and not clash_stock.get(k[0])]
+    if clash:
+        broken.append(("names", "full copy of a common_mp asset", len(clash), str([(t, nm.decode("latin-1")) for t, nm in clash[:5]])))
+    return sorted(broken, key=lambda b: (b[0], -b[2]))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--stock", required=True)
+    ap.add_argument("--maps", type=int, default=0)
+    ap.add_argument("converted", nargs="+")
+    a = ap.parse_args()
+    mined = mine(a.stock, a.maps)
     print("mined from %d stock maps: %d value rules over %d asset types; listing per type:"
-          % (len(files), len(rules), len(seen)))
-    for t, c in sorted(listing.items()):
-        print("   %-24s top %-6d inline %-6d named %d" % (t, c["top"], c["inline"], c["named"]))
-    print("   stock files with two full assets of one type and name: %d" % dup_stock)
-    print("   stock full copies of common_mp assets, by type: %s" % dict(clash_stock))
+          % (len(mined["files"]), len(mined["rules"]), mined["types"]))
+    for t, c in sorted(mined["listing"].items()):
+        print("   %-24s top %-6d inline %-6d named %d" % (t, c.get("top", 0), c.get("inline", 0), c.get("named", 0)))
+    print("   stock files with two full assets of one type and name: %d" % mined["dup_stock"])
+    print("   stock full copies of common_mp assets, by type: %s" % mined["clash_stock"])
     for path in a.converted:
-        root = port.load_tree(path)[2]
-        v, s, l, n = survey(root)
+        broken = check(port.load_tree(path)[2], mined)
         print("\n== %s" % path)
-        broken = []
-        for k, allowed in rules.items():
-            if k in v:
-                bad = {x: c for x, c in v[k].items() if x not in allowed}
-                if bad:
-                    broken.append(("value", "%s.%s" % k, sum(bad.values()),
-                                   "ours %s / stock %s" % (sorted(map(str, bad))[:4], sorted(map(str, allowed)))))
-        for t, c in l.items():
-            st = listing.get(t)
-            if not st:
-                continue
-            if c["inline"] and not st["inline"] and st["top"]:
-                broken.append(("listing", t, c["inline"], "stock always lists it on its own (%d), ours has it inside other assets" % st["top"]))
-            if c["top"] and not st["top"] and st["inline"]:
-                broken.append(("listing", t, c["top"], "stock never lists it on its own (%d inside other assets)" % st["inline"]))
-        dups = [k for k, x in n.items() if x > 1]
-        if dups:
-            broken.append(("names", "two full copies of one name", len(dups), str([(t, nm.decode("latin-1")) for t, nm in dups[:5]])))
-        clash = [k for k in n if k in common and not clash_stock[k[0]]]
-        if clash:
-            broken.append(("names", "full copy of a common_mp asset", len(clash), str([(t, nm.decode("latin-1")) for t, nm in clash[:5]])))
-        for kind, what, count, detail in sorted(broken, key=lambda b: (b[0], -b[2])):
+        for kind, what, count, detail in broken:
             print("  %-8s %-55s x%-5d %s" % (kind, what, count, detail[:200]))
         if not broken:
             print("  no stock rule broken")

@@ -23,28 +23,40 @@ import tree  # noqa: E402
 import zone  # noqa: E402
 
 
-def check(path):
-    counts, where = Counter(), Counter()
+def classify(reader, val):
+    """None for a good alias (or no alias), else why it crashes: "forward", "temp", "bad block"."""
+    if val in (0, 0xFFFFFFFF, 0xFFFFFFFE):
+        return None
+    v = val - 1
+    blk, off = v >> 28, v & 0x0FFFFFFF
+    pos = reader.block_pos[blk] if blk < len(reader.block_pos) else None
+    if pos is None:
+        return "bad block"
+    if off >= pos:
+        return "forward"
+    if blk == zone.TEMP:
+        return "temp"
+    return None
+
+
+def count_aliases(counts, where):
+    """A zone.Reader.alias that counts every alias into counts ("ok" or the reason it's bad)
+    and the bad ones' struct paths into where, to install while a file is read."""
     orig = zone.Reader.alias
 
     def alias(self, buf, loc, val):
         if val not in (0, 0xFFFFFFFF, 0xFFFFFFFE):
-            v = val - 1
-            blk, off = v >> 28, v & 0x0FFFFFFF
-            pos = self.block_pos[blk] if blk < len(self.block_pos) else None
-            bad = None
-            if pos is None:
-                bad = "bad block"
-            elif off >= pos:
-                bad = "forward"
-            elif blk == zone.TEMP:
-                bad = "temp"
+            bad = classify(self, val)
             counts[bad or "ok"] += 1
             if bad:
                 where[(bad, " > ".join(getattr(self, "path", ["?"])))] += 1
         return orig(self, buf, loc, val)
+    return orig, alias
 
-    zone.Reader.alias = alias
+
+def check(path):
+    counts, where = Counter(), Counter()
+    orig, zone.Reader.alias = count_aliases(counts, where)
     try:
         ff, z = mw2ff.read_fastfile(path)
         with port.no_gc():

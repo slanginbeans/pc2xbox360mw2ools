@@ -30,10 +30,9 @@ BLOCKS = {zone.TEMP: "TEMP", zone.PHYSICAL: "PHYSICAL", zone.VIRTUAL: "VIRTUAL",
           zone.LARGE: "LARGE", zone.CALLBACK: "CALLBACK"}
 
 
-def profile(path):
-    """{(asset type, path): [blocks, smallest alignment, reads]} of one file."""
-    ff, z = mw2ff.read_fastfile(path)
-    reads = []
+def record_reads(reads):
+    """A zone.Reader.read that appends (block, offset, asset index, struct path) of every read
+    to reads, to install while a file is read."""
     orig = zone.Reader.read
 
     def read(self, n, desc=("raw",)):
@@ -41,17 +40,18 @@ def profile(path):
             reads.append((self.block, self.block_pos[self.block], self.cur_asset[0] if self.cur_asset else -1,
                           " > ".join(self.path)))
         return orig(self, n, desc)
+    return orig, read
 
-    zone.Reader.read = read
-    try:
-        with port.no_gc():
-            root, _ = tree.read_tree(z, mw2ff.schema_for(ff.platform))
-    finally:
-        zone.Reader.read = orig
-    types = [e[0] for e in root["assets"]]
-    out = defaultdict(lambda: [set(), 4096, 0])
+
+def summarize(reads, types):
+    """{(asset type, path): [blocks, smallest alignment, reads]} of a file's reads; types: the
+    asset list's type names."""
+    out = {}
     for block, off, asset, p in reads:
-        e = out[(types[asset] if 0 <= asset < len(types) else "?", re.sub(r"\[\d+\]", "[]", p))]
+        k = (types[asset] if 0 <= asset < len(types) else "?", re.sub(r"\[\d+\]", "[]", p))
+        e = out.get(k)
+        if e is None:
+            e = out[k] = [set(), 4096, 0]
         e[0].add(BLOCKS.get(block, str(block)))
         align = 1
         while off % (align * 2) == 0 and align < 4096:
@@ -61,17 +61,34 @@ def profile(path):
     return out
 
 
-def main():
-    if len(sys.argv) < 3:
-        sys.exit(__doc__)
-    ours = profile(sys.argv[1])
-    stock = defaultdict(lambda: [set(), 4096, 0])
-    for p in sys.argv[2:]:
-        for k, v in profile(p).items():
-            e = stock[k]
+def profile(path):
+    """summarize() of one file."""
+    ff, z = mw2ff.read_fastfile(path)
+    reads = []
+    orig, zone.Reader.read = record_reads(reads)
+    try:
+        with port.no_gc():
+            root, _ = tree.read_tree(z, mw2ff.schema_for(ff.platform))
+    finally:
+        zone.Reader.read = orig
+    return summarize(reads, [e[0] for e in root["assets"]])
+
+
+def merge(profiles):
+    """The stock files' profiles as one: every block any puts a kind of data in, the smallest
+    alignment any gives it."""
+    stock = {}
+    for prof in profiles:
+        for k, v in prof.items():
+            e = stock.setdefault(k, [set(), 4096, 0])
             e[0] |= v[0]
             e[1] = min(e[1], v[1])
             e[2] += v[2]
+    return stock
+
+
+def compare(ours, stock):
+    """(block differences, alignments below stock, {asset type: kinds of data stock never has})."""
     blocks, aligns, unseen = [], [], defaultdict(int)
     for k, (bl, al, n) in ours.items():
         if k not in stock:
@@ -81,8 +98,17 @@ def main():
             blocks.append((k, sorted(bl), sorted(stock[k][0]), n))
         if al < stock[k][1] and ("PHYSICAL" in bl or al < 4):
             aligns.append((k, al, stock[k][1], n))
+    return blocks, aligns, dict(unseen)
+
+
+def main():
+    if len(sys.argv) < 3:
+        sys.exit(__doc__)
+    ours = profile(sys.argv[1])
+    stock = merge(profile(p) for p in sys.argv[2:])
+    blocks, aligns, unseen = compare(ours, stock)
     print("%s: %d kinds of data; %d the stock files never have (%s)" % (
-        sys.argv[1], len(ours), sum(unseen.values()), dict(unseen)))
+        sys.argv[1], len(ours), sum(unseen.values()), unseen))
     print("block differences: %d" % len(blocks))
     for (t, p), b, sb, n in blocks:
         print("   %-12s %s  ours %s, stock %s (x%d)" % (t, p[-120:], b, sb, n))

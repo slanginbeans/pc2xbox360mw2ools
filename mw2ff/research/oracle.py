@@ -3,8 +3,8 @@ import sys,pickle,os,struct
 from run1 import *
 import run1, mw2tex
 def oracle(path):
-    out=path.replace('/','_')+'.oracle'
-    out=os.path.join(tu6.CACHE,os.path.basename(path)+'.oracle')
+    st=os.stat(path)   # (keyed by size and time too: a converted map is rewritten under one name)
+    out=os.path.join(tu6.CACHE,'%s.%d.%d.oracle'%(os.path.basename(path),st.st_size,st.st_mtime_ns))
     if os.path.exists(out): return pickle.load(open(out,'rb'))
     os.makedirs(os.path.dirname(out),exist_ok=True)
     zone=mw2tex.FastFile(path).zone
